@@ -170,7 +170,7 @@ Notes:
 - `src/obs` - recorder interface, mock engine, and libobs engine.
 - `assets/icons` - application icons.
 - `assets/spec-icons` - participant specialization icons.
-- `tests` - unit tests and combat-log replay artifacts.
+- `tests` - unit tests.
 - `docs` - integration notes.
 - `.github/workflows` - continuous integration and GitHub release automation.
 
@@ -179,10 +179,8 @@ Notes:
 Bean is distributed under the GNU General Public License version 3 or later.
 See [LICENSE](LICENSE).
 
-## Combat-log test files
+## Combat logs
 
-- Raw `WoWCombatLog-<date>_<time>.txt` files are ignored because they can
-  exceed GitHub file-size limits.
-- Keep lightweight derived artifacts such as
-  `tests/WoWCombatLog-*.detected-statuses.txt` tracked so detector expectations
-  remain reproducible.
+Raw `WoWCombatLog-<date>_<time>.txt` files are ignored because they can be
+very large and may contain personal player data. Detector behavior is covered
+by the focused unit tests in `tests/`.

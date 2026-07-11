@@ -155,11 +155,6 @@ add_executable(bean_tests
 )
 target_link_libraries(bean_tests PRIVATE bean_core)
 
-add_executable(bean_log_replay_dump
-    tests/CombatLogReplayDump.cpp
-)
-target_link_libraries(bean_log_replay_dump PRIVATE bean_core)
-
 add_executable(bean_core_public_api_tests
     tests/CorePublicApiTests.cpp
 )

@@ -22,7 +22,6 @@
 namespace {
 
 int gFailures = 0;
-int gSkips = 0;
 
 void Expect(bool condition, const std::string& message)
 {
@@ -30,12 +29,6 @@ void Expect(bool condition, const std::string& message)
         ++gFailures;
         std::cerr << "FAIL: " << message << '\n';
     }
-}
-
-void Skip(const std::string& message)
-{
-    ++gSkips;
-    std::cout << "SKIP: " << message << '\n';
 }
 
 std::filesystem::path MakeTempDir(const std::string& name)
@@ -91,6 +84,7 @@ void TestMockRecorderEnginePublicMethods()
 
     bean::obs::RecordingConfig config;
     config.outputDirectory = MakeTempDir("mock-engine-output");
+    config.audioCaptureScope = bean::obs::RecordingConfig::AudioCaptureScope::AllDesktop;
     config.captureMicrophone = true;
     config.microphoneDeviceId = "mic-1";
 
@@ -326,7 +320,7 @@ void TestRecordingOrchestratorPublicMethods()
     // Give the watcher loop one cycle to latch the active file before appending lines.
     std::this_thread::sleep_for(std::chrono::milliseconds(1200));
 
-    AppendLine(logFile, "CHALLENGE_MODE_START");
+    AppendLine(logFile, "6/19/2026 21:00:00.000-7  CHALLENGE_MODE_START,402,10");
     const bool recordingStarted = WaitUntil([&]() {
         orchestrator.Tick();
         return orchestrator.GetState() == bean::core::OrchestratorState::Recording && orchestrator.GetRecordingSessionId() >= 1;
@@ -334,7 +328,7 @@ void TestRecordingOrchestratorPublicMethods()
     Expect(recordingStarted, "CHALLENGE_MODE_START should transition orchestrator to Recording.");
     Expect(orchestrator.GetRecordingSessionId() >= 1, "Recording session id should increment after recording starts.");
 
-    AppendLine(logFile, "CHALLENGE_MODE_END");
+    AppendLine(logFile, "6/19/2026 21:30:00.000-7  CHALLENGE_MODE_END,402,1,10,1800000.000000,32.000000,1830.000000");
     const bool returnedToArmed = WaitUntil([&]() {
         orchestrator.Tick();
         return orchestrator.GetState() == bean::core::OrchestratorState::Armed;
@@ -362,49 +356,6 @@ void TestRecordingOrchestratorPublicMethods()
     Expect(hasStopStatus, "Status callback should include recording stop status.");
 }
 
-void TestReplaySmokeAgainstRealCombatLog()
-{
-    const auto replayPathInRepo = std::filesystem::path("tests") / "WoWCombatLog-061926_232002.txt";
-    const auto replayPathFromBuild = std::filesystem::path("..") / "tests" / "WoWCombatLog-061926_232002.txt";
-    const auto replayPath = std::filesystem::exists(replayPathInRepo) ? replayPathInRepo : replayPathFromBuild;
-    if (!std::filesystem::exists(replayPath)) {
-        Skip("Replay smoke test skipped (combat log file not found).");
-        return;
-    }
-
-    std::ifstream input(replayPath, std::ios::binary);
-    if (!input.is_open()) {
-        Skip("Replay smoke test skipped (unable to open combat log file).");
-        return;
-    }
-
-    bean::log::MythicRunDetector detector;
-    std::string line;
-    int runStartedCount = 0;
-    int runEndedCount = 0;
-    size_t linesRead = 0;
-    constexpr size_t kMaxLines = 250000;
-
-    while (linesRead < kMaxLines && std::getline(input, line)) {
-        ++linesRead;
-        const auto event = detector.ProcessLine(line);
-        if (!event.has_value()) {
-            continue;
-        }
-        if (event->type == bean::log::MythicEventType::RunStarted) {
-            ++runStartedCount;
-        } else if (event->type == bean::log::MythicEventType::RunEndedSuccess || event->type == bean::log::MythicEventType::RunEndedFailure) {
-            ++runEndedCount;
-        }
-        if (runStartedCount >= 1 && runEndedCount >= 1) {
-            break;
-        }
-    }
-
-    Expect(linesRead > 0, "Replay smoke test should read at least one line.");
-    Expect(runStartedCount >= 1, "Replay smoke test should detect at least one RunStarted event.");
-}
-
 } // namespace
 
 int main()
@@ -415,13 +366,9 @@ int main()
     TestRunRepositoryPublicMethods();
     TestCombatLogWatcherPublicMethods();
     TestRecordingOrchestratorPublicMethods();
-    TestReplaySmokeAgainstRealCombatLog();
 
     if (gFailures == 0) {
         std::cout << "All core public API tests passed.";
-        if (gSkips > 0) {
-            std::cout << " (" << gSkips << " skipped)";
-        }
         std::cout << '\n';
         return 0;
     }

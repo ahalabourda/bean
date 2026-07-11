@@ -18,15 +18,14 @@ if errorlevel 1 goto :fail
 build\Debug\bean_tests.exe
 if errorlevel 1 goto :fail
 
-echo [bean] Building and running log simulation...
-cmake --build build --target bean_log_replay_dump
+echo [bean] Building and running core API tests...
+cmake --build build --target bean_core_public_api_tests
 if errorlevel 1 goto :fail
-build\Debug\bean_log_replay_dump.exe
+build\Debug\bean_core_public_api_tests.exe
 if errorlevel 1 goto :fail
 
 echo.
 echo [bean] All checks completed successfully.
-echo [bean] Simulation output: tests\WoWCombatLog-061926_232002.detected-statuses.txt
 goto :done
 
 :fail
