@@ -1,0 +1,24 @@
+Input: tests\WoWCombatLog-061926_232002.txt
+Output: tests\WoWCombatLog-061926_232002.detected-statuses.txt
+Detected events:
+
+[6/19/2026 23:20:03.160-7] status=recording-started event=RunStarted (line 25) challengeMapId=560 keystoneLevel=4
+[6/19/2026 23:34:51.857-7] status=recording-started event=RunStarted (line 4385) challengeMapId=557 keystoneLevel=20
+[6/19/2026 23:35:01.624-7] status=zone-out event=PlayerLeftDungeon (line 4439) mapId=2537 mapName="Quel'Thalas"
+[6/19/2026 23:35:07.841-7] status=zone-return event=PlayerReturnedDungeon (line 4491) mapId=2492 mapName="Windrunner Spire"
+[6/19/2026 23:39:13.070-7] status=zone-out event=PlayerLeftDungeon (line 138450) mapId=2537 mapName="Quel'Thalas"
+[6/19/2026 23:39:14.858-7] status=zone-return event=PlayerReturnedDungeon (line 138630) mapId=2494 mapName="Windrunner Spire"
+[6/19/2026 23:42:44.375-7] status=recording-started event=RunStarted (line 164313) challengeMapId=557 keystoneLevel=20
+[6/19/2026 23:46:51.103-7] status=zone-out event=PlayerLeftDungeon (line 295103) mapId=2537 mapName="Quel'Thalas"
+[6/19/2026 23:46:52.860-7] status=zone-return event=PlayerReturnedDungeon (line 295200) mapId=2494 mapName="Windrunner Spire"
+[6/19/2026 23:52:41.866-7] status=zone-out event=PlayerLeftDungeon (line 398968) mapId=2537 mapName="Quel'Thalas"
+[6/19/2026 23:52:43.147-7] status=zone-return event=PlayerReturnedDungeon (line 398980) mapId=2492 mapName="Windrunner Spire"
+[6/20/2026 00:00:46.406-7] status=zone-out event=PlayerLeftDungeon (line 556441) mapId=2537 mapName="Quel'Thalas"
+[6/20/2026 00:00:47.974-7] status=zone-return event=PlayerReturnedDungeon (line 556475) mapId=2496 mapName="Windrunner Spire"
+[6/20/2026 00:02:36.820-7] status=zone-out event=PlayerLeftDungeon (line 597503) mapId=2537 mapName="Quel'Thalas"
+[6/20/2026 00:02:42.386-7] status=zone-return event=PlayerReturnedDungeon (line 597910) mapId=2498 mapName="Windrunner Spire"
+[6/20/2026 00:09:23.839-7] status=zone-out event=PlayerLeftDungeon (line 722483) mapId=2537 mapName="Quel'Thalas"
+[6/20/2026 00:09:24.769-7] status=zone-return event=PlayerReturnedDungeon (line 722492) mapId=2498 mapName="Windrunner Spire"
+[6/20/2026 00:13:47.144-7] status=challenge-ended event=RunEndedSuccess (line 767717) challengeMapId=2805 keystoneLevel=20
+
+Total detected events: 18

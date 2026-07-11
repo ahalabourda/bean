@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg
+        shell: powershell
+        run: choco install ffmpeg --no-progress --yes
+
+      - name: Download Velopack SDK
+        shell: cmd
+        run: download_velopack_sdk.bat
+
+      - name: Install Velopack CLI
+        shell: powershell
+        run: dotnet tool install --global vpk
+
+      - name: Build and package
+        shell: powershell
+        env:
+          BEAN_VELOPACK_UPDATE_URL: https://github.com/ahalabourda/bean/releases
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          cmd /c "build_and_package_velopack.bat $version"
+
+      - name: Publish GitHub release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = Get-ChildItem -Path Releases -File | ForEach-Object { $_.FullName }
+          gh release create $env:GITHUB_REF_NAME `
+            --verify-tag `
+            --title $env:GITHUB_REF_NAME `
+            --generate-notes `
+            $assets
