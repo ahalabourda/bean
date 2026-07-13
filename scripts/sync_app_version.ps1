@@ -13,26 +13,34 @@ $cmakeVersion = $matches.core
 
 $mainPath = "src/app/main.cpp"
 $mainContent = Get-Content $mainPath -Raw
+$mainPattern = 'constexpr wchar_t kAppVersion\[\] = L"[^"]+";'
+$mainMatch = [regex]::IsMatch($mainContent, $mainPattern)
+if (-not $mainMatch) {
+    throw "Could not find kAppVersion in $mainPath."
+}
 $updatedMain = [regex]::Replace(
     $mainContent,
-    'constexpr wchar_t kAppVersion\[\] = L"[^"]+";',
+    $mainPattern,
     ('constexpr wchar_t kAppVersion[] = L"' + $Version + '";'),
     1)
-if ($updatedMain -eq $mainContent) {
-    throw "Could not update app version in $mainPath."
+if ($updatedMain -ne $mainContent) {
+    [System.IO.File]::WriteAllText($mainPath, $updatedMain, [System.Text.UTF8Encoding]::new($false))
 }
-[System.IO.File]::WriteAllText($mainPath, $updatedMain, [System.Text.UTF8Encoding]::new($false))
 
 $cmakePath = "CMakeLists.txt"
 $cmakeContent = Get-Content $cmakePath -Raw
+$cmakePattern = 'project\(bean VERSION [^\s\)]+ LANGUAGES CXX\)'
+$cmakeMatch = [regex]::IsMatch($cmakeContent, $cmakePattern)
+if (-not $cmakeMatch) {
+    throw "Could not find project(bean VERSION ...) in $cmakePath."
+}
 $updatedCmake = [regex]::Replace(
     $cmakeContent,
-    'project\(bean VERSION [^\s\)]+ LANGUAGES CXX\)',
+    $cmakePattern,
     ('project(bean VERSION ' + $cmakeVersion + ' LANGUAGES CXX)'),
     1)
-if ($updatedCmake -eq $cmakeContent) {
-    throw "Could not update project version in $cmakePath."
+if ($updatedCmake -ne $cmakeContent) {
+    [System.IO.File]::WriteAllText($cmakePath, $updatedCmake, [System.Text.UTF8Encoding]::new($false))
 }
-[System.IO.File]::WriteAllText($cmakePath, $updatedCmake, [System.Text.UTF8Encoding]::new($false))
 
 Write-Host ("[bean] Version sync complete. UI={0} CMake={1}" -f $Version, $cmakeVersion)
