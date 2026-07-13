@@ -1,7 +1,5 @@
 #include "app/AppStatusLog.h"
 
-#include "BeanBuildNumber.h"
-
 #include <algorithm>
 #include <iomanip>
 #include <regex>
@@ -53,10 +51,10 @@ std::wstring GetWindowTextString(HWND hwnd)
     return value;
 }
 
-std::wstring BuildNumberText()
+std::wstring VersionText()
 {
     constexpr wchar_t kAppVersion[] = L"0.1";
-    return std::wstring(L"v") + kAppVersion + std::wstring(L" (build ") + std::to_wstring(BEAN_BUILD_NUMBER) + std::wstring(L")");
+    return std::wstring(L"v") + kAppVersion;
 }
 
 std::wstring AudioCaptureScopeLabel(bean::core::AppSettings::AudioCaptureScope scope)
@@ -235,7 +233,7 @@ void LogSessionDiagnostics(AppContext* ctx)
     if (!ctx) {
         return;
     }
-    SetStatus(ctx, std::wstring(L"Session started: ") + BuildNumberText());
+    SetStatus(ctx, std::wstring(L"Session started: ") + VersionText());
     SetStatus(ctx, std::wstring(L"Config file: ") + ctx->settingsStore.GetConfigPath().wstring());
     if (ctx->runRepository) {
         SetStatus(ctx, std::wstring(L"Run metadata DB: ") + ctx->runRepository->GetDatabasePath().wstring());

@@ -9,8 +9,6 @@ option(BEAN_ENABLE_LIBOBS "Enable libobs recorder engine implementation" OFF)
 option(BEAN_ENABLE_VELOPACK "Enable Velopack updater integration" OFF)
 
 set(BEAN_GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
-set(BEAN_BUILD_COUNTER_FILE "${CMAKE_BINARY_DIR}/bean_build_number.txt")
-set(BEAN_BUILD_HEADER_FILE "${BEAN_GENERATED_DIR}/BeanBuildNumber.h")
 
 add_library(bean_core
     src/core/RecordingOrchestrator.cpp
@@ -86,17 +84,6 @@ add_custom_command(TARGET bean_app POST_BUILD
     COMMENT "Copying app icon assets"
 )
 
-add_custom_target(bean_build_number ALL
-    COMMAND ${CMAKE_COMMAND}
-        -DBEAN_BUILD_COUNTER_FILE=${BEAN_BUILD_COUNTER_FILE}
-        -DBEAN_BUILD_HEADER_FILE=${BEAN_BUILD_HEADER_FILE}
-        -P "${CMAKE_SOURCE_DIR}/cmake/IncrementBuildNumber.cmake"
-    BYPRODUCTS "${BEAN_BUILD_HEADER_FILE}"
-    COMMENT "Incrementing Bean build number"
-    VERBATIM
-)
-
-add_dependencies(bean_app bean_build_number)
 target_include_directories(bean_app PRIVATE "${BEAN_GENERATED_DIR}")
 
 target_link_libraries(bean_app PRIVATE bean_core)

@@ -6,7 +6,6 @@
 #include "app/AppStatusLog.h"
 #include "app/AppUtilities.h"
 #include "app/BeanUpdater.h"
-#include "BeanBuildNumber.h"
 #include "integrations/YouTubeUploader.h"
 #include "obs/LibObsRecorderEngine.h"
 
@@ -53,15 +52,15 @@ namespace {
 
 constexpr char kYouTubeAuthServerUrl[] = "https://andrew.gg/bean/youtube-auth/";
 
-std::wstring BuildNumberText()
+std::wstring VersionText()
 {
     constexpr wchar_t kAppVersion[] = L"0.2.3";
-    return std::wstring(L"v") + kAppVersion + std::wstring(L" (build ") + std::to_wstring(BEAN_BUILD_NUMBER) + std::wstring(L")");
+    return std::wstring(L"v") + kAppVersion;
 }
 
 std::wstring MainWindowTitleText()
 {
-    return std::wstring(kWindowTitleBase) + std::wstring(L" - ") + BuildNumberText();
+    return std::wstring(kWindowTitleBase) + std::wstring(L" - ") + VersionText();
 }
 
 std::wstring ToWide(const std::string& input)
@@ -4829,9 +4828,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ctx->clipsVolumePercent = 100;
         RefreshClipsPlaybackControls(ctx);
 
-        const std::wstring buildText = BuildNumberText();
+        const std::wstring versionText = VersionText();
         CreateWindowW(L"STATIC", kAboutTitleText, WS_VISIBLE | WS_CHILD | SS_CENTER, 20, 24, 740, 28, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_TITLE_LABEL), nullptr, nullptr);
-        CreateWindowW(L"STATIC", buildText.c_str(), WS_VISIBLE | WS_CHILD | SS_CENTER, 20, 58, 740, rowHeight, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_BUILD_TEXT), nullptr, nullptr);
+        CreateWindowW(L"STATIC", versionText.c_str(), WS_VISIBLE | WS_CHILD | SS_CENTER, 20, 58, 740, rowHeight, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_BUILD_TEXT), nullptr, nullptr);
         CreateWindowW(L"STATIC", L"Website:", WS_VISIBLE | WS_CHILD, 20, 96, 120, rowHeight, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_WEBSITE_LABEL), nullptr, nullptr);
         CreateWindowW(L"STATIC", L"https://andrew.gg/bean", WS_VISIBLE | WS_CHILD, 150, 96, 360, rowHeight, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_WEBSITE_TEXT), nullptr, nullptr);
         CreateWindowW(L"BUTTON", L"Open Website", WS_VISIBLE | WS_CHILD, 540, 94, 150, rowHeight + 4, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_WEBSITE_BUTTON), nullptr, nullptr);
