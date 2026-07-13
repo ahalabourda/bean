@@ -40,6 +40,7 @@ inline constexpr UINT WM_BEAN_YOUTUBE_IDENTITY_RESOLVED = WM_APP + 104;
 inline constexpr UINT WM_BEAN_CLIPS_UI_REFRESH = WM_APP + 105;
 inline constexpr UINT WM_BEAN_CLIPS_PREVIEW_READY = WM_APP + 106;
 inline constexpr UINT WM_BEAN_CLIPS_EXPORT_COMPLETE = WM_APP + 107;
+inline constexpr UINT WM_BEAN_UPDATE_AVAILABILITY_READY = WM_APP + 108;
 inline constexpr wchar_t kStatusLogFilePrefix[] = L"bean-status-log-";
 inline constexpr wchar_t kStatusLogFileExtension[] = L".log";
 inline constexpr size_t kStatusLogRetentionCount = 5;
@@ -440,6 +441,8 @@ struct AppContext {
     RecordingSortColumn recordingSortColumn = RecordingSortColumn::Date;
     bool recordingSortAscending = false;
     std::atomic<bool> youtubeBusy{false};
+    std::atomic<bool> aboutUpdateCheckInProgress{false};
+    std::atomic<std::uint64_t> aboutUpdateCheckRequestId{0};
     bool youtubeOAuthConfigured = false;
     bool youtubeLinked = false;
     bool youtubeUnlinkConfirmPending = false;

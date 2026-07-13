@@ -2548,6 +2548,12 @@ struct YouTubeIdentityResolvedPayload {
     std::string error;
 };
 
+struct UpdateAvailabilityPayload {
+    std::uint64_t requestId = 0;
+    bean::app::UpdateAvailability availability = bean::app::UpdateAvailability::Failed;
+    std::wstring statusMessage;
+};
+
 void PostYouTubeUploadProgress(AppContext* ctx, int percent, const std::wstring& text)
 {
     if (!ctx || !ctx->mainWindow) {
@@ -3084,30 +3090,29 @@ void SetActiveTab(AppContext* ctx, AppContext::MainTab tab)
     }
 }
 
-void RefreshAboutUpdateButtonState(AppContext* ctx)
+void ApplyAboutUpdateAvailabilityResult(AppContext* ctx, const UpdateAvailabilityPayload& payload)
 {
     if (!ctx || !ctx->aboutPanel) {
         return;
     }
+
+    if (payload.requestId != ctx->aboutUpdateCheckRequestId.load()) {
+        return;
+    }
+    ctx->aboutUpdateCheckInProgress.store(false);
 
     HWND updateButton = GetDlgItem(ctx->aboutPanel, IDC_ABOUT_CHECK_UPDATES_BUTTON);
     if (!updateButton) {
         return;
     }
 
-    EnableWindow(updateButton, FALSE);
-    SetWindowTextW(updateButton, L"Checking...");
     HWND updateText = GetDlgItem(ctx->aboutPanel, IDC_ABOUT_UPDATE_TEXT);
-    UpdateTransparentStaticText(updateText, L"Checking for updates...");
-
-    std::wstring statusMessage;
-    const auto availability = bean::app::GetUpdateAvailability(statusMessage);
-    switch (availability) {
+    switch (payload.availability) {
     case bean::app::UpdateAvailability::UpdateAvailable:
-        UpdateTransparentStaticText(updateText, statusMessage.c_str());
+        UpdateTransparentStaticText(updateText, payload.statusMessage.c_str());
         SetWindowTextW(updateButton, L"Update now");
         EnableWindow(updateButton, TRUE);
-        SetStatus(ctx, statusMessage);
+        SetStatus(ctx, payload.statusMessage);
         break;
     case bean::app::UpdateAvailability::UpToDate:
         UpdateTransparentStaticText(updateText, L"Up to date.");
@@ -3118,15 +3123,48 @@ void RefreshAboutUpdateButtonState(AppContext* ctx)
         UpdateTransparentStaticText(updateText, L"Failed to check for updates");
         SetWindowTextW(updateButton, L"Check for updates");
         EnableWindow(updateButton, TRUE);
-        SetStatus(ctx, statusMessage);
+        SetStatus(ctx, payload.statusMessage);
         break;
     case bean::app::UpdateAvailability::Failed:
         UpdateTransparentStaticText(updateText, L"Failed to check for updates");
         SetWindowTextW(updateButton, L"Check for updates");
         EnableWindow(updateButton, TRUE);
-        SetStatus(ctx, statusMessage);
+        SetStatus(ctx, payload.statusMessage);
         break;
     }
+}
+
+void RefreshAboutUpdateButtonState(AppContext* ctx)
+{
+    if (!ctx || !ctx->aboutPanel) {
+        return;
+    }
+
+    HWND updateButton = GetDlgItem(ctx->aboutPanel, IDC_ABOUT_CHECK_UPDATES_BUTTON);
+    if (!updateButton) {
+        return;
+    }
+    HWND updateText = GetDlgItem(ctx->aboutPanel, IDC_ABOUT_UPDATE_TEXT);
+
+    if (ctx->aboutUpdateCheckInProgress.exchange(true)) {
+        return;
+    }
+
+    const std::uint64_t requestId = ctx->aboutUpdateCheckRequestId.fetch_add(1) + 1;
+    EnableWindow(updateButton, FALSE);
+    SetWindowTextW(updateButton, L"Checking...");
+    UpdateTransparentStaticText(updateText, L"Checking for updates...");
+
+    std::thread([ctx, requestId]() {
+        auto* payload = new UpdateAvailabilityPayload();
+        payload->requestId = requestId;
+        payload->availability = bean::app::GetUpdateAvailability(payload->statusMessage);
+        if (!ctx->mainWindow) {
+            delete payload;
+            return;
+        }
+        PostMessageW(ctx->mainWindow, WM_BEAN_UPDATE_AVAILABILITY_READY, 0, reinterpret_cast<LPARAM>(payload));
+    }).detach();
 }
 
 void RefreshStatusCommandButtons(AppContext* ctx);
@@ -5567,6 +5605,14 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 SetStatus(ctx, std::wstring(L"Could not resolve linked YouTube account: ") + ToWide(payload->error));
             }
             RefreshYouTubeUiState(ctx);
+        }
+        delete payload;
+        return 0;
+    }
+    case WM_BEAN_UPDATE_AVAILABILITY_READY: {
+        auto* payload = reinterpret_cast<UpdateAvailabilityPayload*>(lParam);
+        if (ctx && payload) {
+            ApplyAboutUpdateAvailabilityResult(ctx, *payload);
         }
         delete payload;
         return 0;
