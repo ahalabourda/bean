@@ -14,9 +14,21 @@ set "SDK_DIR=%BEAN_VELOPACK_SDK_DIR%"
 if not defined SDK_DIR set "SDK_DIR=tools\velopack-sdk"
 if not exist "%SDK_DIR%\include\Velopack.h" (
   echo [bean] Velopack SDK not found at "%SDK_DIR%".
-  echo [bean] Download it first with:
-  echo [bean]   powershell -ExecutionPolicy Bypass -Command "Invoke-WebRequest https://github.com/velopack/velopack/releases/download/1.2.0/velopack_libc_1.2.0.zip -OutFile tools\velopack_libc_1.2.0.zip"
-  goto :fail
+  if /I not "%SDK_DIR%"=="tools\velopack-sdk" (
+    echo [bean] Set BEAN_VELOPACK_SDK_DIR to a valid SDK path, then retry.
+    goto :fail
+  )
+  if not exist "download_velopack_sdk.bat" (
+    echo [bean] Missing helper script download_velopack_sdk.bat.
+    goto :fail
+  )
+  echo [bean] Bootstrapping Velopack SDK...
+  call download_velopack_sdk.bat
+  if errorlevel 1 goto :fail
+  if not exist "%SDK_DIR%\include\Velopack.h" (
+    echo [bean] Velopack SDK bootstrap did not produce "%SDK_DIR%\include\Velopack.h".
+    goto :fail
+  )
 )
 
 set "BEAN_BUILD_DIR=build-velopack-release"
