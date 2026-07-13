@@ -389,6 +389,7 @@ struct AppContext {
     int chatBlockerCustomSourceHeight = 0;
     bool configurationAutoSaveArmed = false;
     bool outputFolderWillBeCreatedOnRecordStart = false;
+    bool ffmpegCheckRequested = false;
     std::optional<std::chrono::steady_clock::time_point> wowWindowLastCheckedAt;
     std::optional<std::chrono::steady_clock::time_point> obsInstallLastCheckedAt;
     std::optional<std::chrono::steady_clock::time_point> ffmpegLastCheckedAt;

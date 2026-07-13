@@ -3028,6 +3028,8 @@ void RefreshRecordingsList(AppContext* ctx)
     SetWindowTextW(ctx->recordingsLabel, summary.str().c_str());
 }
 
+void RefreshLiveStatus(AppContext* ctx);
+
 void SetActiveTab(AppContext* ctx, AppContext::MainTab tab)
 {
     if (!ctx || !ctx->statusTabButton || !ctx->configurationTabButton || !ctx->chatPrivacyTabButton || !ctx->recordingsTabButton || !ctx->clipsTabButton || !ctx->aboutTabButton
@@ -3035,6 +3037,9 @@ void SetActiveTab(AppContext* ctx, AppContext::MainTab tab)
         return;
     }
 
+    if (tab == AppContext::MainTab::Status || tab == AppContext::MainTab::Clips) {
+        ctx->ffmpegCheckRequested = true;
+    }
     ClearClipsExportStatus(ctx);
     ctx->activeTab = tab;
     const bool showStatus = (tab == AppContext::MainTab::Status);
@@ -3073,6 +3078,9 @@ void SetActiveTab(AppContext* ctx, AppContext::MainTab tab)
         if (ctx->chatPreview) {
             InvalidateRect(ctx->chatPreview, nullptr, FALSE);
         }
+    }
+    if (tab == AppContext::MainTab::Status || tab == AppContext::MainTab::Clips) {
+        RefreshLiveStatus(ctx);
     }
 }
 
@@ -3163,10 +3171,13 @@ void RefreshLiveStatus(AppContext* ctx)
     }
     const bool ffmpegWasDetected = ctx->ffmpegDetected;
     bool ffmpegStatusRefreshed = false;
-    if (!ctx->ffmpegLastCheckedAt.has_value()
-        || (now - *ctx->ffmpegLastCheckedAt) >= kObsInstallPollInterval) {
+    if (ctx->ffmpegCheckRequested
+        || (!ctx->ffmpegDetected
+            && (!ctx->ffmpegLastCheckedAt.has_value()
+                || (now - *ctx->ffmpegLastCheckedAt) >= kObsInstallPollInterval))) {
         ctx->ffmpegDetected = DetectFfmpegForUi(ctx);
         ctx->ffmpegLastCheckedAt = now;
+        ctx->ffmpegCheckRequested = false;
         ffmpegStatusRefreshed = true;
     }
     const bool warcraftRecorderWasDetected = ctx->warcraftRecorderDetected;
