@@ -4192,22 +4192,22 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         // Main-window controls are configured during WM_CREATE, so store it immediately.
         ctx->mainWindow = hwnd;
 
-        const int navWidth = 120;
-        const int navX = 12;
-        const int panelX = navX + navWidth + 18;
-        const int panelY = 16;
-        const int panelWidth = 780;
-        const int panelHeight = 460;
-        const int labelWidth = 120;
-        const int editWidth = 360;
-        const int buttonWidth = 100;
-        const int rowHeight = 24;
-        const int rowSpacing = 40;
-        const int sectionSpacing = 48;
-        const int xLabel = 20;
-        const int xEdit = 150;
-        const int xButton = 520;
-        const int xStatus = 630;
+        constexpr int navWidth = 120;
+        constexpr int navX = 12;
+        constexpr int panelX = navX + navWidth + 18;
+        constexpr int panelY = 16;
+        constexpr int panelWidth = 780;
+        constexpr int panelHeight = 460;
+        constexpr int labelWidth = 120;
+        constexpr int editWidth = 360;
+        constexpr int buttonWidth = 100;
+        constexpr int rowHeight = 24;
+        constexpr int rowSpacing = 40;
+        constexpr int sectionSpacing = 48;
+        constexpr int xLabel = 20;
+        constexpr int xEdit = 150;
+        constexpr int xButton = 520;
+        constexpr int xStatus = 630;
         int y = 20;
 
         ctx->statusTabButton = CreateWindowW(L"BUTTON", L"Status", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 20, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_STATUS), nullptr, nullptr);
