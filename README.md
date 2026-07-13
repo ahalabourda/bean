@@ -74,17 +74,6 @@ ctest --test-dir build -C Debug --output-on-failure
 .\build\Debug\bean.exe
 ```
 
-To create a release-style build for testing:
-
-```powershell
-.\build_release_app.bat
-```
-
-The output is staged in `dist\alpha-release`. The script bundles FFmpeg with
-the app. It can use a specific executable with `BEAN_FFMPEG_PATH`, change the
-download source with `BEAN_FFMPEG_URL`, or disable downloading with
-`BEAN_FFMPEG_AUTO_DOWNLOAD=0`.
-
 ### OBS configuration
 
 Bean loads OBS from the usual installation locations. To use a different
