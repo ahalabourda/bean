@@ -62,7 +62,7 @@ std::wstring BuildNumberText()
 
 std::wstring MainWindowTitleText()
 {
-    return std::wstring(kWindowTitleBase) + std::wstring(L" (Build ") + std::to_wstring(BEAN_BUILD_NUMBER) + std::wstring(L")");
+    return std::wstring(kWindowTitleBase) + std::wstring(L" - ") + BuildNumberText();
 }
 
 std::wstring ToWide(const std::string& input)
