@@ -548,21 +548,27 @@ void DrawStyledButton(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
             || (drawInfo->CtlID == IDC_TAB_ABOUT && ctx->activeTab == AppContext::MainTab::About));
     COLORREF fill = isLinkDisplay ? kColorInputBg : RGB(47, 60, 89);
     COLORREF border = isLinkDisplay ? kColorInputBorder : RGB(91, 114, 167);
-    COLORREF text = kColorButtonText;
-    if (isDisabled) {
+    COLORREF text = isTab ? (isActiveTab ? RGB(255, 255, 255) : kColorTextMuted) : kColorButtonText;
+    // The active tab is disabled only to prevent a redundant click; it should
+    // still receive the active visual treatment below.
+    if (isDisabled && !isActiveTab) {
         if (isLinkDisplay) { fill = kColorInputBg; border = kColorInputBorder; text = kColorTextMuted; }
         else { fill = RGB(32, 38, 55); border = RGB(56, 67, 95); text = RGB(127, 139, 167); }
     } else if (isPressed) { fill = RGB(73, 103, 166); border = RGB(118, 148, 212); }
-    else if (isActiveTab) { fill = RGB(89, 120, 186); border = RGB(145, 176, 232); }
-    else if (isHovered && isTab) { fill = RGB(54, 67, 98); border = RGB(97, 122, 174); }
+    else if (isActiveTab) {
+        // Let the selected tab stand out through clean, high-contrast text.
+        fill = RGB(59, 77, 119);
+        border = RGB(190, 216, 255);
+    }
+    else if (isHovered && isTab) { fill = RGB(41, 50, 74); border = RGB(97, 122, 174); }
     else if (isHovered) { fill = RGB(58, 72, 104); border = RGB(104, 129, 183); }
-    else if (isTab) { fill = RGB(42, 51, 75); border = RGB(76, 94, 136); }
+    else if (isTab) { fill = RGB(32, 38, 56); border = RGB(76, 94, 136); }
 
     SetBkMode(drawInfo->hDC, TRANSPARENT);
     HBRUSH clearBrush = CreateSolidBrush(kColorPanelBottom);
     if (clearBrush) { FillRect(drawInfo->hDC, &rc, clearBrush); DeleteObject(clearBrush); }
     const int cornerRadius = isTab ? 12 : (isLinkDisplay ? 6 : 9);
-    HPEN borderPen = CreatePen(PS_SOLID, 1, border);
+    HPEN borderPen = CreatePen(PS_SOLID, isActiveTab ? 2 : 1, border);
     HBRUSH fillBrush = CreateSolidBrush(fill);
     HGDIOBJ oldPen = borderPen ? SelectObject(drawInfo->hDC, borderPen) : nullptr;
     HGDIOBJ oldBrush = fillBrush ? SelectObject(drawInfo->hDC, fillBrush) : nullptr;
@@ -572,15 +578,6 @@ void DrawStyledButton(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
     if (fillBrush) DeleteObject(fillBrush);
     if (borderPen) DeleteObject(borderPen);
 
-    if (isActiveTab) {
-        RECT accent = rc;
-        accent.top += 3;
-        accent.bottom = accent.top + 4;
-        accent.left += 10;
-        accent.right -= 10;
-        HBRUSH accentBrush = CreateSolidBrush(RGB(189, 214, 255));
-        if (accentBrush) { FillRect(drawInfo->hDC, &accent, accentBrush); DeleteObject(accentBrush); }
-    }
     wchar_t textBuffer[256] = {};
     GetWindowTextW(drawInfo->hwndItem, textBuffer, static_cast<int>(std::size(textBuffer)));
     RECT textRect = rc;

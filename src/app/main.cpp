@@ -4997,7 +4997,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         CreateWindowW(L"STATIC", L"https://discord.gg/57JGRw6x3D", WS_VISIBLE | WS_CHILD, 150, 172, 360, rowHeight, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_DISCORD_TEXT), nullptr, nullptr);
         CreateWindowW(L"BUTTON", L"Join Discord", WS_VISIBLE | WS_CHILD, 540, 170, 150, rowHeight + 4, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_DISCORD_BUTTON), nullptr, nullptr);
 
-        CreateWindowW(L"STATIC", L"Update:", WS_VISIBLE | WS_CHILD, 20, 210, 120, rowHeight, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_UPDATE_LABEL), nullptr, nullptr);
+        CreateWindowW(L"STATIC", L"Updates:", WS_VISIBLE | WS_CHILD, 20, 210, 120, rowHeight, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_UPDATE_LABEL), nullptr, nullptr);
         CreateWindowW(L"STATIC", L"Checking for updates...", WS_VISIBLE | WS_CHILD, 150, 210, 360, rowHeight, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_UPDATE_TEXT), nullptr, nullptr);
         CreateWindowW(L"BUTTON", L"Check for updates", WS_VISIBLE | WS_CHILD | WS_TABSTOP, 540, 208, 150, rowHeight + 4, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_CHECK_UPDATES_BUTTON), nullptr, nullptr);
 
