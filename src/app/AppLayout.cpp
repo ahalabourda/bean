@@ -309,8 +309,9 @@ void LayoutAboutPanel(AppContext* ctx, int panelWidth, int)
     MoveControl(ctx->aboutPanel, IDC_ABOUT_DISCORD_TEXT, 150, 172, valueWidth, rowHeight);
     MoveControl(ctx->aboutPanel, IDC_ABOUT_DISCORD_BUTTON, rightButtonX, 170, 150, rowHeight + 4);
 
-    MoveControl(ctx->aboutPanel, IDC_ABOUT_BUILD_LABEL, left, 198, 120, rowHeight);
-    MoveControl(ctx->aboutPanel, IDC_ABOUT_HELP_TEXT, left, 210, panelWidth - 40, rowHeight);
+    MoveControl(ctx->aboutPanel, IDC_ABOUT_UPDATE_LABEL, left, 210, 120, rowHeight);
+    MoveControl(ctx->aboutPanel, IDC_ABOUT_UPDATE_TEXT, 150, 210, valueWidth, rowHeight);
+    MoveControl(ctx->aboutPanel, IDC_ABOUT_CHECK_UPDATES_BUTTON, rightButtonX, 208, 150, rowHeight + 4);
 }
 
 void LayoutClipsPanel(AppContext* ctx, int panelWidth, int panelHeight)
@@ -354,6 +355,7 @@ void LayoutClipsPanel(AppContext* ctx, int panelWidth, int panelHeight)
     MoveControl(ctx->clipsPanel, IDC_CLIPS_SET_END, left + 438, clippingTop - 1, 90, rowHeight + 4);
     MoveControl(ctx->clipsPanel, IDC_CLIPS_EXPORT, left, actionsTop - 1, 110, rowHeight + 4);
     MoveControl(ctx->clipsPanel, IDC_CLIPS_OPEN_FOLDER, left + 120, actionsTop - 1, 110, rowHeight + 4);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_FFMPEG_WARNING, left + 240, actionsTop, right - left - 240, rowHeight + 4);
 }
 
 } // namespace

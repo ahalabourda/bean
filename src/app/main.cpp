@@ -531,6 +531,34 @@ struct ClipPreviewReadyPayload {
     DWORD ffmpegExitCode = 1;
 };
 
+struct ClipExportCompletePayload {
+    bool success = false;
+    std::wstring message;
+};
+
+void SetClipsExportStatus(AppContext* ctx, AppContext::ClipExportStatus status, const std::wstring& text)
+{
+    if (!ctx) {
+        return;
+    }
+    ctx->clipsExportStatus = status;
+    if (ctx->mainWindow) {
+        KillTimer(ctx->mainWindow, kClipsExportStatusTimerId);
+    }
+    if (ctx->clipsFfmpegWarning) {
+        UpdateTransparentStaticText(ctx->clipsFfmpegWarning, text.c_str());
+        ShowWindow(ctx->clipsFfmpegWarning, text.empty() ? SW_HIDE : SW_SHOW);
+    }
+    if (status == AppContext::ClipExportStatus::Success && ctx->mainWindow) {
+        SetTimer(ctx->mainWindow, kClipsExportStatusTimerId, 10'000, nullptr);
+    }
+}
+
+void ClearClipsExportStatus(AppContext* ctx)
+{
+    SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Idle, L"");
+}
+
 bool ParseClipSeconds(const std::wstring& input, int& outSeconds)
 {
     if (input.empty()) {
@@ -768,6 +796,18 @@ void RefreshClipsPlaybackControls(AppContext* ctx)
         return;
     }
     const bool previewBusy = ctx->clipsPreviewBuildInProgress.load();
+    const bool ffmpegAvailable = ctx->ffmpegDetected;
+    if (ctx->clipsFfmpegWarning) {
+        if (ctx->clipsExportStatus == AppContext::ClipExportStatus::Idle) {
+            const wchar_t* warningText = ffmpegAvailable
+                ? L""
+                : L"FFmpeg is required to export clips.";
+            UpdateTransparentStaticText(ctx->clipsFfmpegWarning, warningText);
+            ShowWindow(ctx->clipsFfmpegWarning, ffmpegAvailable ? SW_HIDE : SW_SHOW);
+        } else {
+            ShowWindow(ctx->clipsFfmpegWarning, SW_SHOW);
+        }
+    }
     if (ctx->clipsSourceCombo) {
         EnableWindow(ctx->clipsSourceCombo, TRUE);
     }
@@ -792,7 +832,9 @@ void RefreshClipsPlaybackControls(AppContext* ctx)
     }
     EnableWindow(GetDlgItem(ctx->clipsPanel, IDC_CLIPS_SET_START), (ctx->clipsLoaded && !previewBusy) ? TRUE : FALSE);
     EnableWindow(GetDlgItem(ctx->clipsPanel, IDC_CLIPS_SET_END), (ctx->clipsLoaded && !previewBusy) ? TRUE : FALSE);
-    EnableWindow(GetDlgItem(ctx->clipsPanel, IDC_CLIPS_EXPORT), (ctx->clipsLoaded && !previewBusy && !ctx->clipsExportInProgress.load()) ? TRUE : FALSE);
+    EnableWindow(
+        GetDlgItem(ctx->clipsPanel, IDC_CLIPS_EXPORT),
+        (ctx->clipsLoaded && ffmpegAvailable && !previewBusy && !ctx->clipsExportInProgress.load()) ? TRUE : FALSE);
     UpdateClipsPositionLabel(ctx);
 }
 
@@ -808,60 +850,85 @@ std::optional<std::filesystem::path> GetSelectedClipSourcePath(const AppContext*
     return ctx->clipSourceItems[static_cast<size_t>(selected)];
 }
 
-std::optional<std::filesystem::path> ResolveFfmpegExecutablePath()
+std::optional<std::filesystem::path> ResolveFfmpegExecutablePath(AppContext* ctx)
 {
+    if (ctx && ctx->ffmpegExecutablePath.has_value()) {
+        std::error_code cachedPathEc;
+        if (std::filesystem::exists(*ctx->ffmpegExecutablePath, cachedPathEc) && !cachedPathEc) {
+            return ctx->ffmpegExecutablePath;
+        }
+        ctx->ffmpegExecutablePath.reset();
+    }
+
+    std::optional<std::filesystem::path> resolvedPath;
     if (const auto explicitPath = Trim(GetEnvString("BEAN_FFMPEG_PATH")); !explicitPath.empty()) {
         const auto candidate = std::filesystem::path(ToWide(explicitPath));
         if (std::filesystem::exists(candidate)) {
-            return candidate;
+            resolvedPath = candidate;
         }
     }
 
-    if (const auto obsRootText = Trim(GetEnvString("BEAN_OBS_ROOT")); !obsRootText.empty()) {
+    if (!resolvedPath.has_value()) {
+        const auto obsRootText = Trim(GetEnvString("BEAN_OBS_ROOT"));
+        if (!obsRootText.empty()) {
         const auto candidate = std::filesystem::path(ToWide(obsRootText)) / "bin" / "64bit" / "ffmpeg.exe";
         if (std::filesystem::exists(candidate)) {
-            return candidate;
-        }
-    }
-
-    std::filesystem::path obsRoot;
-    if (ResolveObsInstallRootForUi(obsRoot)) {
-        const auto candidate = obsRoot / "bin" / "64bit" / "ffmpeg.exe";
-        if (std::filesystem::exists(candidate)) {
-            return candidate;
-        }
-    }
-
-    for (const auto& driveRoot : EnumerateDriveRootsStartingAtC()) {
-        const std::filesystem::path commonCandidates[] = {
-            driveRoot / "ffmpeg" / "bin" / "ffmpeg.exe",
-            driveRoot / "Program Files" / "ffmpeg" / "bin" / "ffmpeg.exe",
-            driveRoot / "Program Files (x86)" / "ffmpeg" / "bin" / "ffmpeg.exe",
-            driveRoot / "ProgramData" / "chocolatey" / "bin" / "ffmpeg.exe"
-        };
-        for (const auto& candidate : commonCandidates) {
-            if (std::filesystem::exists(candidate)) {
-                return candidate;
+                resolvedPath = candidate;
             }
         }
     }
 
-    wchar_t resolvedPath[MAX_PATH] = {};
-    const DWORD resolvedLen = SearchPathW(nullptr, L"ffmpeg.exe", nullptr, static_cast<DWORD>(std::size(resolvedPath)), resolvedPath, nullptr);
-    if (resolvedLen > 0 && resolvedLen < std::size(resolvedPath)) {
-        return std::filesystem::path(resolvedPath);
-    }
-
-    wchar_t modulePath[MAX_PATH] = {};
-    const DWORD moduleLen = GetModuleFileNameW(nullptr, modulePath, static_cast<DWORD>(std::size(modulePath)));
-    if (moduleLen > 0) {
-        const auto localCandidate = std::filesystem::path(modulePath).parent_path() / "ffmpeg.exe";
-        if (std::filesystem::exists(localCandidate)) {
-            return localCandidate;
+    std::filesystem::path obsRoot;
+    if (!resolvedPath.has_value() && ResolveObsInstallRootForUi(obsRoot)) {
+        const auto candidate = obsRoot / "bin" / "64bit" / "ffmpeg.exe";
+        if (std::filesystem::exists(candidate)) {
+            resolvedPath = candidate;
         }
     }
 
-    return std::nullopt;
+    if (!resolvedPath.has_value()) {
+        for (const auto& driveRoot : EnumerateDriveRootsStartingAtC()) {
+            const std::filesystem::path commonCandidates[] = {
+                driveRoot / "ffmpeg" / "bin" / "ffmpeg.exe",
+                driveRoot / "Program Files" / "ffmpeg" / "bin" / "ffmpeg.exe",
+                driveRoot / "Program Files (x86)" / "ffmpeg" / "bin" / "ffmpeg.exe",
+                driveRoot / "ProgramData" / "chocolatey" / "bin" / "ffmpeg.exe"
+            };
+            for (const auto& candidate : commonCandidates) {
+                if (std::filesystem::exists(candidate)) {
+                    resolvedPath = candidate;
+                    break;
+                }
+            }
+            if (resolvedPath.has_value()) {
+                break;
+            }
+        }
+    }
+
+    if (!resolvedPath.has_value()) {
+        wchar_t searchPath[MAX_PATH] = {};
+        const DWORD resolvedLen = SearchPathW(nullptr, L"ffmpeg.exe", nullptr, static_cast<DWORD>(std::size(searchPath)), searchPath, nullptr);
+        if (resolvedLen > 0 && resolvedLen < std::size(searchPath)) {
+            resolvedPath = std::filesystem::path(searchPath);
+        }
+    }
+
+    if (!resolvedPath.has_value()) {
+        wchar_t modulePath[MAX_PATH] = {};
+        const DWORD moduleLen = GetModuleFileNameW(nullptr, modulePath, static_cast<DWORD>(std::size(modulePath)));
+        if (moduleLen > 0) {
+            const auto localCandidate = std::filesystem::path(modulePath).parent_path() / "ffmpeg.exe";
+            if (std::filesystem::exists(localCandidate)) {
+                resolvedPath = localCandidate;
+            }
+        }
+    }
+
+    if (ctx) {
+        ctx->ffmpegExecutablePath = resolvedPath;
+    }
+    return resolvedPath;
 }
 
 bool LoadClipFromSelection(AppContext* ctx, bool reportStatus = true)
@@ -893,7 +960,7 @@ bool LoadClipFromSelection(AppContext* ctx, bool reportStatus = true)
         return false;
     }
 
-    const auto ffmpegPath = ResolveFfmpegExecutablePath();
+    const auto ffmpegPath = ResolveFfmpegExecutablePath(ctx);
     const auto proxyPath = BuildClipPreviewProxyPath(selectedPath);
     bool shouldBuildProxy = true;
     std::error_code proxyEc;
@@ -2013,58 +2080,9 @@ bool DetectUsableObsInstallForUi()
     return hasGraphicsBackend;
 }
 
-bool DetectFfmpegForUi()
+bool DetectFfmpegForUi(AppContext* ctx)
 {
-    if (const auto explicitPath = Trim(GetEnvString("BEAN_FFMPEG_PATH")); !explicitPath.empty()) {
-        if (std::filesystem::exists(ToWide(explicitPath))) {
-            return true;
-        }
-    }
-
-    if (const auto obsRootText = Trim(GetEnvString("BEAN_OBS_ROOT")); !obsRootText.empty()) {
-        const std::filesystem::path candidate = ToWide(obsRootText);
-        if (std::filesystem::exists(candidate / "bin" / "64bit" / "ffmpeg.exe")) {
-            return true;
-        }
-    }
-
-    std::filesystem::path obsRoot;
-    if (ResolveObsInstallRootForUi(obsRoot)) {
-        if (std::filesystem::exists(obsRoot / "bin" / "64bit" / "ffmpeg.exe")) {
-            return true;
-        }
-    }
-
-    for (const auto& driveRoot : EnumerateDriveRootsStartingAtC()) {
-        const std::filesystem::path commonCandidates[] = {
-            driveRoot / "ffmpeg" / "bin" / "ffmpeg.exe",
-            driveRoot / "Program Files" / "ffmpeg" / "bin" / "ffmpeg.exe",
-            driveRoot / "Program Files (x86)" / "ffmpeg" / "bin" / "ffmpeg.exe",
-            driveRoot / "ProgramData" / "chocolatey" / "bin" / "ffmpeg.exe"
-        };
-        for (const auto& candidate : commonCandidates) {
-            if (std::filesystem::exists(candidate)) {
-                return true;
-            }
-        }
-    }
-
-    wchar_t resolvedPath[MAX_PATH] = {};
-    const DWORD resolvedLen = SearchPathW(nullptr, L"ffmpeg.exe", nullptr, static_cast<DWORD>(std::size(resolvedPath)), resolvedPath, nullptr);
-    if (resolvedLen > 0 && resolvedLen < std::size(resolvedPath)) {
-        return true;
-    }
-
-    wchar_t modulePath[MAX_PATH] = {};
-    const DWORD moduleLen = GetModuleFileNameW(nullptr, modulePath, static_cast<DWORD>(std::size(modulePath)));
-    if (moduleLen > 0) {
-        const auto localCandidate = std::filesystem::path(modulePath).parent_path() / "ffmpeg.exe";
-        if (std::filesystem::exists(localCandidate)) {
-            return true;
-        }
-    }
-
-    return false;
+    return ResolveFfmpegExecutablePath(ctx).has_value();
 }
 
 std::filesystem::path ResolveDefaultWowLogDirectory()
@@ -3017,6 +3035,7 @@ void SetActiveTab(AppContext* ctx, AppContext::MainTab tab)
         return;
     }
 
+    ClearClipsExportStatus(ctx);
     ctx->activeTab = tab;
     const bool showStatus = (tab == AppContext::MainTab::Status);
     const bool showConfiguration = (tab == AppContext::MainTab::Configuration);
@@ -3070,26 +3089,32 @@ void RefreshAboutUpdateButtonState(AppContext* ctx)
 
     EnableWindow(updateButton, FALSE);
     SetWindowTextW(updateButton, L"Checking...");
+    HWND updateText = GetDlgItem(ctx->aboutPanel, IDC_ABOUT_UPDATE_TEXT);
+    UpdateTransparentStaticText(updateText, L"Checking for updates...");
 
     std::wstring statusMessage;
     const auto availability = bean::app::GetUpdateAvailability(statusMessage);
     switch (availability) {
     case bean::app::UpdateAvailability::UpdateAvailable:
-        SetWindowTextW(updateButton, L"Update App");
+        UpdateTransparentStaticText(updateText, statusMessage.c_str());
+        SetWindowTextW(updateButton, L"Update now");
         EnableWindow(updateButton, TRUE);
         SetStatus(ctx, statusMessage);
         break;
     case bean::app::UpdateAvailability::UpToDate:
-        SetWindowTextW(updateButton, L"Up to date!");
-        EnableWindow(updateButton, FALSE);
+        UpdateTransparentStaticText(updateText, L"Up to date.");
+        SetWindowTextW(updateButton, L"Check for updates");
+        EnableWindow(updateButton, TRUE);
         break;
     case bean::app::UpdateAvailability::NotConfigured:
-        SetWindowTextW(updateButton, L"Updates Unavailable");
-        EnableWindow(updateButton, FALSE);
+        UpdateTransparentStaticText(updateText, L"Failed to check for updates");
+        SetWindowTextW(updateButton, L"Check for updates");
+        EnableWindow(updateButton, TRUE);
         SetStatus(ctx, statusMessage);
         break;
     case bean::app::UpdateAvailability::Failed:
-        SetWindowTextW(updateButton, L"Update Check Failed");
+        UpdateTransparentStaticText(updateText, L"Failed to check for updates");
+        SetWindowTextW(updateButton, L"Check for updates");
         EnableWindow(updateButton, TRUE);
         SetStatus(ctx, statusMessage);
         break;
@@ -3140,7 +3165,7 @@ void RefreshLiveStatus(AppContext* ctx)
     bool ffmpegStatusRefreshed = false;
     if (!ctx->ffmpegLastCheckedAt.has_value()
         || (now - *ctx->ffmpegLastCheckedAt) >= kObsInstallPollInterval) {
-        ctx->ffmpegDetected = DetectFfmpegForUi();
+        ctx->ffmpegDetected = DetectFfmpegForUi(ctx);
         ctx->ffmpegLastCheckedAt = now;
         ffmpegStatusRefreshed = true;
     }
@@ -3196,6 +3221,9 @@ void RefreshLiveStatus(AppContext* ctx)
     if (ctx->ffmpegText) {
         const wchar_t* ffmpegStatusText = ctx->ffmpegDetected ? L"FFmpeg available for trim" : L"FFmpeg not found for trim";
         UpdateTransparentStaticText(ctx->ffmpegText, ffmpegStatusText);
+    }
+    if (ffmpegStatusRefreshed || ffmpegWasDetected != ctx->ffmpegDetected) {
+        RefreshClipsPlaybackControls(ctx);
     }
     bool warcraftRecorderRowVisibilityChanged = false;
     HWND warcraftRecorderLabel = GetDlgItem(ctx->statusPanel, IDC_WARCRAFT_RECORDER_LABEL);
@@ -3884,43 +3912,43 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
     }
     case IDC_CLIPS_EXPORT: {
         if (ctx->clipsExportInProgress.load()) {
-            SetStatus(ctx, L"Clip export is already in progress.");
+            SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Exporting, L"Exporting...");
             break;
         }
         if (!ctx->clipsLoaded || ctx->clipsLoadedPath.empty()) {
-            SetStatus(ctx, L"Select and load a recording first.");
+            SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Failure, L"Select and load a recording first.");
             break;
         }
         if (!std::filesystem::exists(ctx->clipsLoadedPath)) {
-            SetStatus(ctx, L"Selected recording file no longer exists.");
+            SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Failure, L"Selected recording file no longer exists.");
             break;
         }
         int startSeconds = 0;
         int endSeconds = 0;
         if (!ParseClipSeconds(GetWindowTextString(ctx->clipsStartEdit), startSeconds)
             || !ParseClipSeconds(GetWindowTextString(ctx->clipsEndEdit), endSeconds)) {
-            SetStatus(ctx, L"Start and end must be valid whole seconds.");
+            SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Failure, L"Start and end must be valid whole seconds.");
             break;
         }
         if (endSeconds <= startSeconds) {
-            SetStatus(ctx, L"End must be greater than start.");
+            SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Failure, L"End must be greater than start.");
             break;
         }
-        const auto ffmpegPath = ResolveFfmpegExecutablePath();
+        const auto ffmpegPath = ResolveFfmpegExecutablePath(ctx);
         if (!ffmpegPath.has_value()) {
-            SetStatus(ctx, L"FFmpeg executable could not be found.");
+            SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Failure, L"FFmpeg executable could not be found.");
             break;
         }
         const auto recordingsFolder = ResolveRecordingsFolderPath(ctx);
         if (recordingsFolder.empty()) {
-            SetStatus(ctx, L"Recordings folder is unavailable.");
+            SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Failure, L"Recordings folder is unavailable.");
             break;
         }
         const auto clipsFolder = recordingsFolder / "Clips";
         std::error_code clipsCreateEc;
         std::filesystem::create_directories(clipsFolder, clipsCreateEc);
         if (clipsCreateEc) {
-            SetStatus(ctx, std::wstring(L"Could not create Clips folder: ") + ToWide(clipsCreateEc.message()));
+            SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Failure, std::wstring(L"Could not create Clips folder: ") + ToWide(clipsCreateEc.message()));
             break;
         }
 
@@ -3932,6 +3960,7 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
 
         ctx->clipsExportInProgress.store(true);
         RefreshClipsPlaybackControls(ctx);
+        SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Exporting, L"Exporting...");
         SetStatus(ctx, std::wstring(L"Exporting clip to ") + outputPath.filename().wstring() + L"...");
         const std::filesystem::path inputPath = ctx->clipsLoadedPath;
         const std::filesystem::path ffmpegExe = *ffmpegPath;
@@ -3961,6 +3990,9 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
 
             if (!created) {
                 const DWORD errorCode = GetLastError();
+                auto* payload = new ClipExportCompletePayload();
+                payload->message = std::wstring(L"Export failed to start (error ") + std::to_wstring(errorCode) + L").";
+                PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_EXPORT_COMPLETE, 0, reinterpret_cast<LPARAM>(payload));
                 PostStatus(ctx, std::wstring(L"Clip export failed to start (error ") + std::to_wstring(errorCode) + L").");
                 ctx->clipsExportInProgress.store(false);
                 PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_UI_REFRESH, 0, 0);
@@ -3974,8 +4006,15 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
             CloseHandle(processInfo.hProcess);
 
             if (exitCode == 0) {
+                auto* payload = new ClipExportCompletePayload();
+                payload->success = true;
+                payload->message = L"Export complete!";
+                PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_EXPORT_COMPLETE, 0, reinterpret_cast<LPARAM>(payload));
                 PostStatus(ctx, std::wstring(L"Clip export complete: ") + outputPath.wstring());
             } else {
+                auto* payload = new ClipExportCompletePayload();
+                payload->message = std::wstring(L"Export failed (ffmpeg exit code ") + std::to_wstring(exitCode) + L").";
+                PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_EXPORT_COMPLETE, 0, reinterpret_cast<LPARAM>(payload));
                 PostStatus(ctx, std::wstring(L"Clip export failed (ffmpeg exit code ") + std::to_wstring(exitCode) + L").");
             }
             ctx->clipsExportInProgress.store(false);
@@ -4210,7 +4249,7 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         break;
     }
     case IDC_ABOUT_WEBSITE_BUTTON: {
-        const auto result = reinterpret_cast<intptr_t>(ShellExecuteW(hwnd, L"open", L"https://andrew.gg", nullptr, nullptr, SW_SHOWNORMAL));
+        const auto result = reinterpret_cast<intptr_t>(ShellExecuteW(hwnd, L"open", L"https://andrew.gg/bean", nullptr, nullptr, SW_SHOWNORMAL));
         if (result <= 32) {
             SetStatus(ctx, L"Failed to open website.");
         }
@@ -4231,12 +4270,19 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         break;
     }
     case IDC_ABOUT_CHECK_UPDATES_BUTTON: {
+        const HWND updateButton = GetDlgItem(ctx->aboutPanel, IDC_ABOUT_CHECK_UPDATES_BUTTON);
+        const std::wstring buttonText = updateButton ? GetWindowTextString(updateButton) : std::wstring();
+        if (buttonText != L"Update now") {
+            RefreshAboutUpdateButtonState(ctx);
+            break;
+        }
+
         std::wstring updateStatus;
         const auto result = bean::app::ApplyUpdate(updateStatus);
         SetStatus(ctx, updateStatus);
         if (result == bean::app::UpdateApplyResult::UpdateReadyAndExitRequested) {
             PostMessageW(hwnd, WM_CLOSE, 0, 0);
-        } else if (result == bean::app::UpdateApplyResult::NoUpdateAvailable) {
+        } else {
             RefreshAboutUpdateButtonState(ctx);
         }
         break;
@@ -4909,6 +4955,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         CreateWindowW(L"BUTTON", L"Set End", WS_VISIBLE | WS_CHILD | WS_TABSTOP, 438, 397, 94, rowHeight + 4, ctx->clipsPanel, reinterpret_cast<HMENU>(IDC_CLIPS_SET_END), nullptr, nullptr);
         CreateWindowW(L"BUTTON", L"Export Clip", WS_VISIBLE | WS_CHILD | WS_TABSTOP, 20, 431, 112, rowHeight + 4, ctx->clipsPanel, reinterpret_cast<HMENU>(IDC_CLIPS_EXPORT), nullptr, nullptr);
         CreateWindowW(L"BUTTON", L"Open Folder", WS_VISIBLE | WS_CHILD | WS_TABSTOP, 140, 431, 112, rowHeight + 4, ctx->clipsPanel, reinterpret_cast<HMENU>(IDC_CLIPS_OPEN_FOLDER), nullptr, nullptr);
+        ctx->clipsFfmpegWarning = CreateWindowW(
+            L"STATIC",
+            L"FFmpeg is required to export clips.",
+            WS_CHILD | SS_LEFT,
+            260,
+            431,
+            500,
+            rowHeight + 4,
+            ctx->clipsPanel,
+            reinterpret_cast<HMENU>(IDC_CLIPS_FFMPEG_WARNING),
+            nullptr,
+            nullptr);
         ctx->clipsTimelinePosition = 0;
         ctx->clipsVolumePercent = 100;
         RefreshClipsPlaybackControls(ctx);
@@ -4917,7 +4975,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         CreateWindowW(L"STATIC", kAboutTitleText, WS_VISIBLE | WS_CHILD | SS_CENTER, 20, 24, 740, 28, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_TITLE_LABEL), nullptr, nullptr);
         CreateWindowW(L"STATIC", buildText.c_str(), WS_VISIBLE | WS_CHILD | SS_CENTER, 20, 58, 740, rowHeight, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_BUILD_TEXT), nullptr, nullptr);
         CreateWindowW(L"STATIC", L"Website:", WS_VISIBLE | WS_CHILD, 20, 96, 120, rowHeight, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_WEBSITE_LABEL), nullptr, nullptr);
-        CreateWindowW(L"STATIC", L"https://andrew.gg", WS_VISIBLE | WS_CHILD, 150, 96, 360, rowHeight, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_WEBSITE_TEXT), nullptr, nullptr);
+        CreateWindowW(L"STATIC", L"https://andrew.gg/bean", WS_VISIBLE | WS_CHILD, 150, 96, 360, rowHeight, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_WEBSITE_TEXT), nullptr, nullptr);
         CreateWindowW(L"BUTTON", L"Open Website", WS_VISIBLE | WS_CHILD, 540, 94, 150, rowHeight + 4, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_WEBSITE_BUTTON), nullptr, nullptr);
 
         CreateWindowW(L"STATIC", L"Email:", WS_VISIBLE | WS_CHILD, 20, 134, 120, rowHeight, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_EMAIL_LABEL), nullptr, nullptr);
@@ -4927,21 +4985,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         CreateWindowW(L"STATIC", L"Discord:", WS_VISIBLE | WS_CHILD, 20, 172, 120, rowHeight, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_DISCORD_LABEL), nullptr, nullptr);
         CreateWindowW(L"STATIC", L"https://discord.gg/57JGRw6x3D", WS_VISIBLE | WS_CHILD, 150, 172, 360, rowHeight, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_DISCORD_TEXT), nullptr, nullptr);
         CreateWindowW(L"BUTTON", L"Join Discord", WS_VISIBLE | WS_CHILD, 540, 170, 150, rowHeight + 4, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_DISCORD_BUTTON), nullptr, nullptr);
-        CreateWindowW(L"STATIC", L"Version:", WS_CHILD, 20, 194, 120, rowHeight, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_BUILD_LABEL), nullptr, nullptr);
-        CreateWindowW(L"BUTTON", L"Check for Updates", WS_VISIBLE | WS_CHILD | WS_TABSTOP, 540, 208, 150, rowHeight + 4, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_CHECK_UPDATES_BUTTON), nullptr, nullptr);
 
-        CreateWindowW(
-            L"STATIC",
-            L"For help and updates, use the links above.",
-            WS_VISIBLE | WS_CHILD,
-            20,
-            246,
-            740,
-            rowHeight,
-            ctx->aboutPanel,
-            reinterpret_cast<HMENU>(IDC_ABOUT_HELP_TEXT),
-            nullptr,
-            nullptr);
+        CreateWindowW(L"STATIC", L"Update:", WS_VISIBLE | WS_CHILD, 20, 210, 120, rowHeight, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_UPDATE_LABEL), nullptr, nullptr);
+        CreateWindowW(L"STATIC", L"Checking for updates...", WS_VISIBLE | WS_CHILD, 150, 210, 360, rowHeight, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_UPDATE_TEXT), nullptr, nullptr);
+        CreateWindowW(L"BUTTON", L"Check for updates", WS_VISIBLE | WS_CHILD | WS_TABSTOP, 540, 208, 150, rowHeight + 4, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_CHECK_UPDATES_BUTTON), nullptr, nullptr);
 
         ConfigureStyledButtons(ctx);
         ApplyUiFonts(hwnd);
@@ -5264,11 +5311,22 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             }
             return reinterpret_cast<LRESULT>(gTheme.panelSolidBrush ? gTheme.panelSolidBrush : reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
         }
+        if (control == ctx->clipsFfmpegWarning) {
+            SetBkMode(dc, TRANSPARENT);
+            if (ctx->clipsExportStatus == AppContext::ClipExportStatus::Success) {
+                SetTextColor(dc, kColorSuccess);
+            } else if (ctx->clipsExportStatus == AppContext::ClipExportStatus::Failure || !ctx->ffmpegDetected) {
+                SetTextColor(dc, kColorFailure);
+            } else {
+                SetTextColor(dc, kColorTextMuted);
+            }
+            return reinterpret_cast<LRESULT>(GetStockObject(NULL_BRUSH));
+        }
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, kColorTextPrimary);
         if (control != ctx->outputStatus && control != ctx->wowLogStatus) {
             const int id = GetDlgCtrlID(control);
-            if (id == IDC_RECORDINGS_LABEL || id == IDC_RECORDINGS_UPLOAD_STATUS || id == IDC_ABOUT_HELP_TEXT || id == IDC_ABOUT_BUILD_TEXT || id == IDC_YOUTUBE_UNLINK_CONFIRM_LABEL || id == IDC_CHAT_PREVIEW_STATUS || id == IDC_CONFIGURATION_AUTOSAVE_HINT) {
+            if (id == IDC_RECORDINGS_LABEL || id == IDC_RECORDINGS_UPLOAD_STATUS || id == IDC_ABOUT_BUILD_TEXT || id == IDC_YOUTUBE_UNLINK_CONFIRM_LABEL || id == IDC_CHAT_PREVIEW_STATUS || id == IDC_CONFIGURATION_AUTOSAVE_HINT) {
                 SetTextColor(dc, kColorTextMuted);
             }
         }
@@ -5361,6 +5419,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         return 0;
     }
     case WM_TIMER:
+        if (wParam == kClipsExportStatusTimerId) {
+            if (ctx) {
+                ClearClipsExportStatus(ctx);
+            }
+            return 0;
+        }
         if (wParam == kLiveStatusTimerId) {
             if (ctx && ctx->orchestrator) {
                 ctx->orchestrator->Tick();
@@ -5422,6 +5486,17 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 }
                 RefreshClipsPlaybackControls(ctx);
             }
+        }
+        delete payload;
+        return 0;
+    }
+    case WM_BEAN_CLIPS_EXPORT_COMPLETE: {
+        auto* payload = reinterpret_cast<ClipExportCompletePayload*>(lParam);
+        if (ctx && payload) {
+            SetClipsExportStatus(
+                ctx,
+                payload->success ? AppContext::ClipExportStatus::Success : AppContext::ClipExportStatus::Failure,
+                payload->message);
         }
         delete payload;
         return 0;
@@ -5507,6 +5582,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             ctx->statusLogStream.close();
         }
         KillTimer(hwnd, kLiveStatusTimerId);
+        KillTimer(hwnd, kClipsExportStatusTimerId);
         DestroyParticipantSpecIcons(ctx);
         DestroyThemeResources();
         PostQuitMessage(0);

@@ -33,8 +33,9 @@ Requirements:
 - CMake 3.24 or newer.
 - A compatible OBS Studio installation for recording. Bean dynamically loads
   OBS at runtime and does not bundle the OBS installation.
-- FFmpeg for clip preview/export. Release builds bundle FFmpeg automatically,
-  but development builds must be able to locate it when using the Clips tab.
+- FFmpeg for clip preview/export. Release builds acquire and bundle FFmpeg
+  automatically when it is not already installed; development builds must be
+  able to locate it when using the Clips tab.
 
 Configure, build, and test:
 
@@ -62,8 +63,11 @@ Create an alpha release build for testers:
 
 The distributable package is staged in `dist\alpha-release`. The script
 bundles `ffmpeg.exe`, optional `ffprobe.exe`, and FFmpeg DLLs so clip preview
-and trimming work without a separate FFmpeg installation. It fails with setup
-instructions if FFmpeg cannot be located.
+and trimming work without a separate FFmpeg installation. If FFmpeg is not
+installed, it downloads the FFmpeg essentials archive into `tools\ffmpeg` and
+reuses that cached copy on later builds. Set `BEAN_FFMPEG_PATH` to select a
+specific executable, `BEAN_FFMPEG_URL` to override the download source, or
+`BEAN_FFMPEG_AUTO_DOWNLOAD=0` to require a preinstalled copy.
 
 ## OBS runtime
 

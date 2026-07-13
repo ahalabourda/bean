@@ -162,9 +162,15 @@ UpdateAvailability GetUpdateAvailability(std::wstring& statusMessage)
         statusMessage = L"Update check failed: " + GetLastVelopackError();
         return UpdateAvailability::Failed;
     }
+    const std::wstring availableVersion = updateInfo->TargetFullRelease->Version
+        ? Utf8ToWide(updateInfo->TargetFullRelease->Version)
+        : std::wstring();
     vpkc_free_update_info(updateInfo);
     vpkc_free_update_manager(manager);
-    statusMessage = L"Update available.";
+    statusMessage = L"New update available";
+    if (!availableVersion.empty()) {
+        statusMessage += L": v" + availableVersion;
+    }
     return UpdateAvailability::UpdateAvailable;
 #endif
 }

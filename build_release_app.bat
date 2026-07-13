@@ -149,8 +149,20 @@ if not defined FFMPEG_SOURCE_EXE (
 )
 
 if not defined FFMPEG_SOURCE_EXE (
-  echo [bean] Could not locate ffmpeg.exe to bundle.
-  echo [bean] Install ffmpeg or set BEAN_FFMPEG_PATH, then retry.
+  if "%BEAN_FFMPEG_AUTO_DOWNLOAD%"=="0" (
+    echo [bean] FFmpeg auto-download is disabled.
+  ) else (
+    call :download_ffmpeg
+    if errorlevel 1 exit /b 1
+    if exist "tools\ffmpeg\bin\ffmpeg.exe" (
+      set "FFMPEG_SOURCE_EXE=tools\ffmpeg\bin\ffmpeg.exe"
+    )
+  )
+)
+
+if not defined FFMPEG_SOURCE_EXE (
+  echo [bean] Could not locate or acquire ffmpeg.exe to bundle.
+  echo [bean] Install ffmpeg, set BEAN_FFMPEG_PATH, or retry with network access.
   exit /b 1
 )
 
@@ -159,4 +171,46 @@ if not exist "%FFMPEG_SOURCE_DIR%\ffmpeg.exe" (
   echo [bean] Resolved ffmpeg source is invalid: "%FFMPEG_SOURCE_EXE%"
   exit /b 1
 )
+exit /b 0
+
+:download_ffmpeg
+set "FFMPEG_URL=%BEAN_FFMPEG_URL%"
+if not defined FFMPEG_URL set "FFMPEG_URL=https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+set "FFMPEG_ZIP=tools\ffmpeg-release-essentials.zip"
+set "FFMPEG_TEMP=tools\ffmpeg-download"
+
+if exist "tools\ffmpeg\bin\ffmpeg.exe" (
+  echo [bean] Using cached FFmpeg in "tools\ffmpeg".
+  exit /b 0
+)
+
+if not exist "tools" mkdir "tools"
+if exist "%FFMPEG_TEMP%" rmdir /S /Q "%FFMPEG_TEMP%"
+echo [bean] FFmpeg was not found; downloading release essentials build...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Uri '%FFMPEG_URL%' -OutFile '%FFMPEG_ZIP%'"
+if errorlevel 1 (
+  echo [bean] Failed to download FFmpeg from "%FFMPEG_URL%".
+  exit /b 1
+)
+
+echo [bean] Extracting FFmpeg...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path '%FFMPEG_ZIP%' -DestinationPath '%FFMPEG_TEMP%' -Force"
+if errorlevel 1 (
+  echo [bean] Failed to extract FFmpeg archive.
+  exit /b 1
+)
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$exe=Get-ChildItem -Path '%FFMPEG_TEMP%' -Filter 'ffmpeg.exe' -Recurse | Select-Object -First 1; if (-not $exe) { exit 1 }; New-Item -ItemType Directory -Force -Path 'tools\ffmpeg\bin' | Out-Null; Copy-Item -Path ($exe.Directory.FullName + '\*') -Destination 'tools\ffmpeg\bin' -Force"
+if errorlevel 1 (
+  echo [bean] FFmpeg archive did not contain a usable bin directory.
+  exit /b 1
+)
+
+rmdir /S /Q "%FFMPEG_TEMP%" >nul 2>&1
+del /Q "%FFMPEG_ZIP%" >nul 2>&1
+if not exist "tools\ffmpeg\bin\ffmpeg.exe" (
+  echo [bean] FFmpeg acquisition completed without ffmpeg.exe.
+  exit /b 1
+)
+echo [bean] FFmpeg cached in "tools\ffmpeg".
 exit /b 0

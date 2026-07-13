@@ -452,6 +452,7 @@ bool IsStyledButtonId(int controlId)
     case IDC_ABOUT_WEBSITE_BUTTON:
     case IDC_ABOUT_EMAIL_BUTTON:
     case IDC_ABOUT_DISCORD_BUTTON:
+    case IDC_ABOUT_CHECK_UPDATES_BUTTON:
     case IDC_CLIPS_REFRESH:
     case IDC_CLIPS_PLAY_PAUSE:
     case IDC_CLIPS_SET_START:
@@ -516,7 +517,8 @@ void ConfigureStyledButtons(AppContext* ctx)
     for (const int id : clipsButtons) {
         EnableOwnerDrawButton(ctx->clipsPanel, id);
     }
-    const std::array<int, 3> aboutButtons = {IDC_ABOUT_WEBSITE_BUTTON, IDC_ABOUT_EMAIL_BUTTON, IDC_ABOUT_DISCORD_BUTTON};
+    const std::array<int, 4> aboutButtons = {
+        IDC_ABOUT_WEBSITE_BUTTON, IDC_ABOUT_EMAIL_BUTTON, IDC_ABOUT_DISCORD_BUTTON, IDC_ABOUT_CHECK_UPDATES_BUTTON};
     for (const int id : aboutButtons) {
         EnableOwnerDrawButton(ctx->aboutPanel, id);
     }

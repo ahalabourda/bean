@@ -39,12 +39,14 @@ inline constexpr UINT WM_BEAN_YOUTUBE_UPLOAD_PROGRESS = WM_APP + 103;
 inline constexpr UINT WM_BEAN_YOUTUBE_IDENTITY_RESOLVED = WM_APP + 104;
 inline constexpr UINT WM_BEAN_CLIPS_UI_REFRESH = WM_APP + 105;
 inline constexpr UINT WM_BEAN_CLIPS_PREVIEW_READY = WM_APP + 106;
+inline constexpr UINT WM_BEAN_CLIPS_EXPORT_COMPLETE = WM_APP + 107;
 inline constexpr wchar_t kStatusLogFilePrefix[] = L"bean-status-log-";
 inline constexpr wchar_t kStatusLogFileExtension[] = L".log";
 inline constexpr size_t kStatusLogRetentionCount = 5;
 inline constexpr wchar_t kYouTubeOAuthCredentialsMissingMessage[] =
     L"YouTube auth server is unavailable. Please try again later.";
 inline constexpr UINT_PTR kLiveStatusTimerId = 1;
+inline constexpr UINT_PTR kClipsExportStatusTimerId = 2;
 inline constexpr UINT kLiveStatusIntervalMs = 500;
 inline constexpr auto kChatPreviewCaptureInterval = std::chrono::milliseconds(1000);
 inline constexpr auto kChatPreviewInvalidateInterval = std::chrono::milliseconds(1000);
@@ -236,8 +238,9 @@ enum ControlId {
     IDC_ABOUT_DISCORD_TEXT,
     IDC_ABOUT_BUILD_LABEL,
     IDC_ABOUT_BUILD_TEXT,
+    IDC_ABOUT_UPDATE_LABEL,
+    IDC_ABOUT_UPDATE_TEXT,
     IDC_ABOUT_CHECK_UPDATES_BUTTON,
-    IDC_ABOUT_HELP_TEXT,
     IDC_CLIPS_SOURCE_LABEL,
     IDC_CLIPS_SOURCE_COMBO,
     IDC_CLIPS_REFRESH,
@@ -254,7 +257,8 @@ enum ControlId {
     IDC_CLIPS_END_EDIT,
     IDC_CLIPS_SET_END,
     IDC_CLIPS_EXPORT,
-    IDC_CLIPS_OPEN_FOLDER
+    IDC_CLIPS_OPEN_FOLDER,
+    IDC_CLIPS_FFMPEG_WARNING
 };
 
 struct AppContext {
@@ -356,6 +360,7 @@ struct AppContext {
     HWND clipsVolumeSlider = nullptr;
     HWND clipsStartEdit = nullptr;
     HWND clipsEndEdit = nullptr;
+    HWND clipsFfmpegWarning = nullptr;
     IGraphBuilder* clipsGraph = nullptr;
     IMediaControl* clipsMediaControl = nullptr;
     IMediaSeeking* clipsMediaSeeking = nullptr;
@@ -387,6 +392,7 @@ struct AppContext {
     std::optional<std::chrono::steady_clock::time_point> wowWindowLastCheckedAt;
     std::optional<std::chrono::steady_clock::time_point> obsInstallLastCheckedAt;
     std::optional<std::chrono::steady_clock::time_point> ffmpegLastCheckedAt;
+    std::optional<std::filesystem::path> ffmpegExecutablePath;
     std::optional<std::chrono::steady_clock::time_point> warcraftRecorderLastCheckedAt;
     std::optional<std::chrono::steady_clock::time_point> advancedCombatLoggingLastCheckedAt;
     std::optional<std::chrono::steady_clock::time_point> recordingStartedAt;
@@ -442,6 +448,13 @@ struct AppContext {
     bool clipsTimelineDragActive = false;
     bool clipsVolumeDragActive = false;
     bool clipsResizeInProgress = false;
+    enum class ClipExportStatus {
+        Idle,
+        Exporting,
+        Success,
+        Failure
+    };
+    ClipExportStatus clipsExportStatus = ClipExportStatus::Idle;
     std::atomic<bool> clipsExportInProgress{false};
     std::atomic<bool> clipsPreviewBuildInProgress{false};
     std::atomic<std::uint64_t> clipsPreviewRequestId{0};
