@@ -10,6 +10,14 @@ if not defined PACK_VERSION (
   goto :fail
 )
 
+if not exist "sync_app_version.bat" (
+  echo [bean] Missing helper script sync_app_version.bat.
+  goto :fail
+)
+echo [bean] Syncing app version to %PACK_VERSION%...
+call sync_app_version.bat "%PACK_VERSION%"
+if errorlevel 1 goto :fail
+
 set "SDK_DIR=%BEAN_VELOPACK_SDK_DIR%"
 if not defined SDK_DIR set "SDK_DIR=tools\velopack-sdk"
 if not exist "%SDK_DIR%\include\Velopack.h" (

@@ -117,16 +117,16 @@ int ResolveConstantQualityValue(const RecordingConfig& config)
 {
     switch (ResolveVideoQualityTier(config)) {
     case VideoQualityTier::Ultra:
-        return 16;
-    case VideoQualityTier::High:
         return 20;
-    case VideoQualityTier::Medium:
+    case VideoQualityTier::High:
         return 24;
-    case VideoQualityTier::Low:
+    case VideoQualityTier::Medium:
         return 28;
+    case VideoQualityTier::Low:
+        return 32;
     case VideoQualityTier::Minimum:
     default:
-        return 32;
+        return 40;
     }
 }
 

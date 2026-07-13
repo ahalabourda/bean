@@ -56,7 +56,7 @@ constexpr char kYouTubeAuthServerUrl[] = "https://andrew.gg/bean/youtube-auth/";
 
 std::wstring BuildNumberText()
 {
-    constexpr wchar_t kAppVersion[] = L"0.1.1";
+    constexpr wchar_t kAppVersion[] = L"0.2.0";
     return std::wstring(L"v") + kAppVersion + std::wstring(L" (build ") + std::to_wstring(BEAN_BUILD_NUMBER) + std::wstring(L")");
 }
 
