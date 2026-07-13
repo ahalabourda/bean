@@ -1,12 +1,14 @@
 #include "app/AppDraw.h"
 
 #include "app/AppUtilities.h"
+#include "obs/IRecorderEngine.h"
 
 #include <commctrl.h>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <sstream>
 
 VisualTheme gTheme;
 
@@ -160,7 +162,18 @@ const wchar_t* GetHelpTooltipTextForControl(const AppContext* ctx, HWND control)
         return L"After your keystone ends, Bean keeps recording for this many seconds to capture wrap-up moments.";
     }
     if (control == ctx->presetHelpIcon) {
-        return L"Technical details:\nUltra = 16 (CQP/CRF/ICQ)\nHigh = 20 (CQP/CRF/ICQ)\nMedium = 24 (CQP/CRF/ICQ)\nLow = 28 (CQP/CRF/ICQ)\nMinimum = 32 (CQP/CRF/ICQ)\n\nx264 preset: Ultra = medium, High/Medium = veryfast, Low/Minimum = superfast.";
+        static thread_local std::wstring presetTooltip;
+        std::wostringstream tooltip;
+        tooltip
+            << L"Technical details:\n"
+            << L"Ultra = " << bean::obs::ResolveConstantQualityValueForPreset("ultra") << L" (CQP/CRF/ICQ)\n"
+            << L"High = " << bean::obs::ResolveConstantQualityValueForPreset("high") << L" (CQP/CRF/ICQ)\n"
+            << L"Medium = " << bean::obs::ResolveConstantQualityValueForPreset("medium") << L" (CQP/CRF/ICQ)\n"
+            << L"Low = " << bean::obs::ResolveConstantQualityValueForPreset("low") << L" (CQP/CRF/ICQ)\n"
+            << L"Minimum = " << bean::obs::ResolveConstantQualityValueForPreset("minimum") << L" (CQP/CRF/ICQ)\n\n"
+            << L"x264 preset: Ultra = medium, High/Medium = veryfast, Low/Minimum = superfast.";
+        presetTooltip = tooltip.str();
+        return presetTooltip.c_str();
     }
     if (control == ctx->advancedLoggingHelpIcon) {
         return L"If changed in-game, Bean can only detect the change after /reload, relog, or closing WoW.";

@@ -41,6 +41,8 @@ struct RecordingConfig {
     ChatBlockerAnchor chatBlockerAnchor = ChatBlockerAnchor::BottomLeft;
 };
 
+int ResolveConstantQualityValueForPreset(const std::string& encoderPreset);
+
 class IRecorderEngine {
 public:
     virtual ~IRecorderEngine() = default;

@@ -797,6 +797,13 @@ bool LoadProc(HMODULE module, const char* name, T& out, std::string& error)
 
 } // namespace
 
+int ResolveConstantQualityValueForPreset(const std::string& encoderPreset)
+{
+    RecordingConfig config;
+    config.encoderPreset = encoderPreset;
+    return ResolveConstantQualityValue(config);
+}
+
 struct LibObsRecorderEngine::ObsApi {
     bool (*obs_startup)(const char*, const char*, void*) = nullptr;
     void (*obs_shutdown)() = nullptr;
