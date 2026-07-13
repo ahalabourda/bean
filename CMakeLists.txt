@@ -36,6 +36,7 @@ if(BEAN_ENABLE_LIBOBS)
 endif()
 
 add_executable(bean_app WIN32
+    src/app/ClipPreviewEngine.cpp
     src/app/main.cpp
     src/app/AppDraw.cpp
     src/app/AppIconsTaskbar.cpp
@@ -99,7 +100,7 @@ add_dependencies(bean_app bean_build_number)
 target_include_directories(bean_app PRIVATE "${BEAN_GENERATED_DIR}")
 
 target_link_libraries(bean_app PRIVATE bean_core)
-target_link_libraries(bean_app PRIVATE Comctl32 Shell32 Ole32)
+target_link_libraries(bean_app PRIVATE Comctl32 Shell32 Ole32 Mf Mfplat Mfreadwrite Mfuuid Shlwapi)
 target_link_libraries(bean_core PRIVATE Winhttp Bcrypt Crypt32)
 
 if(BEAN_ENABLE_VELOPACK)

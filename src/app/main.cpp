@@ -13,7 +13,7 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <commdlg.h>
-#include <dshow.h>
+#include <mfmediaengine.h>
 #include <tlhelp32.h>
 #include <mmdeviceapi.h>
 #include <shlobj.h>
@@ -48,7 +48,6 @@
 #pragma comment(lib, "UxTheme.lib")
 #pragma comment(lib, "Windowscodecs.lib")
 #pragma comment(lib, "Gdiplus.lib")
-#pragma comment(lib, "Strmiids.lib")
 
 namespace {
 
@@ -173,26 +172,20 @@ void ApplyClipVolumePercent(AppContext* ctx, int percent)
         return;
     }
     ctx->clipsVolumePercent = (std::clamp)(percent, 0, 100);
-    if (ctx->clipsBasicAudio) {
-        const long directShowVolume = (ctx->clipsVolumePercent <= 0) ? -10000L : static_cast<long>((ctx->clipsVolumePercent - 100) * 100);
-        ctx->clipsBasicAudio->put_Volume(directShowVolume);
+    if (ctx->clipsPreviewEngine) {
+        ctx->clipsPreviewEngine->SetVolumePercent(ctx->clipsVolumePercent);
     }
 }
 
 void SeekClipTimelineToSliderPosition(AppContext* ctx)
 {
-    if (!ctx || !ctx->clipsLoaded || !ctx->clipsMediaSeeking) {
+    if (!ctx || !ctx->clipsLoaded || !ctx->clipsPreviewEngine) {
         return;
     }
     const int targetMs = static_cast<int>((static_cast<long long>(ctx->clipsTimelinePosition) * (std::max)(1, ctx->clipsDurationMs)) / kClipsTimelineMax);
-    LONGLONG target100ns = static_cast<LONGLONG>((std::max)(0, targetMs)) * 10000LL;
-    ctx->clipsMediaSeeking->SetPositions(
-        &target100ns,
-        AM_SEEKING_AbsolutePositioning,
-        nullptr,
-        AM_SEEKING_NoPositioning);
-    if (ctx->clipsIsPlaying && ctx->clipsMediaControl) {
-        ctx->clipsMediaControl->Run();
+    ctx->clipsPreviewEngine->SeekMilliseconds(targetMs);
+    if (ctx->clipsIsPlaying) {
+        ctx->clipsPreviewEngine->Play();
     }
 }
 
@@ -522,15 +515,6 @@ std::wstring FormatHresultHex(HRESULT hr)
     return buffer;
 }
 
-struct ClipPreviewReadyPayload {
-    std::uint64_t requestId = 0;
-    std::filesystem::path sourcePath;
-    std::filesystem::path proxyPath;
-    HRESULT directShowRenderHr = E_FAIL;
-    bool ffmpegSpawned = false;
-    DWORD ffmpegExitCode = 1;
-};
-
 struct ClipExportCompletePayload {
     bool success = false;
     std::wstring message;
@@ -577,177 +561,22 @@ bool ParseClipSeconds(const std::wstring& input, int& outSeconds)
     }
 }
 
-template <typename T>
-void SafeRelease(T*& value)
-{
-    if (value) {
-        value->Release();
-        value = nullptr;
-    }
-}
-
 int QueryClipPositionMs(const AppContext* ctx, int fallback = 0)
 {
-    if (!ctx || !ctx->clipsMediaSeeking) {
+    if (!ctx || !ctx->clipsPreviewEngine) {
         return fallback;
     }
-    LONGLONG position100ns = 0;
-    if (FAILED(ctx->clipsMediaSeeking->GetCurrentPosition(&position100ns))) {
-        return fallback;
-    }
-    return static_cast<int>((std::max)(0LL, position100ns) / 10000LL);
+    return ctx->clipsPreviewEngine->PositionMilliseconds();
 }
 
 void CloseClipMedia(AppContext* ctx);
 
-bool TryRenderClipInDirectShow(AppContext* ctx, const std::filesystem::path& path, HRESULT& renderHr)
-{
-    if (!ctx) {
-        renderHr = E_POINTER;
-        return false;
-    }
-
-    CloseClipMedia(ctx);
-
-    HRESULT hr = CoCreateInstance(CLSID_FilterGraph, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&ctx->clipsGraph));
-    if (FAILED(hr)) {
-        renderHr = hr;
-        return false;
-    }
-    hr = ctx->clipsGraph->QueryInterface(IID_PPV_ARGS(&ctx->clipsMediaControl));
-    if (FAILED(hr)) {
-        renderHr = hr;
-        CloseClipMedia(ctx);
-        return false;
-    }
-    hr = ctx->clipsGraph->QueryInterface(IID_PPV_ARGS(&ctx->clipsMediaSeeking));
-    if (FAILED(hr)) {
-        renderHr = hr;
-        CloseClipMedia(ctx);
-        return false;
-    }
-    hr = ctx->clipsGraph->QueryInterface(IID_PPV_ARGS(&ctx->clipsVideoWindow));
-    if (FAILED(hr)) {
-        renderHr = hr;
-        CloseClipMedia(ctx);
-        return false;
-    }
-    hr = ctx->clipsGraph->QueryInterface(IID_PPV_ARGS(&ctx->clipsBasicAudio));
-    if (FAILED(hr)) {
-        renderHr = hr;
-        CloseClipMedia(ctx);
-        return false;
-    }
-    ctx->clipsGraph->QueryInterface(IID_PPV_ARGS(&ctx->clipsBasicVideo));
-
-    hr = ctx->clipsGraph->RenderFile(path.wstring().c_str(), nullptr);
-    if (FAILED(hr)) {
-        renderHr = hr;
-        CloseClipMedia(ctx);
-        return false;
-    }
-
-    renderHr = S_OK;
-    return true;
-}
-
-std::filesystem::path BuildClipPreviewProxyPath(const std::filesystem::path& sourcePath)
-{
-    std::error_code ec;
-    const auto tempRoot = std::filesystem::temp_directory_path(ec);
-    const auto baseRoot = ec ? std::filesystem::path(L".") : tempRoot;
-    const auto previewRoot = baseRoot / "Bean" / "clip-previews";
-    std::filesystem::create_directories(previewRoot, ec);
-
-    std::uintmax_t fileSize = 0;
-    std::error_code sizeEc;
-    fileSize = std::filesystem::file_size(sourcePath, sizeEc);
-    if (sizeEc) {
-        fileSize = 0;
-    }
-    auto modified = std::filesystem::last_write_time(sourcePath, ec);
-    const auto modifiedEpoch = ec ? 0LL : modified.time_since_epoch().count();
-    std::wstring stem = sourcePath.stem().wstring();
-    if (stem.empty()) {
-        stem = L"clip";
-    }
-    std::replace(stem.begin(), stem.end(), L' ', L'_');
-    std::wstringstream name;
-    name << stem << L"_" << fileSize << L"_" << modifiedEpoch << L".wmv";
-    return previewRoot / name.str();
-}
-
-bool BuildClipPreviewProxy(
-    const std::filesystem::path& ffmpegExe,
-    const std::filesystem::path& sourcePath,
-    const std::filesystem::path& proxyPath,
-    DWORD& exitCode)
-{
-    exitCode = 1;
-    std::wstringstream command;
-    command << L"\"" << ffmpegExe.wstring() << L"\""
-            << L" -y -i \"" << sourcePath.wstring() << L"\""
-            << L" -c:v wmv2 -b:v 3500k -c:a wmav2 \"" << proxyPath.wstring() << L"\"";
-
-    STARTUPINFOW startupInfo{};
-    startupInfo.cb = sizeof(startupInfo);
-    PROCESS_INFORMATION processInfo{};
-    std::wstring commandLine = command.str();
-    const BOOL created = CreateProcessW(
-        nullptr,
-        commandLine.data(),
-        nullptr,
-        nullptr,
-        FALSE,
-        CREATE_NO_WINDOW,
-        nullptr,
-        nullptr,
-        &startupInfo,
-        &processInfo);
-    if (!created) {
-        return false;
-    }
-
-    WaitForSingleObject(processInfo.hProcess, INFINITE);
-    GetExitCodeProcess(processInfo.hProcess, &exitCode);
-    CloseHandle(processInfo.hThread);
-    CloseHandle(processInfo.hProcess);
-    return true;
-}
-
 void ApplyClipVideoWindowBounds(AppContext* ctx)
 {
-    if (!ctx || !ctx->clipsVideoSurface || !ctx->clipsVideoWindow) {
+    if (!ctx || !ctx->clipsVideoSurface) {
         return;
     }
-    RECT videoRect{};
-    GetClientRect(ctx->clipsVideoSurface, &videoRect);
-    const int surfaceWidth = (std::max)(1, static_cast<int>(videoRect.right - videoRect.left));
-    const int surfaceHeight = (std::max)(1, static_cast<int>(videoRect.bottom - videoRect.top));
-    const int sourceWidth = ctx->clipsVideoSourceWidth > 0 ? ctx->clipsVideoSourceWidth : surfaceWidth;
-    const int sourceHeight = ctx->clipsVideoSourceHeight > 0 ? ctx->clipsVideoSourceHeight : surfaceHeight;
-    if (sourceWidth <= 0 || sourceHeight <= 0) {
-        ctx->clipsVideoWindow->SetWindowPosition(0, 0, surfaceWidth, surfaceHeight);
-        return;
-    }
-    const double sourceAspect = static_cast<double>(sourceWidth) / static_cast<double>(sourceHeight);
-    const double surfaceAspect = static_cast<double>(surfaceWidth) / static_cast<double>(surfaceHeight);
-    int targetWidth = surfaceWidth;
-    int targetHeight = surfaceHeight;
-    if (surfaceAspect > sourceAspect) {
-        targetHeight = surfaceHeight;
-        targetWidth = (std::max)(1, static_cast<int>(std::lround(static_cast<double>(targetHeight) * sourceAspect)));
-    } else {
-        targetWidth = surfaceWidth;
-        targetHeight = (std::max)(1, static_cast<int>(std::lround(static_cast<double>(targetWidth) / sourceAspect)));
-    }
-    const int offsetX = (surfaceWidth - targetWidth) / 2;
-    const int offsetY = (surfaceHeight - targetHeight) / 2;
-    ctx->clipsVideoWindow->SetWindowPosition(
-        offsetX,
-        offsetY,
-        targetWidth,
-        targetHeight);
+    InvalidateRect(ctx->clipsVideoSurface, nullptr, FALSE);
 }
 
 void CloseClipMedia(AppContext* ctx)
@@ -755,19 +584,9 @@ void CloseClipMedia(AppContext* ctx)
     if (!ctx) {
         return;
     }
-    if (ctx->clipsVideoWindow) {
-        ctx->clipsVideoWindow->put_Visible(OAFALSE);
-        ctx->clipsVideoWindow->put_Owner(reinterpret_cast<OAHWND>(nullptr));
+    if (ctx->clipsPreviewEngine) {
+        ctx->clipsPreviewEngine->Close();
     }
-    if (ctx->clipsMediaControl) {
-        ctx->clipsMediaControl->Stop();
-    }
-    SafeRelease(ctx->clipsBasicAudio);
-    SafeRelease(ctx->clipsBasicVideo);
-    SafeRelease(ctx->clipsVideoWindow);
-    SafeRelease(ctx->clipsMediaSeeking);
-    SafeRelease(ctx->clipsMediaControl);
-    SafeRelease(ctx->clipsGraph);
     ctx->clipsLoaded = false;
     ctx->clipsIsPlaying = false;
     ctx->clipsDurationMs = 0;
@@ -795,7 +614,7 @@ void RefreshClipsPlaybackControls(AppContext* ctx)
     if (!ctx) {
         return;
     }
-    const bool previewBusy = ctx->clipsPreviewBuildInProgress.load();
+    const bool previewBusy = false;
     const bool ffmpegAvailable = ctx->ffmpegDetected;
     if (ctx->clipsFfmpegWarning) {
         if (ctx->clipsExportStatus == AppContext::ClipExportStatus::Idle) {
@@ -959,81 +778,50 @@ bool LoadClipFromSelection(AppContext* ctx, bool reportStatus = true)
         }
         return false;
     }
-
-    const auto ffmpegPath = ResolveFfmpegExecutablePath(ctx);
-    const auto proxyPath = BuildClipPreviewProxyPath(selectedPath);
-    bool shouldBuildProxy = true;
-    std::error_code proxyEc;
-    if (std::filesystem::exists(proxyPath, proxyEc) && !proxyEc) {
-        shouldBuildProxy = false;
+    if (ctx->clipsLoaded && ctx->clipsLoadedPath.lexically_normal() == selectedPath.lexically_normal()) {
+        RefreshClipsPlaybackControls(ctx);
+        return true;
     }
 
-    if (shouldBuildProxy) {
-        if (!ffmpegPath.has_value()) {
+    if (!ctx->clipsPreviewEngine) {
+        ctx->clipsPreviewEngine = std::make_unique<ClipPreviewEngine>(ctx->mainWindow, ctx->clipsVideoSurface);
+        const HRESULT initializeHr = ctx->clipsPreviewEngine->Initialize();
+        if (FAILED(initializeHr)) {
             if (reportStatus) {
-                SetStatus(ctx, L"Could not load clip preview: ffmpeg is required to build the preview proxy.");
+                SetStatus(ctx, L"Could not initialize Media Foundation clip preview (" + FormatHresultHex(initializeHr) + L").");
             }
             RefreshClipsPlaybackControls(ctx);
             return false;
         }
-        const std::uint64_t requestId = ctx->clipsPreviewRequestId.fetch_add(1) + 1;
-        ctx->clipsPreviewBuildInProgress.store(true);
-        CloseClipMedia(ctx);
-        RefreshClipsPlaybackControls(ctx);
-        if (reportStatus) {
-            SetStatus(ctx, L"Preparing clip preview (one-time conversion)...");
-        }
-        std::thread([ctx, requestId, selectedPath, proxyPath, ffmpegPath = *ffmpegPath]() {
-            auto* payload = new ClipPreviewReadyPayload();
-            payload->requestId = requestId;
-            payload->sourcePath = selectedPath;
-            payload->proxyPath = proxyPath;
-            payload->directShowRenderHr = E_FAIL;
-            payload->ffmpegSpawned = BuildClipPreviewProxy(ffmpegPath, selectedPath, proxyPath, payload->ffmpegExitCode);
-            PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_PREVIEW_READY, 0, reinterpret_cast<LPARAM>(payload));
-        }).detach();
-        return false;
     }
 
-    HRESULT renderHr = S_OK;
-    std::filesystem::path playbackPath = proxyPath;
-    bool rendered = TryRenderClipInDirectShow(ctx, playbackPath, renderHr);
-    if (!rendered) {
-        if (reportStatus) {
-            SetStatus(ctx, L"Could not load clip preview: DirectShow render failed on proxy (" + FormatHresultHex(renderHr) + L").");
-        }
-        RefreshClipsPlaybackControls(ctx);
-        return false;
-    }
-
-    if (ctx->clipsVideoSurface) {
-        if (ctx->clipsBasicVideo) {
-            long videoWidth = 0;
-            long videoHeight = 0;
-            if (SUCCEEDED(ctx->clipsBasicVideo->get_VideoWidth(&videoWidth)) && SUCCEEDED(ctx->clipsBasicVideo->get_VideoHeight(&videoHeight))
-                && videoWidth > 0 && videoHeight > 0) {
-                ctx->clipsVideoSourceWidth = static_cast<int>(videoWidth);
-                ctx->clipsVideoSourceHeight = static_cast<int>(videoHeight);
+    if (!ctx->clipsPreviewEngine->IsReady()) {
+        if (!ctx->clipsLoaded || ctx->clipsLoadedPath.lexically_normal() != selectedPath.lexically_normal()) {
+            CloseClipMedia(ctx);
+            ctx->clipsLoadedPath = selectedPath;
+            const HRESULT openHr = ctx->clipsPreviewEngine->Open(selectedPath);
+            if (FAILED(openHr)) {
+                ctx->clipsLoadedPath.clear();
+                if (reportStatus) {
+                    SetStatus(ctx, L"Could not load clip preview with Media Foundation (" + FormatHresultHex(openHr) + L").");
+                }
+                RefreshClipsPlaybackControls(ctx);
+                return false;
+            }
+            if (reportStatus) {
+                SetStatus(ctx, L"Loading clip preview...");
             }
         }
-        ctx->clipsVideoWindow->put_Owner(reinterpret_cast<OAHWND>(ctx->clipsVideoSurface));
-        ctx->clipsVideoWindow->put_WindowStyle(WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN);
-        ctx->clipsVideoWindow->put_MessageDrain(reinterpret_cast<OAHWND>(ctx->clipsVideoSurface));
-        ApplyClipVideoWindowBounds(ctx);
-        ctx->clipsVideoWindow->put_Visible(OATRUE);
-    }
-    if (ctx->clipsMediaControl) {
-        // Prime first frame so the preview surface is visibly populated.
-        if (SUCCEEDED(ctx->clipsMediaControl->Run())) {
-            ctx->clipsMediaControl->Pause();
-        }
+        ctx->clipsLoaded = false;
+        RefreshClipsPlaybackControls(ctx);
+        return false;
     }
 
-    LONGLONG duration100ns = 0;
-    if (FAILED(ctx->clipsMediaSeeking->GetDuration(&duration100ns))) {
-        duration100ns = 0;
-    }
-    ctx->clipsDurationMs = static_cast<int>((std::max)(0LL, duration100ns) / 10000LL);
+    ApplyClipVideoWindowBounds(ctx);
+    const auto nativeSize = ctx->clipsPreviewEngine->NativeVideoSize();
+    ctx->clipsVideoSourceWidth = nativeSize.first;
+    ctx->clipsVideoSourceHeight = nativeSize.second;
+    ctx->clipsDurationMs = ctx->clipsPreviewEngine->DurationMilliseconds();
     if (ctx->clipsDurationMs <= 0) {
         // Some graph combinations fail duration probe until playback advances;
         // keep controls usable and let live position updates refine state.
@@ -1124,7 +912,7 @@ void RefreshClipsSourceList(AppContext* ctx)
             alreadyLoadedSelection = (ctx->clipsLoadedPath.lexically_normal() == selectedPath.lexically_normal());
         }
         if (!alreadyLoadedSelection) {
-            LoadClipFromSelection(ctx, false);
+            LoadClipFromSelection(ctx, true);
         } else {
             UpdateClipsPositionLabel(ctx);
             RefreshClipsPlaybackControls(ctx);
@@ -1141,6 +929,12 @@ void SyncClipTimelineFromPlayback(AppContext* ctx)
         return;
     }
     const int currentMs = QueryClipPositionMs(ctx, 0);
+    if (!ctx->clipsIsPlaying && currentMs == 0 && ctx->clipsTimelinePosition > 0) {
+        // Media Foundation can briefly report zero while a paused seek is
+        // being applied. Do not overwrite the user's seek with that transient
+        // value; the next media event/timer tick will provide the real time.
+        return;
+    }
     ctx->clipsTimelinePosition = (std::clamp)(static_cast<int>((static_cast<long long>(currentMs) * kClipsTimelineMax) / (std::max)(1, ctx->clipsDurationMs)), 0, kClipsTimelineMax);
     InvalidateControlAndParentRegion(ctx->clipsTimeline);
     UpdateClipsPositionLabel(ctx);
@@ -3915,19 +3709,34 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         LoadClipFromSelection(ctx, true);
         break;
     case IDC_CLIPS_PLAY_PAUSE: {
-        if (!ctx->clipsLoaded) {
-            break;
-        }
-        if (!ctx->clipsMediaControl) {
+        if (!ctx->clipsLoaded || !ctx->clipsPreviewEngine) {
             break;
         }
         if (ctx->clipsIsPlaying) {
-            if (SUCCEEDED(ctx->clipsMediaControl->Pause())) {
+            const HRESULT pauseHr = ctx->clipsPreviewEngine->Pause();
+            if (SUCCEEDED(pauseHr)) {
                 ctx->clipsIsPlaying = false;
+                SetStatus(
+                    ctx,
+                    L"Clip pause requested (position-ms="
+                        + std::to_wstring(ctx->clipsPreviewEngine->PositionMilliseconds())
+                        + L").");
+            } else {
+                SetStatus(ctx, L"Clip pause failed (" + FormatHresultHex(pauseHr) + L").");
             }
         } else {
-            if (SUCCEEDED(ctx->clipsMediaControl->Run())) {
+            const HRESULT playHr = ctx->clipsPreviewEngine->Play();
+            if (SUCCEEDED(playHr)) {
                 ctx->clipsIsPlaying = true;
+                SetStatus(
+                    ctx,
+                    std::wstring(L"Clip play requested (playing=")
+                        + (ctx->clipsPreviewEngine->IsPlaying() ? L"yes" : L"no")
+                        + L", position-ms="
+                        + std::to_wstring(ctx->clipsPreviewEngine->PositionMilliseconds())
+                        + L").");
+            } else {
+                SetStatus(ctx, L"Clip play failed (" + FormatHresultHex(playHr) + L").");
             }
         }
         RefreshClipsPlaybackControls(ctx);
@@ -5480,14 +5289,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             }
             RefreshLiveStatus(ctx);
             if (ctx && ctx->clipsLoaded) {
-                if (ctx->clipsMediaControl) {
-                    OAFilterState filterState = State_Stopped;
-                    if (SUCCEEDED(ctx->clipsMediaControl->GetState(0, &filterState))) {
-                        const bool isRunning = (filterState == State_Running);
-                        if (ctx->clipsIsPlaying != isRunning) {
-                            ctx->clipsIsPlaying = isRunning;
-                            RefreshClipsPlaybackControls(ctx);
-                        }
+                if (ctx->clipsPreviewEngine) {
+                    const bool isRunning = ctx->clipsPreviewEngine->IsPlaying();
+                    if (ctx->clipsIsPlaying != isRunning) {
+                        ctx->clipsIsPlaying = isRunning;
+                        RefreshClipsPlaybackControls(ctx);
                     }
                 }
                 SyncClipTimelineFromPlayback(ctx);
@@ -5514,31 +5320,35 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             RefreshClipsSourceList(ctx);
         }
         return 0;
-    case WM_BEAN_CLIPS_PREVIEW_READY: {
-        auto* payload = reinterpret_cast<ClipPreviewReadyPayload*>(lParam);
-        if (ctx && payload) {
-            if (payload->requestId == ctx->clipsPreviewRequestId.load()) {
-                ctx->clipsPreviewBuildInProgress.store(false);
-                if (!payload->ffmpegSpawned || payload->ffmpegExitCode != 0) {
-                    std::wstring message = L"Could not load clip preview: proxy conversion failed.";
-                    if (payload->ffmpegSpawned) {
-                        message += L" ffmpeg exit code " + std::to_wstring(payload->ffmpegExitCode) + L".";
-                    }
-                    SetStatus(ctx, message);
-                } else {
-                    const auto selectedPath = GetSelectedClipSourcePath(ctx);
-                    if (selectedPath.has_value() && selectedPath->lexically_normal() == payload->sourcePath.lexically_normal()) {
-                        LoadClipFromSelection(ctx, true);
-                    } else {
-                        SetStatus(ctx, std::wstring(L"Preview ready for: ") + payload->sourcePath.filename().wstring());
-                    }
+    case WM_BEAN_CLIPS_MEDIA_EVENT:
+        if (ctx && ctx->clipsPreviewEngine) {
+            const DWORD eventCode = static_cast<DWORD>(wParam);
+            if (eventCode == MF_MEDIA_ENGINE_EVENT_CANPLAY
+                || eventCode == MF_MEDIA_ENGINE_EVENT_CANPLAYTHROUGH) {
+                LoadClipFromSelection(ctx, true);
+            } else if (eventCode == MF_MEDIA_ENGINE_EVENT_DURATIONCHANGE && ctx->clipsLoaded) {
+                ctx->clipsDurationMs = ctx->clipsPreviewEngine->DurationMilliseconds();
+                RefreshClipsPlaybackControls(ctx);
+            } else if (eventCode == MF_MEDIA_ENGINE_EVENT_ERROR) {
+                ctx->clipsLoaded = false;
+                SetStatus(ctx, L"Could not load clip preview with Media Foundation.");
+                RefreshClipsPlaybackControls(ctx);
+            } else if (eventCode == MF_MEDIA_ENGINE_EVENT_PLAY
+                || eventCode == MF_MEDIA_ENGINE_EVENT_PLAYING
+                || eventCode == MF_MEDIA_ENGINE_EVENT_PAUSE
+                || eventCode == MF_MEDIA_ENGINE_EVENT_ENDED
+                || eventCode == MF_MEDIA_ENGINE_EVENT_TIMEUPDATE) {
+                ctx->clipsIsPlaying = ctx->clipsPreviewEngine->IsPlaying();
+                if (eventCode == MF_MEDIA_ENGINE_EVENT_PLAYING) {
+                    SetStatus(ctx, L"Clip playback active.");
+                } else if (eventCode == MF_MEDIA_ENGINE_EVENT_ENDED) {
+                    SetStatus(ctx, L"Clip playback ended.");
                 }
+                InvalidateRect(ctx->clipsVideoSurface, nullptr, FALSE);
                 RefreshClipsPlaybackControls(ctx);
             }
         }
-        delete payload;
         return 0;
-    }
     case WM_BEAN_CLIPS_EXPORT_COMPLETE: {
         auto* payload = reinterpret_cast<ClipExportCompletePayload*>(lParam);
         if (ctx && payload) {

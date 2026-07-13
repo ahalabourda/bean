@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/ClipPreviewEngine.h"
 #include "core/RecordingOrchestrator.h"
 #include "core/RunRepository.h"
 #include "core/SettingsStore.h"
@@ -17,13 +18,6 @@
 #include <unordered_map>
 #include <vector>
 
-struct IGraphBuilder;
-struct IMediaControl;
-struct IMediaSeeking;
-struct IVideoWindow;
-struct IBasicAudio;
-struct IBasicVideo;
-
 inline constexpr wchar_t kWindowClassName[] = L"BeanMainWindow";
 inline constexpr wchar_t kWindowTitleBase[] = L"Battle Encounter Archival Nexus - WoW Recorder";
 inline constexpr wchar_t kAboutTitleText[] = L"Battle Encounter Archival Nexus";
@@ -38,9 +32,9 @@ inline constexpr UINT WM_BEAN_YOUTUBE_AUTH_COMPLETE = WM_APP + 102;
 inline constexpr UINT WM_BEAN_YOUTUBE_UPLOAD_PROGRESS = WM_APP + 103;
 inline constexpr UINT WM_BEAN_YOUTUBE_IDENTITY_RESOLVED = WM_APP + 104;
 inline constexpr UINT WM_BEAN_CLIPS_UI_REFRESH = WM_APP + 105;
-inline constexpr UINT WM_BEAN_CLIPS_PREVIEW_READY = WM_APP + 106;
 inline constexpr UINT WM_BEAN_CLIPS_EXPORT_COMPLETE = WM_APP + 107;
 inline constexpr UINT WM_BEAN_UPDATE_AVAILABILITY_READY = WM_APP + 108;
+inline constexpr UINT WM_BEAN_CLIPS_MEDIA_EVENT = WM_APP + 109;
 inline constexpr wchar_t kStatusLogFilePrefix[] = L"bean-status-log-";
 inline constexpr wchar_t kStatusLogFileExtension[] = L".log";
 inline constexpr size_t kStatusLogRetentionCount = 5;
@@ -362,12 +356,7 @@ struct AppContext {
     HWND clipsStartEdit = nullptr;
     HWND clipsEndEdit = nullptr;
     HWND clipsFfmpegWarning = nullptr;
-    IGraphBuilder* clipsGraph = nullptr;
-    IMediaControl* clipsMediaControl = nullptr;
-    IMediaSeeking* clipsMediaSeeking = nullptr;
-    IVideoWindow* clipsVideoWindow = nullptr;
-    IBasicAudio* clipsBasicAudio = nullptr;
-    IBasicVideo* clipsBasicVideo = nullptr;
+    std::unique_ptr<ClipPreviewEngine> clipsPreviewEngine;
     AppIconSet idleIcon;
     ITaskbarList3* taskbarList = nullptr;
     TaskbarOverlayIconSet taskbarOverlayIcons;
@@ -460,8 +449,6 @@ struct AppContext {
     };
     ClipExportStatus clipsExportStatus = ClipExportStatus::Idle;
     std::atomic<bool> clipsExportInProgress{false};
-    std::atomic<bool> clipsPreviewBuildInProgress{false};
-    std::atomic<std::uint64_t> clipsPreviewRequestId{0};
     std::filesystem::path statusLogPath;
     std::filesystem::path clipsLoadedPath;
     std::vector<std::filesystem::path> clipSourceItems;
