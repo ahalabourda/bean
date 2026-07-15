@@ -825,7 +825,7 @@ struct LibObsRecorderEngine::ObsApi {
 
     void* (*obs_source_create)(const char*, const char*, void*, void*) = nullptr;
     void (*obs_source_release)(void*) = nullptr;
-    bool (*obs_source_filter_add)(void*, void*) = nullptr;
+    void (*obs_source_filter_add)(void*, void*) = nullptr;
     void (*obs_source_filter_remove)(void*, void*) = nullptr;
     void* (*obs_source_get_filter_by_name)(void*, const char*) = nullptr;
     void (*obs_source_update)(void*, void*) = nullptr;
@@ -1734,12 +1734,16 @@ bool LibObsRecorderEngine::ApplyMicrophoneNoiseSuppressionFilter(bool enabled, s
         error = "Failed to create OBS noise suppression filter source.";
         return false;
     }
-    const bool filterAdded = api_->obs_source_filter_add(microphoneAudioSource_, filterSource);
+    api_->obs_source_filter_add(microphoneAudioSource_, filterSource);
     api_->obs_source_release(filterSource);
-    if (!filterAdded) {
+    void* attachedFilter = api_->obs_source_get_filter_by_name(
+        microphoneAudioSource_,
+        kMicrophoneNoiseFilterName);
+    if (!attachedFilter) {
         error = "Failed to attach OBS noise suppression filter to microphone source.";
         return false;
     }
+    api_->obs_source_release(attachedFilter);
     return true;
 }
 
