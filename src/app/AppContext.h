@@ -36,7 +36,7 @@ inline constexpr UINT WM_BEAN_CLIPS_EXPORT_COMPLETE = WM_APP + 107;
 inline constexpr UINT WM_BEAN_UPDATE_AVAILABILITY_READY = WM_APP + 108;
 inline constexpr UINT WM_BEAN_CLIPS_MEDIA_EVENT = WM_APP + 109;
 inline constexpr wchar_t kStatusLogFilePrefix[] = L"bean-status-log-";
-inline constexpr wchar_t kStatusLogFileExtension[] = L".log";
+inline constexpr wchar_t kStatusLogFileExtension[] = L".txt";
 inline constexpr size_t kStatusLogRetentionCount = 5;
 inline constexpr wchar_t kYouTubeOAuthCredentialsMissingMessage[] =
     L"YouTube auth server is unavailable. Please try again later.";
