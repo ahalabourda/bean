@@ -4137,6 +4137,9 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
             break;
         }
 
+        EnableWindow(updateButton, FALSE);
+        SetWindowTextW(updateButton, L"Updating...");
+        UpdateWindow(updateButton);
         std::wstring updateStatus;
         const auto result = bean::app::ApplyUpdate(updateStatus);
         SetStatus(ctx, updateStatus);
