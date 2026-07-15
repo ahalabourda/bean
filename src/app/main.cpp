@@ -794,23 +794,26 @@ bool LoadClipFromSelection(AppContext* ctx, bool reportStatus = true)
         }
     }
 
-    if (!ctx->clipsPreviewEngine->IsReady()) {
-        if (!ctx->clipsLoaded || ctx->clipsLoadedPath.lexically_normal() != selectedPath.lexically_normal()) {
-            CloseClipMedia(ctx);
-            ctx->clipsLoadedPath = selectedPath;
-            const HRESULT openHr = ctx->clipsPreviewEngine->Open(selectedPath);
-            if (FAILED(openHr)) {
-                ctx->clipsLoadedPath.clear();
-                if (reportStatus) {
-                    SetStatus(ctx, L"Could not load clip preview with Media Foundation (" + FormatHresultHex(openHr) + L").");
-                }
-                RefreshClipsPlaybackControls(ctx);
-                return false;
-            }
+    const bool selectionChanged = ctx->clipsLoadedPath.empty()
+        || ctx->clipsLoadedPath.lexically_normal() != selectedPath.lexically_normal();
+    if (selectionChanged) {
+        CloseClipMedia(ctx);
+        ctx->clipsLoadedPath = selectedPath;
+        const HRESULT openHr = ctx->clipsPreviewEngine->Open(selectedPath);
+        if (FAILED(openHr)) {
+            ctx->clipsLoadedPath.clear();
             if (reportStatus) {
-                SetStatus(ctx, L"Loading clip preview...");
+                SetStatus(ctx, L"Could not load clip preview with Media Foundation (" + FormatHresultHex(openHr) + L").");
             }
+            RefreshClipsPlaybackControls(ctx);
+            return false;
         }
+        if (reportStatus) {
+            SetStatus(ctx, L"Loading clip preview...");
+        }
+    }
+
+    if (!ctx->clipsPreviewEngine->IsReady()) {
         ctx->clipsLoaded = false;
         RefreshClipsPlaybackControls(ctx);
         return false;
