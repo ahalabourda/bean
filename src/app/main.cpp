@@ -54,7 +54,7 @@ constexpr char kYouTubeAuthServerUrl[] = "https://andrew.gg/bean/youtube-auth/";
 
 std::wstring VersionText()
 {
-    constexpr wchar_t kAppVersion[] = L"0.2.3";
+    constexpr wchar_t kAppVersion[] = L"0.2.4";
     return std::wstring(L"v") + kAppVersion;
 }
 
