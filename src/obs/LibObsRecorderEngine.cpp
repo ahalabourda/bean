@@ -20,6 +20,8 @@ namespace bean::obs {
 namespace {
 
 constexpr auto kGameCaptureWarmupDelay = std::chrono::milliseconds(1500);
+constexpr auto kNoiseFilterAttachCheckDelay = std::chrono::milliseconds(50);
+constexpr int kNoiseFilterAttachCheckAttempts = 3;
 constexpr int kObsOrderMoveTop = 2;
 constexpr int kBlockerImageSizePx = 8;
 constexpr char kMicrophoneNoiseFilterName[] = "BeanMicrophoneNoiseSuppression";
@@ -1074,14 +1076,19 @@ bool LibObsRecorderEngine::StartRecording(const std::string& fileStem, std::stri
             ReleaseObsObjects();
             return false;
         }
-        std::string filterError;
-        if (!ApplyMicrophoneNoiseSuppressionFilter(config_.microphoneNoiseSuppression, filterError)) {
-            error = "Failed to apply microphone noise suppression filter: " + filterError;
-            ReleaseObsObjects();
-            return false;
-        }
         micSourceDebug = "enabled (device='" + microphoneDeviceId + "')";
-        micSourceDebug += config_.microphoneNoiseSuppression ? ", noise-suppression=enabled" : ", noise-suppression=disabled";
+        if (config_.microphoneNoiseSuppression) {
+            std::string filterError;
+            if (ApplyMicrophoneNoiseSuppressionFilter(true, filterError)) {
+                micSourceDebug += ", noise-suppression=enabled";
+            } else {
+                // Noise suppression is optional; preserve the recording with
+                // the microphone source unfiltered if OBS rejects the filter.
+                micSourceDebug += ", noise-suppression=unavailable (" + filterError + ")";
+            }
+        } else {
+            micSourceDebug += ", noise-suppression=disabled";
+        }
     }
 
     std::string blockerDebug = "disabled";
@@ -1545,6 +1552,7 @@ bool LibObsRecorderEngine::InitializeObsCore(const std::filesystem::path& obsRoo
         {"obs-outputs.dll", "obs-outputs"},
         {"obs-ffmpeg.dll", "obs-ffmpeg"},
         {"obs-x264.dll", "obs-x264"},
+        {"obs-filters.dll", "obs-filters"},
         {"image-source.dll", "image-source"},
         {"win-capture.dll", "win-capture"},
         {"win-wasapi.dll", "win-wasapi"}
@@ -1736,15 +1744,24 @@ bool LibObsRecorderEngine::ApplyMicrophoneNoiseSuppressionFilter(bool enabled, s
     }
     api_->obs_source_filter_add(microphoneAudioSource_, filterSource);
     api_->obs_source_release(filterSource);
-    void* attachedFilter = api_->obs_source_get_filter_by_name(
-        microphoneAudioSource_,
-        kMicrophoneNoiseFilterName);
-    if (!attachedFilter) {
-        error = "Failed to attach OBS noise suppression filter to microphone source.";
-        return false;
+    for (int attempt = 0; attempt < kNoiseFilterAttachCheckAttempts; ++attempt) {
+        void* attachedFilter = api_->obs_source_get_filter_by_name(
+            microphoneAudioSource_,
+            kMicrophoneNoiseFilterName);
+        if (attachedFilter) {
+            api_->obs_source_release(attachedFilter);
+            return true;
+        }
+        if (attempt + 1 < kNoiseFilterAttachCheckAttempts) {
+            std::this_thread::sleep_for(kNoiseFilterAttachCheckDelay);
+        }
     }
-    api_->obs_source_release(attachedFilter);
-    return true;
+    error = "Failed to attach OBS noise suppression filter to microphone source.";
+    const auto logSnippet = GetRecentObsLogSnippet();
+    if (!logSnippet.empty()) {
+        error += " OBS: " + logSnippet;
+    }
+    return false;
 }
 
 void LibObsRecorderEngine::ReleaseObsObjects()
