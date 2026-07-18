@@ -10,6 +10,12 @@ option(BEAN_ENABLE_VELOPACK "Enable Velopack updater integration" OFF)
 
 set(BEAN_GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
 
+configure_file(
+    "${CMAKE_SOURCE_DIR}/src/app/bean_version.h.in"
+    "${BEAN_GENERATED_DIR}/bean_version.h"
+    @ONLY
+)
+
 add_library(bean_core
     src/core/RecordingOrchestrator.cpp
     src/core/RunRepository.cpp

@@ -1,4 +1,5 @@
 #include "app/AppStatusLog.h"
+#include "bean_version.h"
 
 #include <algorithm>
 #include <iomanip>
@@ -53,8 +54,7 @@ std::wstring GetWindowTextString(HWND hwnd)
 
 std::wstring VersionText()
 {
-    constexpr wchar_t kAppVersion[] = L"0.1";
-    return std::wstring(L"v") + kAppVersion;
+    return std::wstring(L"v") + BEAN_APP_VERSION_W;
 }
 
 std::wstring AudioCaptureScopeLabel(bean::core::AppSettings::AudioCaptureScope scope)

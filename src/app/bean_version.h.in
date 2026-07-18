@@ -1,0 +1,3 @@
+#pragma once
+
+#define BEAN_APP_VERSION_W L"@PROJECT_VERSION@"

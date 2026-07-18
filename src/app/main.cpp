@@ -8,6 +8,7 @@
 #include "app/BeanUpdater.h"
 #include "integrations/YouTubeUploader.h"
 #include "obs/LibObsRecorderEngine.h"
+#include "bean_version.h"
 
 #include <windows.h>
 #include <commctrl.h>
@@ -54,8 +55,7 @@ constexpr char kYouTubeAuthServerUrl[] = "https://andrew.gg/bean/youtube-auth/";
 
 std::wstring VersionText()
 {
-    constexpr wchar_t kAppVersion[] = L"0.2.4";
-    return std::wstring(L"v") + kAppVersion;
+    return std::wstring(L"v") + BEAN_APP_VERSION_W;
 }
 
 std::wstring MainWindowTitleText()

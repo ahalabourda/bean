@@ -56,7 +56,7 @@ if "%DRY_RUN%"=="1" (
   echo [bean] Dry run mode enabled.
   echo [bean] Would run:
   echo [bean]   sync_app_version.bat %VERSION%
-  echo [bean]   git add src/app/main.cpp CMakeLists.txt
+  echo [bean]   git add CMakeLists.txt src/app/bean_version.h.in
   echo [bean]   git commit -m "release: %VERSION%"
   echo [bean]   git push origin HEAD
   echo [bean]   git tag -a v%VERSION% -m "Release v%VERSION%"
@@ -68,7 +68,7 @@ echo [bean] Syncing app version to %VERSION%...
 call sync_app_version.bat "%VERSION%"
 if errorlevel 1 goto :fail
 
-git add "src/app/main.cpp" "CMakeLists.txt"
+git add "CMakeLists.txt" "src/app/bean_version.h.in"
 git diff --cached --quiet
 if not errorlevel 1 (
   echo [bean] Version files already match %VERSION%.
