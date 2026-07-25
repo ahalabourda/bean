@@ -26,8 +26,7 @@ inline constexpr char kDefaultVideoContainer[] = "mp4";
 inline constexpr char kDefaultMicrophoneDeviceId[] = "default";
 inline constexpr int kDefaultWindowWidth = 960;
 inline constexpr int kDefaultWindowHeight = 560;
-inline constexpr int kDefaultRecordingWidth = 1920;
-inline constexpr int kDefaultRecordingHeight = 1080;
+inline constexpr int kDefaultRecordingResolutionHeight = 0; // Full game resolution.
 inline constexpr int kDefaultFps = 60;
 inline constexpr int kDefaultPostRunStopDelaySeconds = 30;
 inline constexpr int kDefaultClipDurationSeconds = 30;
@@ -63,8 +62,10 @@ struct AppSettings {
     std::string microphoneDeviceId = kDefaultMicrophoneDeviceId;
     int windowWidth = kDefaultWindowWidth;
     int windowHeight = kDefaultWindowHeight;
-    int width = kDefaultRecordingWidth;
-    int height = kDefaultRecordingHeight;
+    int recordingResolutionHeight = kDefaultRecordingResolutionHeight;
+    // Runtime-only WoW client dimensions. These are never persisted.
+    int detectedWowClientWidth = 0;
+    int detectedWowClientHeight = 0;
     int fps = kDefaultFps;
     int postRunStopDelaySeconds = kDefaultPostRunStopDelaySeconds;
     int clipDurationSeconds = kDefaultClipDurationSeconds;

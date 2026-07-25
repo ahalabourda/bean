@@ -1598,11 +1598,12 @@ bool LibObsRecorderEngine::InitializeObsCore(const std::filesystem::path& obsRoo
     const auto d3d11Path = obsBinDir_ / "libobs-d3d11.dll";
     const auto openglPath = obsBinDir_ / "libobs-opengl.dll";
 
-    uint32_t width = static_cast<uint32_t>(config_.width > 0 ? config_.width : 1920);
-    uint32_t height = static_cast<uint32_t>(config_.height > 0 ? config_.height : 1080);
-    DetectWowClientSize(width, height);
-    videoWidth_ = width;
-    videoHeight_ = height;
+    const uint32_t baseWidth = static_cast<uint32_t>(config_.baseWidth > 0 ? config_.baseWidth : 1920);
+    const uint32_t baseHeight = static_cast<uint32_t>(config_.baseHeight > 0 ? config_.baseHeight : 1080);
+    const uint32_t width = static_cast<uint32_t>(config_.width > 0 ? config_.width : baseWidth);
+    const uint32_t height = static_cast<uint32_t>(config_.height > 0 ? config_.height : baseHeight);
+    videoWidth_ = baseWidth;
+    videoHeight_ = baseHeight;
     const uint32_t fps = static_cast<uint32_t>(config_.fps > 0 ? config_.fps : 60);
 
     struct VideoAttempt {
@@ -1634,8 +1635,8 @@ bool LibObsRecorderEngine::InitializeObsCore(const std::filesystem::path& obsRoo
         vi.graphics_module = attempt.moduleName;
         vi.fps_num = fps;
         vi.fps_den = 1;
-        vi.base_width = width;
-        vi.base_height = height;
+        vi.base_width = baseWidth;
+        vi.base_height = baseHeight;
         vi.output_width = width;
         vi.output_height = height;
         vi.output_format = attempt.format;

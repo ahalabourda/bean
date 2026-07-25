@@ -122,8 +122,9 @@ void TestSettingsStoreLoadSaveAndConversion()
     saveSettings.videoContainer = "mp4";
     saveSettings.captureMicrophone = true;
     saveSettings.microphoneDeviceId = "line-in";
-    saveSettings.width = 2560;
-    saveSettings.height = 1440;
+    saveSettings.recordingResolutionHeight = 720;
+    saveSettings.detectedWowClientWidth = 2560;
+    saveSettings.detectedWowClientHeight = 1440;
     saveSettings.fps = 120;
     saveSettings.postRunStopDelaySeconds = 45;
     saveSettings.chatBlockerEnabled = true;
@@ -148,17 +149,20 @@ void TestSettingsStoreLoadSaveAndConversion()
     Expect(loaded.videoContainer == "mp4", "Load should restore videoContainer.");
     Expect(loaded.captureMicrophone, "Load should restore captureMicrophone.");
     Expect(loaded.microphoneDeviceId == "line-in", "Load should restore microphoneDeviceId.");
-    Expect(loaded.width == 2560 && loaded.height == 1440, "Load should restore resolution.");
+    Expect(loaded.recordingResolutionHeight == 720, "Load should restore recording resolution.");
     Expect(loaded.fps == 120, "Load should restore fps.");
     Expect(loaded.postRunStopDelaySeconds == 45, "Load should restore postRunStopDelaySeconds.");
     Expect(loaded.chatBlockerAnchor == bean::core::AppSettings::ChatBlockerAnchor::TopRight, "Load should restore chatBlockerAnchor.");
     Expect(loaded.youtubeClientId == "youtube-client-id", "Load should restore YouTube client ID.");
     Expect(loaded.youtubeRefreshToken == "refresh-token", "Load should restore YouTube refresh token.");
 
+    loaded.detectedWowClientWidth = 2560;
+    loaded.detectedWowClientHeight = 1440;
     const auto recordingConfig = bean::core::ToRecordingConfig(loaded);
     Expect(recordingConfig.videoEncoder == "nvenc", "ToRecordingConfig should map videoEncoder.");
     Expect(recordingConfig.containerFormat == "mp4", "ToRecordingConfig should map container format.");
     Expect(recordingConfig.captureMicrophone, "ToRecordingConfig should map captureMicrophone.");
+    Expect(recordingConfig.width == 1280 && recordingConfig.height == 720, "ToRecordingConfig should scale recording resolution.");
     Expect(recordingConfig.chatBlockerAnchor == bean::obs::RecordingConfig::ChatBlockerAnchor::TopRight, "ToRecordingConfig should map chatBlockerAnchor.");
 }
 

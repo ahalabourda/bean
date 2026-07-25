@@ -242,12 +242,15 @@ void LogSessionDiagnostics(AppContext* ctx)
         SetStatus(ctx, std::wstring(L"Status session log: ") + ctx->statusLogPath.wstring());
     }
 
+    const std::wstring recordingResolutionLabel = ctx->settings.recordingResolutionHeight == 0
+        ? L"full"
+        : std::to_wstring(ctx->settings.recordingResolutionHeight) + L"p";
     std::wostringstream capture;
     capture
         << L"Capture settings: encoder=" << ToWide(ctx->settings.videoEncoder)
         << L", quality=" << ToWide(ctx->settings.encoderPreset)
         << L", container=" << ToWide(ctx->settings.videoContainer)
-        << L", resolution=" << ctx->settings.width << L"x" << ctx->settings.height
+        << L", recording-resolution=" << recordingResolutionLabel
         << L"@" << ctx->settings.fps << L"fps"
         << L", post-run tail=" << ctx->settings.postRunStopDelaySeconds << L"s"
         << L", audio-scope=" << AudioCaptureScopeLabel(ctx->settings.audioCaptureScope)

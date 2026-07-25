@@ -76,12 +76,11 @@ void LayoutConfigurationPanel(AppContext* ctx, int panelWidth, int)
     MoveControl(ctx->recorderPanel, IDC_MICROPHONE_COMBO, xEdit, y, panelWidth - xEdit - 30, 160);
     y += rowSpacing;
 
-    MoveControl(ctx->recorderPanel, IDC_WIDTH_LABEL, xLabel, y, 60, rowHeight);
-    MoveControl(ctx->recorderPanel, IDC_WIDTH_EDIT, xLabel + 60, y, 80, rowHeight);
-    MoveControl(ctx->recorderPanel, IDC_HEIGHT_LABEL, xLabel + 160, y, 60, rowHeight);
-    MoveControl(ctx->recorderPanel, IDC_HEIGHT_EDIT, xLabel + 220, y, 80, rowHeight);
-    MoveControl(ctx->recorderPanel, IDC_FPS_LABEL, xLabel + 320, y, 40, rowHeight);
-    MoveControl(ctx->recorderPanel, IDC_FPS_EDIT, xLabel + 360, y, 60, rowHeight);
+    MoveControl(ctx->recorderPanel, IDC_RECORDING_RESOLUTION_LABEL, xLabel, y, 120, rowHeight);
+    MoveControl(ctx->recorderPanel, IDC_RECORDING_RESOLUTION_COMBO, xEdit, y, 290, 180);
+    y += rowSpacing;
+    MoveControl(ctx->recorderPanel, IDC_FPS_LABEL, xLabel, y, 40, rowHeight);
+    MoveControl(ctx->recorderPanel, IDC_FPS_EDIT, xLabel + 46, y, 60, rowHeight);
     y += rowSpacing;
 
     MoveControl(ctx->recorderPanel, IDC_POST_RUN_DELAY_LABEL, xLabel, y, 104, rowHeight);

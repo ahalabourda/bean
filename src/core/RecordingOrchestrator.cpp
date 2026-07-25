@@ -403,7 +403,8 @@ bool RecordingOrchestrator::StartMonitoring(std::string& error)
         + "', encoder=" + settings_.videoEncoder
         + ", quality=" + settings_.encoderPreset
         + ", container=" + settings_.videoContainer
-        + ", video=" + std::to_string(settings_.width) + "x" + std::to_string(settings_.height) + "@" + std::to_string(settings_.fps)
+        + ", recording-resolution-height=" + std::to_string(settings_.recordingResolutionHeight)
+        + "@" + std::to_string(settings_.fps)
         + ", audio-scope=" + AudioCaptureScopeLabel(settings_.audioCaptureScope)
         + ", microphone=" + BoolLabel(settings_.captureMicrophone)
         + ", microphone-noise-suppression=" + BoolLabel(settings_.microphoneNoiseSuppression));
@@ -738,6 +739,10 @@ bool RecordingOrchestrator::StartRecordingInternal(RecordingStartReason reason, 
     // Reinitialize before every recording so setting changes made while monitoring
     // is already armed (for example audio capture scope) are applied immediately.
     auto recordingConfig = ToRecordingConfig(settings_);
+    PushStatus(
+        "Recording video output: " + std::to_string(recordingConfig.width)
+        + "x" + std::to_string(recordingConfig.height)
+        + " (selected height=" + std::to_string(settings_.recordingResolutionHeight) + ")");
     if (!engine_->Initialize(recordingConfig, error)) {
         PushStatus("Initialize failed: " + error);
         return false;

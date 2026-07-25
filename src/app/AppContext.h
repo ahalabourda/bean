@@ -138,10 +138,10 @@ enum ControlId {
     IDC_MICROPHONE_CHECK,
     IDC_MICROPHONE_NOISE_SUPPRESSION_CHECK,
     IDC_MICROPHONE_COMBO,
-    IDC_WIDTH_LABEL,
-    IDC_WIDTH_EDIT,
-    IDC_HEIGHT_LABEL,
-    IDC_HEIGHT_EDIT,
+    IDC_GAME_RESOLUTION_LABEL,
+    IDC_GAME_RESOLUTION_TEXT,
+    IDC_RECORDING_RESOLUTION_LABEL,
+    IDC_RECORDING_RESOLUTION_COMBO,
     IDC_FPS_LABEL,
     IDC_FPS_EDIT,
     IDC_POST_RUN_DELAY_LABEL,
@@ -301,8 +301,8 @@ struct AppContext {
     HWND microphoneCheck = nullptr;
     HWND microphoneNoiseSuppressionCheck = nullptr;
     HWND microphoneCombo = nullptr;
-    HWND widthEdit = nullptr;
-    HWND heightEdit = nullptr;
+    HWND gameResolutionText = nullptr;
+    HWND recordingResolutionCombo = nullptr;
     HWND fpsEdit = nullptr;
     HWND postRunDelayEdit = nullptr;
     HWND postRunDelayHelpIcon = nullptr;
@@ -412,6 +412,8 @@ struct AppContext {
     bool outputFolderWillBeCreatedOnRecordStart = false;
     bool ffmpegCheckRequested = false;
     std::optional<std::chrono::steady_clock::time_point> wowWindowLastCheckedAt;
+    int detectedWowClientWidth = 0;
+    int detectedWowClientHeight = 0;
     std::optional<std::chrono::steady_clock::time_point> obsInstallLastCheckedAt;
     std::optional<std::chrono::steady_clock::time_point> ffmpegLastCheckedAt;
     std::optional<std::filesystem::path> ffmpegExecutablePath;

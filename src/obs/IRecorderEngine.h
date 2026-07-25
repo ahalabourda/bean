@@ -27,6 +27,8 @@ struct RecordingConfig {
     bool captureMicrophone = false;
     bool microphoneNoiseSuppression = false;
     std::string microphoneDeviceId = "default";
+    int baseWidth = 1920;
+    int baseHeight = 1080;
     int width = 1920;
     int height = 1080;
     int fps = 60;

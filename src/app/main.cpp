@@ -1716,9 +1716,94 @@ HWND FindWowWindowForUi()
     return found;
 }
 
-bool DetectWowWindowForUi()
+std::optional<std::pair<int, int>> GetWowClientSizeForUi()
 {
-    return FindWowWindowForUi() != nullptr;
+    const HWND wowWindow = FindWowWindowForUi();
+    if (!wowWindow) {
+        return std::nullopt;
+    }
+
+    RECT client{};
+    if (!GetClientRect(wowWindow, &client)) {
+        return std::nullopt;
+    }
+    const int width = client.right - client.left;
+    const int height = client.bottom - client.top;
+    if (width <= 0 || height <= 0) {
+        return std::nullopt;
+    }
+    return std::make_pair(width, height);
+}
+
+std::pair<int, int> ScaleResolutionToHeight(int sourceWidth, int sourceHeight, int targetHeight)
+{
+    if (sourceWidth <= 0 || sourceHeight <= 0 || targetHeight <= 0 || targetHeight >= sourceHeight) {
+        return {sourceWidth, sourceHeight};
+    }
+    int width = static_cast<int>(
+        (static_cast<long long>(sourceWidth) * targetHeight + sourceHeight / 2) / sourceHeight);
+    width = (std::max)(2, width & ~1);
+    return {width, (std::max)(2, targetHeight & ~1)};
+}
+
+void RefreshRecordingResolutionOptions(AppContext* ctx)
+{
+    if (!ctx || !ctx->recordingResolutionCombo) {
+        return;
+    }
+
+    const int previousHeight = ctx->settings.recordingResolutionHeight;
+    SendMessageW(ctx->recordingResolutionCombo, CB_RESETCONTENT, 0, 0);
+    if (ctx->detectedWowClientWidth <= 0 || ctx->detectedWowClientHeight <= 0) {
+        SendMessageW(
+            ctx->recordingResolutionCombo,
+            CB_ADDSTRING,
+            0,
+            reinterpret_cast<LPARAM>(L"Waiting for WoW..."));
+        SendMessageW(ctx->recordingResolutionCombo, CB_SETCURSEL, 0, 0);
+        EnableWindow(ctx->recordingResolutionCombo, FALSE);
+        return;
+    }
+
+    EnableWindow(ctx->recordingResolutionCombo, !ctx->isRecording);
+    const auto addOption = [&](const std::wstring& label, int targetHeight) {
+        const LRESULT index = SendMessageW(
+            ctx->recordingResolutionCombo,
+            CB_ADDSTRING,
+            0,
+            reinterpret_cast<LPARAM>(label.c_str()));
+        SendMessageW(ctx->recordingResolutionCombo, CB_SETITEMDATA, static_cast<WPARAM>(index), targetHeight);
+    };
+
+    addOption(
+        L"Full resolution (" + std::to_wstring(ctx->detectedWowClientWidth)
+            + L" x " + std::to_wstring(ctx->detectedWowClientHeight) + L")",
+        0);
+    constexpr int commonHeights[] = {2160, 1440, 1080, 720};
+    for (const int height : commonHeights) {
+        if (height >= ctx->detectedWowClientHeight) {
+            continue;
+        }
+        const auto [width, scaledHeight] = ScaleResolutionToHeight(
+            ctx->detectedWowClientWidth,
+            ctx->detectedWowClientHeight,
+            height);
+        addOption(
+            L"Downscale to " + std::to_wstring(width)
+                + L" x " + std::to_wstring(scaledHeight),
+            height);
+    }
+
+    LRESULT selectedIndex = 0;
+    const LRESULT itemCount = SendMessageW(ctx->recordingResolutionCombo, CB_GETCOUNT, 0, 0);
+    for (LRESULT i = 0; i < itemCount; ++i) {
+        if (SendMessageW(ctx->recordingResolutionCombo, CB_GETITEMDATA, static_cast<WPARAM>(i), 0)
+            == previousHeight) {
+            selectedIndex = i;
+            break;
+        }
+    }
+    SendMessageW(ctx->recordingResolutionCombo, CB_SETCURSEL, static_cast<WPARAM>(selectedIndex), 0);
 }
 
 std::wstring NormalizeProcessOrWindowToken(std::wstring value)
@@ -3042,10 +3127,19 @@ void RefreshLiveStatus(AppContext* ctx)
     ctx->isRecording = recording;
     const bool recordingStateChanged = (wasRecording != ctx->isRecording);
     const bool wowWasDetected = ctx->wowWindowDetected;
+    const int wowWasWidth = ctx->detectedWowClientWidth;
+    const int wowWasHeight = ctx->detectedWowClientHeight;
     bool wowStatusRefreshed = false;
-    if (!ctx->wowWindowLastCheckedAt.has_value()
-        || (now - *ctx->wowWindowLastCheckedAt) >= kWowWindowPollInterval) {
-        ctx->wowWindowDetected = DetectWowWindowForUi();
+    if (!ctx->isRecording
+        && (!ctx->wowWindowLastCheckedAt.has_value()
+            || (now - *ctx->wowWindowLastCheckedAt) >= kWowWindowPollInterval)) {
+        const auto wowSize = GetWowClientSizeForUi();
+        ctx->wowWindowDetected = wowSize.has_value();
+        ctx->detectedWowClientWidth = wowSize.has_value() ? wowSize->first : 0;
+        ctx->detectedWowClientHeight = wowSize.has_value() ? wowSize->second : 0;
+        ctx->settings.detectedWowClientWidth = ctx->detectedWowClientWidth;
+        ctx->settings.detectedWowClientHeight = ctx->detectedWowClientHeight;
+        ctx->orchestrator->ApplySettings(ctx->settings);
         ctx->wowWindowLastCheckedAt = now;
         wowStatusRefreshed = true;
     }
@@ -3098,14 +3192,30 @@ void RefreshLiveStatus(AppContext* ctx)
         InvalidateRect(ctx->wowWindowIcon, nullptr, TRUE);
     }
     if (ctx->wowWindowText) {
-        const wchar_t* wowStatusText = ctx->wowWindowDetected ? L"WoW window detected" : L"WoW window not detected";
-        UpdateTransparentStaticText(ctx->wowWindowText, wowStatusText);
+        const std::wstring wowStatusText = ctx->wowWindowDetected
+            ? L"WoW window detected - " + std::to_wstring(ctx->detectedWowClientWidth)
+                + L" \u00D7 " + std::to_wstring(ctx->detectedWowClientHeight)
+            : L"WoW window not detected";
+        UpdateTransparentStaticText(ctx->wowWindowText, wowStatusText.c_str());
+    }
+    if (ctx->gameResolutionText) {
+        const std::wstring gameResolutionText = ctx->wowWindowDetected
+            ? std::to_wstring(ctx->detectedWowClientWidth) + L" \u00D7 "
+                + std::to_wstring(ctx->detectedWowClientHeight)
+            : L"Unavailable - WoW not detected";
+        UpdateTransparentStaticText(ctx->gameResolutionText, gameResolutionText.c_str());
     }
     if (ctx->chatPreviewStatus) {
         const wchar_t* previewText = ctx->wowWindowDetected
             ? L"Preview targets WoW's client area (exclusive fullscreen may limit capture)."
             : L"WoW not detected; preview uses a placeholder.";
         UpdateTransparentStaticText(ctx->chatPreviewStatus, previewText);
+    }
+    if (recordingStateChanged
+        || wowStatusRefreshed
+        || wowWasWidth != ctx->detectedWowClientWidth
+        || wowWasHeight != ctx->detectedWowClientHeight) {
+        RefreshRecordingResolutionOptions(ctx);
     }
     if (ctx->obsInstallIcon && (obsStatusRefreshed || obsWasDetected != ctx->obsInstallDetected)) {
         InvalidateRect(ctx->obsInstallIcon, nullptr, TRUE);
@@ -3279,8 +3389,19 @@ void PullSettingsFromUi(AppContext* ctx)
 
     ctx->settings.outputDirectory = ToUtf8(GetWindowTextString(ctx->outputEdit));
     ctx->settings.wowLogDirectory = ToUtf8(GetWindowTextString(ctx->wowLogEdit));
-    ctx->settings.width = ReadIntControl(ctx->widthEdit, 1920);
-    ctx->settings.height = ReadIntControl(ctx->heightEdit, 1080);
+    if (ctx->recordingResolutionCombo) {
+        const LRESULT selectedIndex = SendMessageW(ctx->recordingResolutionCombo, CB_GETCURSEL, 0, 0);
+        if (selectedIndex >= 0) {
+            const LRESULT selectedHeight = SendMessageW(
+                ctx->recordingResolutionCombo,
+                CB_GETITEMDATA,
+                static_cast<WPARAM>(selectedIndex),
+                0);
+            if (selectedHeight != CB_ERR) {
+                ctx->settings.recordingResolutionHeight = static_cast<int>(selectedHeight);
+            }
+        }
+    }
     ctx->settings.fps = ReadIntControl(ctx->fpsEdit, 60);
     ctx->settings.postRunStopDelaySeconds = (std::max)(0, ReadIntControl(ctx->postRunDelayEdit, 30));
     ctx->settings.clipDurationSeconds = (std::clamp)(ReadIntControl(ctx->clipDurationEdit, 30), 1, 3600);
@@ -3784,8 +3905,10 @@ void PushSettingsToUi(AppContext* ctx)
 
     SetWindowTextW(ctx->outputEdit, ToWide(ctx->settings.outputDirectory.string()).c_str());
     SetWindowTextW(ctx->wowLogEdit, ToWide(ctx->settings.wowLogDirectory.string()).c_str());
-    SetWindowTextW(ctx->widthEdit, ToWide(std::to_string(ctx->settings.width)).c_str());
-    SetWindowTextW(ctx->heightEdit, ToWide(std::to_string(ctx->settings.height)).c_str());
+    ctx->detectedWowClientWidth = ctx->settings.detectedWowClientWidth;
+    ctx->detectedWowClientHeight = ctx->settings.detectedWowClientHeight;
+    ctx->wowWindowDetected = ctx->detectedWowClientWidth > 0 && ctx->detectedWowClientHeight > 0;
+    RefreshRecordingResolutionOptions(ctx);
     SetWindowTextW(ctx->fpsEdit, ToWide(std::to_string(ctx->settings.fps)).c_str());
     SetWindowTextW(ctx->postRunDelayEdit, ToWide(std::to_string(ctx->settings.postRunStopDelaySeconds)).c_str());
     SetWindowTextW(ctx->clipDurationEdit, ToWide(std::to_string(ctx->settings.clipDurationSeconds)).c_str());
@@ -4603,7 +4726,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         SendMessageW(ctx->containerCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"mp4"));
         y += rowSpacing;
 
-        CreateWindowW(L"STATIC", L"Audio capture:", WS_VISIBLE | WS_CHILD, xLabel, y, labelWidth, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_AUDIO_SCOPE_LABEL), nullptr, nullptr);
+        CreateWindowW(L"STATIC", L"Audio Capture:", WS_VISIBLE | WS_CHILD, xLabel, y, labelWidth, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_AUDIO_SCOPE_LABEL), nullptr, nullptr);
         ctx->audioScopeCheck = CreateWindowW(
             L"BUTTON",
             L"WoW only",
@@ -4681,15 +4804,22 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             nullptr,
             nullptr);
         y += rowSpacing;
-
-        CreateWindowW(L"STATIC", L"Width:", WS_VISIBLE | WS_CHILD, xLabel, y, 60, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_WIDTH_LABEL), nullptr, nullptr);
-        ctx->widthEdit = CreateWindowW(L"EDIT", L"1920", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER | WS_TABSTOP, xLabel + 60, y, 80, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_WIDTH_EDIT), nullptr, nullptr);
-        EnableCtrlASelectAll(ctx->widthEdit);
-        CreateWindowW(L"STATIC", L"Height:", WS_VISIBLE | WS_CHILD, xLabel + 160, y, 60, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_HEIGHT_LABEL), nullptr, nullptr);
-        ctx->heightEdit = CreateWindowW(L"EDIT", L"1080", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER | WS_TABSTOP, xLabel + 220, y, 80, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_HEIGHT_EDIT), nullptr, nullptr);
-        EnableCtrlASelectAll(ctx->heightEdit);
-        CreateWindowW(L"STATIC", L"FPS:", WS_VISIBLE | WS_CHILD, xLabel + 320, y, 40, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_FPS_LABEL), nullptr, nullptr);
-        ctx->fpsEdit = CreateWindowW(L"EDIT", L"60", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER | WS_TABSTOP, xLabel + 360, y, 60, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_FPS_EDIT), nullptr, nullptr);
+        CreateWindowW(L"STATIC", L"Output Scale:", WS_VISIBLE | WS_CHILD, xLabel, y, 120, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_RECORDING_RESOLUTION_LABEL), nullptr, nullptr);
+        ctx->recordingResolutionCombo = CreateWindowW(
+            L"COMBOBOX",
+            L"",
+            WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | WS_TABSTOP,
+            xLabel + 130,
+            y,
+            290,
+            180,
+            ctx->recorderPanel,
+            reinterpret_cast<HMENU>(IDC_RECORDING_RESOLUTION_COMBO),
+            nullptr,
+            nullptr);
+        y += rowSpacing;
+        CreateWindowW(L"STATIC", L"FPS:", WS_VISIBLE | WS_CHILD, xLabel, y, 40, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_FPS_LABEL), nullptr, nullptr);
+        ctx->fpsEdit = CreateWindowW(L"EDIT", L"60", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER | WS_TABSTOP, xLabel + 46, y, 60, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_FPS_EDIT), nullptr, nullptr);
         EnableCtrlASelectAll(ctx->fpsEdit);
         y += rowSpacing;
 
@@ -5301,9 +5431,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             return 0;
         }
         if (HIWORD(wParam) == EN_CHANGE
-            && (LOWORD(wParam) == IDC_WIDTH_EDIT
-                || LOWORD(wParam) == IDC_HEIGHT_EDIT
-                || LOWORD(wParam) == IDC_FPS_EDIT
+            && (LOWORD(wParam) == IDC_FPS_EDIT
                 || LOWORD(wParam) == IDC_POST_RUN_DELAY_EDIT
                 || LOWORD(wParam) == IDC_CLIP_DURATION_EDIT)) {
             if (ctx) {
@@ -5322,7 +5450,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             && (LOWORD(wParam) == IDC_ENCODER_COMBO
                 || LOWORD(wParam) == IDC_PRESET_COMBO
                 || LOWORD(wParam) == IDC_CONTAINER_COMBO
-                || LOWORD(wParam) == IDC_MICROPHONE_COMBO)) {
+                || LOWORD(wParam) == IDC_MICROPHONE_COMBO
+                || LOWORD(wParam) == IDC_RECORDING_RESOLUTION_COMBO)) {
             if (ctx) {
                 AutoSaveConfigurationSettings(ctx);
             }

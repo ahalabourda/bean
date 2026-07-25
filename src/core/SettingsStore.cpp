@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <wincrypt.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <fstream>
@@ -513,8 +514,13 @@ bool SettingsStore::Load(AppSettings& settings, std::string& error) const
 
     settings.windowWidth = ClampInt(ReadInt(content, "windowWidth", settings.windowWidth), 930, 16384, kDefaultWindowWidth);
     settings.windowHeight = ClampInt(ReadInt(content, "windowHeight", settings.windowHeight), 560, 16384, kDefaultWindowHeight);
-    settings.width = ReadInt(content, "width", settings.width);
-    settings.height = ReadInt(content, "height", settings.height);
+    settings.recordingResolutionHeight = ReadInt(
+        content,
+        "recordingResolutionHeight",
+        settings.recordingResolutionHeight);
+    if (settings.recordingResolutionHeight < 0 || settings.recordingResolutionHeight > 16384) {
+        settings.recordingResolutionHeight = kDefaultRecordingResolutionHeight;
+    }
     settings.fps = ReadInt(content, "fps", settings.fps);
     settings.postRunStopDelaySeconds = ClampInt(ReadInt(content, "postRunStopDelaySeconds", settings.postRunStopDelaySeconds), 0, 600, 30);
     settings.clipDurationSeconds = ClampInt(ReadInt(content, "clipDurationSeconds", settings.clipDurationSeconds), 1, 3600, 30);
@@ -599,8 +605,7 @@ bool SettingsStore::Save(const AppSettings& settings, std::string& error) const
         << "  \"microphoneDeviceId\": \"" << EscapeJson(settings.microphoneDeviceId) << "\",\n"
         << "  \"windowWidth\": " << settings.windowWidth << ",\n"
         << "  \"windowHeight\": " << settings.windowHeight << ",\n"
-        << "  \"width\": " << settings.width << ",\n"
-        << "  \"height\": " << settings.height << ",\n"
+        << "  \"recordingResolutionHeight\": " << settings.recordingResolutionHeight << ",\n"
         << "  \"fps\": " << settings.fps << ",\n"
         << "  \"postRunStopDelaySeconds\": " << settings.postRunStopDelaySeconds << ",\n"
         << "  \"clipDurationSeconds\": " << settings.clipDurationSeconds << ",\n"
@@ -654,8 +659,21 @@ obs::RecordingConfig ToRecordingConfig(const AppSettings& settings)
     config.captureMicrophone = settings.captureMicrophone;
     config.microphoneNoiseSuppression = settings.microphoneNoiseSuppression;
     config.microphoneDeviceId = settings.microphoneDeviceId;
-    config.width = settings.width;
-    config.height = settings.height;
+    const int sourceWidth = settings.detectedWowClientWidth > 0 ? settings.detectedWowClientWidth : 1920;
+    const int sourceHeight = settings.detectedWowClientHeight > 0 ? settings.detectedWowClientHeight : 1080;
+    config.baseWidth = sourceWidth;
+    config.baseHeight = sourceHeight;
+    int outputWidth = sourceWidth;
+    int outputHeight = sourceHeight;
+    if (settings.recordingResolutionHeight > 0 && settings.recordingResolutionHeight < sourceHeight) {
+        outputHeight = settings.recordingResolutionHeight;
+        outputWidth = static_cast<int>(
+            (static_cast<long long>(sourceWidth) * outputHeight + sourceHeight / 2) / sourceHeight);
+        outputWidth = (std::max)(2, outputWidth & ~1);
+        outputHeight = (std::max)(2, outputHeight & ~1);
+    }
+    config.width = outputWidth;
+    config.height = outputHeight;
     config.fps = settings.fps;
     config.chatBlockerEnabled = settings.chatBlockerEnabled;
     config.chatBlockerUseCustomImage = settings.chatBlockerUseCustomImage;
