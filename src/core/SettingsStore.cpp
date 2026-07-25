@@ -511,6 +511,8 @@ bool SettingsStore::Load(AppSettings& settings, std::string& error) const
         settings.microphoneDeviceId = microphoneDeviceId;
     }
 
+    settings.windowWidth = ClampInt(ReadInt(content, "windowWidth", settings.windowWidth), 930, 16384, kDefaultWindowWidth);
+    settings.windowHeight = ClampInt(ReadInt(content, "windowHeight", settings.windowHeight), 560, 16384, kDefaultWindowHeight);
     settings.width = ReadInt(content, "width", settings.width);
     settings.height = ReadInt(content, "height", settings.height);
     settings.fps = ReadInt(content, "fps", settings.fps);
@@ -595,6 +597,8 @@ bool SettingsStore::Save(const AppSettings& settings, std::string& error) const
         << "  \"captureMicrophone\": " << (settings.captureMicrophone ? "true" : "false") << ",\n"
         << "  \"microphoneNoiseSuppression\": " << (settings.microphoneNoiseSuppression ? "true" : "false") << ",\n"
         << "  \"microphoneDeviceId\": \"" << EscapeJson(settings.microphoneDeviceId) << "\",\n"
+        << "  \"windowWidth\": " << settings.windowWidth << ",\n"
+        << "  \"windowHeight\": " << settings.windowHeight << ",\n"
         << "  \"width\": " << settings.width << ",\n"
         << "  \"height\": " << settings.height << ",\n"
         << "  \"fps\": " << settings.fps << ",\n"

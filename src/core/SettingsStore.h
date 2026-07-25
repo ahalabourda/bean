@@ -20,6 +20,25 @@ struct Keybind {
     }
 };
 
+inline constexpr char kDefaultVideoEncoder[] = "gpu_auto";
+inline constexpr char kDefaultEncoderPreset[] = "high";
+inline constexpr char kDefaultVideoContainer[] = "mp4";
+inline constexpr char kDefaultMicrophoneDeviceId[] = "default";
+inline constexpr int kDefaultWindowWidth = 960;
+inline constexpr int kDefaultWindowHeight = 560;
+inline constexpr int kDefaultRecordingWidth = 1920;
+inline constexpr int kDefaultRecordingHeight = 1080;
+inline constexpr int kDefaultFps = 60;
+inline constexpr int kDefaultPostRunStopDelaySeconds = 30;
+inline constexpr int kDefaultClipDurationSeconds = 30;
+inline constexpr Keybind kDefaultClipKeybind{6, 0x77};        // Ctrl+Shift+F8
+inline constexpr Keybind kDefaultManualStartKeybind{6, 0x78}; // Ctrl+Shift+F9
+inline constexpr Keybind kDefaultManualStopKeybind{6, 0x79};  // Ctrl+Shift+F10
+inline constexpr bool kDefaultChatBlockerEnabled = true;
+inline constexpr bool kDefaultChatBlockerUseCustomImage = false;
+inline constexpr int kDefaultChatBlockerWidth = 500;
+inline constexpr int kDefaultChatBlockerHeight = 300;
+
 struct AppSettings {
     enum class ChatBlockerAnchor {
         BottomLeft,
@@ -35,29 +54,31 @@ struct AppSettings {
 
     std::filesystem::path outputDirectory;
     std::filesystem::path wowLogDirectory;
-    std::string videoEncoder = "gpu_auto";
-    std::string encoderPreset = "high";
-    std::string videoContainer = "mp4";
+    std::string videoEncoder = kDefaultVideoEncoder;
+    std::string encoderPreset = kDefaultEncoderPreset;
+    std::string videoContainer = kDefaultVideoContainer;
     AudioCaptureScope audioCaptureScope = AudioCaptureScope::WowOnly;
     bool captureMicrophone = false;
     bool microphoneNoiseSuppression = false;
-    std::string microphoneDeviceId = "default";
-    int width = 1920;
-    int height = 1080;
-    int fps = 60;
-    int postRunStopDelaySeconds = 30;
-    int clipDurationSeconds = 30;
-    Keybind clipKeybind{6, 0x77};        // Ctrl+Shift+F8
-    Keybind manualStartKeybind{6, 0x78}; // Ctrl+Shift+F9
-    Keybind manualStopKeybind{6, 0x79};  // Ctrl+Shift+F10
-    bool chatBlockerEnabled = true;
-    bool chatBlockerUseCustomImage = false;
+    std::string microphoneDeviceId = kDefaultMicrophoneDeviceId;
+    int windowWidth = kDefaultWindowWidth;
+    int windowHeight = kDefaultWindowHeight;
+    int width = kDefaultRecordingWidth;
+    int height = kDefaultRecordingHeight;
+    int fps = kDefaultFps;
+    int postRunStopDelaySeconds = kDefaultPostRunStopDelaySeconds;
+    int clipDurationSeconds = kDefaultClipDurationSeconds;
+    Keybind clipKeybind = kDefaultClipKeybind;
+    Keybind manualStartKeybind = kDefaultManualStartKeybind;
+    Keybind manualStopKeybind = kDefaultManualStopKeybind;
+    bool chatBlockerEnabled = kDefaultChatBlockerEnabled;
+    bool chatBlockerUseCustomImage = kDefaultChatBlockerUseCustomImage;
     std::filesystem::path chatBlockerCustomImagePath;
     int chatBlockerCustomImageSourceWidth = 0;
     int chatBlockerCustomImageSourceHeight = 0;
     std::unordered_map<std::string, std::pair<int, int>> chatBlockerCustomImageSizesByFileName;
-    int chatBlockerWidth = 500;
-    int chatBlockerHeight = 300;
+    int chatBlockerWidth = kDefaultChatBlockerWidth;
+    int chatBlockerHeight = kDefaultChatBlockerHeight;
     ChatBlockerAnchor chatBlockerAnchor = ChatBlockerAnchor::BottomLeft;
     std::string youtubeClientId;
     std::string youtubeRefreshToken;

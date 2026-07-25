@@ -3428,9 +3428,10 @@ void PushKeybindsToUi(AppContext* ctx)
     for (int index = 0; index < 3; ++index) {
         const auto* keybind = KeybindForIndex(ctx, index);
         if (keybind && ctx->keybindValueLabels[static_cast<size_t>(index)]) {
-            SetWindowTextW(
+            const auto text = FormatKeybind(*keybind);
+            UpdateTransparentStaticText(
                 ctx->keybindValueLabels[static_cast<size_t>(index)],
-                FormatKeybind(*keybind).c_str());
+                text.c_str());
         }
     }
 }
@@ -4724,6 +4725,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             reinterpret_cast<HMENU>(IDC_KEYBINDS_INFO),
             nullptr,
             nullptr);
+        CreateWindowW(
+            L"STATIC",
+            L"Settings auto-save as you make changes.",
+            WS_VISIBLE | WS_CHILD | SS_CENTER,
+            20, 220, panelWidth - 40, rowHeight,
+            ctx->keybindsPanel,
+            reinterpret_cast<HMENU>(IDC_KEYBINDS_AUTOSAVE_HINT),
+            nullptr,
+            nullptr);
         const wchar_t* keybindLabels[] = {L"Create clip", L"Start recording", L"Stop recording"};
         const int labelIds[] = {IDC_KEYBINDS_CREATE_CLIP_LABEL, IDC_KEYBINDS_MANUAL_START_LABEL, IDC_KEYBINDS_MANUAL_STOP_LABEL};
         const int valueIds[] = {IDC_KEYBINDS_CREATE_CLIP_VALUE, IDC_KEYBINDS_MANUAL_START_VALUE, IDC_KEYBINDS_MANUAL_STOP_VALUE};
@@ -4733,23 +4743,23 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         for (int index = 0; index < 3; ++index) {
             const int rowY = 64 + index * 44;
             CreateWindowW(L"STATIC", keybindLabels[index], WS_VISIBLE | WS_CHILD,
-                20, rowY, 180, rowHeight, ctx->keybindsPanel,
+                20, rowY, 160, rowHeight, ctx->keybindsPanel,
                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(labelIds[index])), nullptr, nullptr);
             ctx->keybindValueLabels[static_cast<size_t>(index)] = CreateWindowW(
                 L"STATIC", L"Unbound", WS_VISIBLE | WS_CHILD | SS_CENTER | SS_CENTERIMAGE,
-                220, rowY, 220, rowHeight, ctx->keybindsPanel,
+                190, rowY, 180, rowHeight, ctx->keybindsPanel,
                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(valueIds[index])), nullptr, nullptr);
             ctx->keybindRebindButtons[static_cast<size_t>(index)] = CreateWindowW(
                 L"BUTTON", L"Rebind", WS_VISIBLE | WS_CHILD | WS_TABSTOP,
-                460, rowY, 100, rowHeight + 2, ctx->keybindsPanel,
+                390, rowY, 100, rowHeight + 2, ctx->keybindsPanel,
                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(rebindIds[index])), nullptr, nullptr);
             ctx->keybindUnbindButtons[static_cast<size_t>(index)] = CreateWindowW(
                 L"BUTTON", L"Unbind", WS_VISIBLE | WS_CHILD | WS_TABSTOP,
-                570, rowY, 100, rowHeight + 2, ctx->keybindsPanel,
+                500, rowY, 100, rowHeight + 2, ctx->keybindsPanel,
                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(unbindIds[index])), nullptr, nullptr);
             CreateWindowW(
                 L"BUTTON", L"Reset", WS_VISIBLE | WS_CHILD | WS_TABSTOP,
-                680, rowY, 80, rowHeight + 2, ctx->keybindsPanel,
+                610, rowY, 100, rowHeight + 2, ctx->keybindsPanel,
                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(resetIds[index])), nullptr, nullptr);
         }
         y += rowSpacing;
@@ -5623,6 +5633,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         if (ctx) {
             ctx->clipsResizeInProgress = false;
             ApplyClipVideoWindowBounds(ctx);
+            if (!IsZoomed(hwnd) && !IsIconic(hwnd)) {
+                RECT windowRect{};
+                if (GetWindowRect(hwnd, &windowRect)) {
+                    ctx->settings.windowWidth = windowRect.right - windowRect.left;
+                    ctx->settings.windowHeight = windowRect.bottom - windowRect.top;
+                    std::string saveError;
+                    ctx->settingsStore.Save(ctx->settings, saveError);
+                }
+            }
         }
         return 0;
     case WM_SIZE:
@@ -5934,8 +5953,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int cmdShow)
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
-        960,
-        560,
+        settings.windowWidth,
+        settings.windowHeight,
         nullptr,
         nullptr,
         instance,

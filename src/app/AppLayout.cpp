@@ -360,7 +360,7 @@ void LayoutClipsPanel(AppContext* ctx, int panelWidth, int panelHeight)
     MoveControl(ctx->clipsPanel, IDC_CLIPS_FFMPEG_WARNING, left + 240, actionsTop, right - left - 240, rowHeight + 4);
 }
 
-void LayoutKeybindsPanel(AppContext* ctx, int panelWidth)
+void LayoutKeybindsPanel(AppContext* ctx, int panelWidth, int panelHeight)
 {
     if (!ctx || !ctx->keybindsPanel) {
         return;
@@ -368,13 +368,14 @@ void LayoutKeybindsPanel(AppContext* ctx, int panelWidth)
     const int rowHeight = 24;
     const int left = 20;
     MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_INFO, left, 20, panelWidth - 40, rowHeight);
+    MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_AUTOSAVE_HINT, left, panelHeight - 44, panelWidth - 40, rowHeight);
     for (int index = 0; index < 3; ++index) {
         const int y = 64 + index * 44;
-        MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_CREATE_CLIP_LABEL + index, left, y, 180, rowHeight);
-        MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_CREATE_CLIP_VALUE + index, left + 200, y, 220, rowHeight);
-        MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_CREATE_CLIP_REBIND + index, left + 440, y, 100, rowHeight + 2);
-        MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_CREATE_CLIP_UNBIND + index, left + 550, y, 100, rowHeight + 2);
-        MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_CREATE_CLIP_RESET + index, left + 660, y, 100, rowHeight + 2);
+        MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_CREATE_CLIP_LABEL + index, left, y, 160, rowHeight);
+        MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_CREATE_CLIP_VALUE + index, left + 170, y, 180, rowHeight);
+        MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_CREATE_CLIP_REBIND + index, left + 370, y, 100, rowHeight + 2);
+        MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_CREATE_CLIP_UNBIND + index, left + 480, y, 100, rowHeight + 2);
+        MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_CREATE_CLIP_RESET + index, left + 590, y, 100, rowHeight + 2);
     }
 }
 
@@ -416,7 +417,7 @@ void LayoutMainUi(AppContext* ctx, int clientWidth, int clientHeight)
     LayoutChatPrivacyPanel(ctx, panelWidth, panelHeight);
     LayoutRecordingsPanel(ctx, panelWidth, panelHeight);
     LayoutClipsPanel(ctx, panelWidth, panelHeight);
-    LayoutKeybindsPanel(ctx, panelWidth);
+    LayoutKeybindsPanel(ctx, panelWidth, panelHeight);
     LayoutAboutPanel(ctx, panelWidth, panelHeight);
 
     InvalidateRect(ctx->mainWindow, nullptr, TRUE);
