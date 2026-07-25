@@ -5227,6 +5227,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         if (autoSaveHint && gTheme.mutedHintFont) {
             SendMessageW(autoSaveHint, WM_SETFONT, reinterpret_cast<WPARAM>(gTheme.mutedHintFont), TRUE);
         }
+        HWND keybindAutoSaveHint = GetDlgItem(ctx->keybindsPanel, IDC_KEYBINDS_AUTOSAVE_HINT);
+        if (keybindAutoSaveHint && gTheme.mutedHintFont) {
+            SendMessageW(keybindAutoSaveHint, WM_SETFONT, reinterpret_cast<WPARAM>(gTheme.mutedHintFont), TRUE);
+        }
         if (ctx->outputStatus && gTheme.statusIndicatorFont) {
             SendMessageW(ctx->outputStatus, WM_SETFONT, reinterpret_cast<WPARAM>(gTheme.statusIndicatorFont), TRUE);
         }
@@ -5581,7 +5585,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         SetTextColor(dc, kColorTextPrimary);
         if (control != ctx->outputStatus && control != ctx->wowLogStatus) {
             const int id = GetDlgCtrlID(control);
-            if (id == IDC_RECORDINGS_LABEL || id == IDC_RECORDINGS_UPLOAD_STATUS || id == IDC_ABOUT_BUILD_TEXT || id == IDC_YOUTUBE_UNLINK_CONFIRM_LABEL || id == IDC_CHAT_PREVIEW_STATUS || id == IDC_CONFIGURATION_AUTOSAVE_HINT) {
+            if (id == IDC_RECORDINGS_LABEL || id == IDC_RECORDINGS_UPLOAD_STATUS || id == IDC_ABOUT_BUILD_TEXT || id == IDC_YOUTUBE_UNLINK_CONFIRM_LABEL || id == IDC_CHAT_PREVIEW_STATUS || id == IDC_CONFIGURATION_AUTOSAVE_HINT || id == IDC_KEYBINDS_AUTOSAVE_HINT) {
                 SetTextColor(dc, kColorTextMuted);
             }
         }
