@@ -4,11 +4,15 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <windows.h>
 
+// .mkv / .mp4 files in a folder, newest write-time first. Shared by the
+// Recordings list and the Clips source combo.
+std::vector<std::filesystem::path> EnumerateRecordingMediaFiles(const std::filesystem::path& folder);
+
 std::wstring FormatElapsed(std::chrono::seconds elapsed);
-std::string DungeonNameForChallengeMap(int challengeMapId);
 std::wstring FormatBytes(uintmax_t bytes);
 std::wstring FormatLocalDateTime(const std::chrono::system_clock::time_point& timePoint);
 std::wstring FormatLocalDate(const std::chrono::system_clock::time_point& timePoint);

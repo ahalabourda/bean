@@ -1,5 +1,8 @@
 #include "integrations/YouTubeUploader.h"
 
+#include "util/Json.h"
+#include "util/Strings.h"
+
 #include <windows.h>
 #include <shellapi.h>
 #include <winhttp.h>
@@ -8,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cstdint>
 #include <fstream>
@@ -28,6 +32,8 @@ constexpr const char* kUploadInitEndpoint = "https://www.googleapis.com/upload/y
 constexpr const char* kChannelIdentityEndpoint = "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true";
 constexpr DWORD kDefaultHttpTimeoutMs = 30000;
 
+std::atomic<bool> g_cancelRequested{false};
+
 struct HttpResponse {
     DWORD statusCode = 0;
     std::string body;
@@ -35,49 +41,12 @@ struct HttpResponse {
     std::string error;
 };
 
-std::wstring ToWide(const std::string& input)
-{
-    if (input.empty()) {
-        return {};
-    }
-    const int size = MultiByteToWideChar(CP_UTF8, 0, input.c_str(), -1, nullptr, 0);
-    if (size <= 0) {
-        return {};
-    }
-    std::wstring output(static_cast<size_t>(size), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, input.c_str(), -1, output.data(), size);
-    if (!output.empty() && output.back() == L'\0') {
-        output.pop_back();
-    }
-    return output;
-}
-
-std::string ToUtf8(const std::wstring& input)
-{
-    if (input.empty()) {
-        return {};
-    }
-    const int size = WideCharToMultiByte(CP_UTF8, 0, input.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (size <= 0) {
-        return {};
-    }
-    std::string output(static_cast<size_t>(size), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, input.c_str(), -1, output.data(), size, nullptr, nullptr);
-    if (!output.empty() && output.back() == '\0') {
-        output.pop_back();
-    }
-    return output;
-}
-
-std::string Trim(const std::string& value)
-{
-    const auto begin = value.find_first_not_of(" \t\r\n");
-    if (begin == std::string::npos) {
-        return {};
-    }
-    const auto end = value.find_last_not_of(" \t\r\n");
-    return value.substr(begin, end - begin + 1);
-}
+using bean::util::EscapeJson;
+using bean::util::ReadJsonString;
+using bean::util::ToUtf8;
+using bean::util::ToWide;
+using bean::util::Trim;
+using bean::util::UnescapeJson;
 
 std::string NormalizeBaseUrl(std::string value)
 {
@@ -93,110 +62,6 @@ std::string ToLower(std::string value)
         return static_cast<char>(std::tolower(c));
     });
     return value;
-}
-
-std::string EscapeJson(std::string value)
-{
-    std::string escaped;
-    escaped.reserve(value.size() + 8);
-    for (char ch : value) {
-        switch (ch) {
-        case '\\':
-            escaped += "\\\\";
-            break;
-        case '"':
-            escaped += "\\\"";
-            break;
-        case '\r':
-            escaped += "\\r";
-            break;
-        case '\n':
-            escaped += "\\n";
-            break;
-        case '\t':
-            escaped += "\\t";
-            break;
-        default:
-            escaped.push_back(ch);
-            break;
-        }
-    }
-    return escaped;
-}
-
-std::string UnescapeJson(const std::string& value)
-{
-    std::string out;
-    out.reserve(value.size());
-    bool escape = false;
-    for (char ch : value) {
-        if (escape) {
-            switch (ch) {
-            case 'n':
-                out.push_back('\n');
-                break;
-            case 'r':
-                out.push_back('\r');
-                break;
-            case 't':
-                out.push_back('\t');
-                break;
-            case '\\':
-            case '"':
-            case '/':
-                out.push_back(ch);
-                break;
-            default:
-                out.push_back(ch);
-                break;
-            }
-            escape = false;
-            continue;
-        }
-        if (ch == '\\') {
-            escape = true;
-            continue;
-        }
-        out.push_back(ch);
-    }
-    if (escape) {
-        out.push_back('\\');
-    }
-    return out;
-}
-
-std::string ReadJsonString(const std::string& content, const std::string& key)
-{
-    const std::string marker = "\"" + key + "\"";
-    const auto keyPos = content.find(marker);
-    if (keyPos == std::string::npos) {
-        return {};
-    }
-    const auto colonPos = content.find(':', keyPos + marker.size());
-    if (colonPos == std::string::npos) {
-        return {};
-    }
-    const auto quotePos = content.find('"', colonPos + 1);
-    if (quotePos == std::string::npos) {
-        return {};
-    }
-
-    bool escape = false;
-    for (size_t i = quotePos + 1; i < content.size(); ++i) {
-        const char ch = content[i];
-        if (escape) {
-            escape = false;
-            continue;
-        }
-        if (ch == '\\') {
-            escape = true;
-            continue;
-        }
-        if (ch == '"') {
-            return UnescapeJson(content.substr(quotePos + 1, i - quotePos - 1));
-        }
-    }
-    return {};
 }
 
 std::string UrlEncode(const std::string& input)
@@ -363,46 +228,93 @@ void ParseHeaders(const std::string& headerBlob, std::map<std::string, std::stri
     }
 }
 
-HttpResponse SendRequest(const std::wstring& method, const std::string& urlUtf8, const std::vector<std::wstring>& headers, const std::string& body)
+bool IsTransientHttpStatus(DWORD statusCode)
+{
+    return statusCode == 429 || statusCode == 500 || statusCode == 502 || statusCode == 503 || statusCode == 504;
+}
+
+// RAII wrapper for WinHTTP session + connection + request handles.
+class WinHttpRequest {
+public:
+    WinHttpRequest() = default;
+    WinHttpRequest(const WinHttpRequest&) = delete;
+    WinHttpRequest& operator=(const WinHttpRequest&) = delete;
+
+    ~WinHttpRequest()
+    {
+        if (request_) {
+            WinHttpCloseHandle(request_);
+            request_ = nullptr;
+        }
+        if (connection_) {
+            WinHttpCloseHandle(connection_);
+            connection_ = nullptr;
+        }
+        if (session_) {
+            WinHttpCloseHandle(session_);
+            session_ = nullptr;
+        }
+    }
+
+    bool Open(const std::wstring& method, const std::string& urlUtf8, DWORD timeoutsMs, std::string& error)
+    {
+        const std::wstring url = ToWide(urlUtf8);
+        if (url.empty()) {
+            error = "Invalid request URL.";
+            return false;
+        }
+
+        URL_COMPONENTSW parts{};
+        std::wstring host;
+        std::wstring pathAndQuery;
+        bool isHttps = true;
+        INTERNET_PORT port = INTERNET_DEFAULT_HTTPS_PORT;
+        if (!CrackUrl(url, parts, host, pathAndQuery, isHttps, port, error)) {
+            return false;
+        }
+
+        session_ = WinHttpOpen(L"Bean/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+        if (!session_) {
+            error = "WinHTTP initialization failed.";
+            return false;
+        }
+        WinHttpSetTimeouts(session_, timeoutsMs, timeoutsMs, timeoutsMs, timeoutsMs);
+
+        connection_ = WinHttpConnect(session_, host.c_str(), port, 0);
+        if (!connection_) {
+            error = "Failed to connect to remote host.";
+            return false;
+        }
+
+        const DWORD requestFlags = isHttps ? WINHTTP_FLAG_SECURE : 0;
+        request_ = WinHttpOpenRequest(
+            connection_,
+            method.c_str(),
+            pathAndQuery.c_str(),
+            nullptr,
+            WINHTTP_NO_REFERER,
+            WINHTTP_DEFAULT_ACCEPT_TYPES,
+            requestFlags);
+        if (!request_) {
+            error = "Failed to create HTTP request.";
+            return false;
+        }
+        return true;
+    }
+
+    HINTERNET Handle() const { return request_; }
+
+private:
+    HINTERNET session_ = nullptr;
+    HINTERNET connection_ = nullptr;
+    HINTERNET request_ = nullptr;
+};
+
+HttpResponse SendRequestOnce(const std::wstring& method, const std::string& urlUtf8, const std::vector<std::wstring>& headers, const std::string& body)
 {
     HttpResponse response;
-    const std::wstring url = ToWide(urlUtf8);
-    if (url.empty()) {
-        response.error = "Invalid request URL.";
-        return response;
-    }
-
-    URL_COMPONENTSW parts{};
-    std::wstring host;
-    std::wstring pathAndQuery;
-    bool isHttps = true;
-    INTERNET_PORT port = INTERNET_DEFAULT_HTTPS_PORT;
-    std::string crackError;
-    if (!CrackUrl(url, parts, host, pathAndQuery, isHttps, port, crackError)) {
-        response.error = crackError;
-        return response;
-    }
-
-    HINTERNET session = WinHttpOpen(L"Bean/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!session) {
-        response.error = "WinHTTP initialization failed.";
-        return response;
-    }
-    WinHttpSetTimeouts(session, kDefaultHttpTimeoutMs, kDefaultHttpTimeoutMs, kDefaultHttpTimeoutMs, kDefaultHttpTimeoutMs);
-
-    HINTERNET connection = WinHttpConnect(session, host.c_str(), port, 0);
-    if (!connection) {
-        response.error = "Failed to connect to remote host.";
-        WinHttpCloseHandle(session);
-        return response;
-    }
-
-    const DWORD requestFlags = isHttps ? WINHTTP_FLAG_SECURE : 0;
-    HINTERNET request = WinHttpOpenRequest(connection, method.c_str(), pathAndQuery.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, requestFlags);
-    if (!request) {
-        response.error = "Failed to create HTTP request.";
-        WinHttpCloseHandle(connection);
-        WinHttpCloseHandle(session);
+    WinHttpRequest http;
+    if (!http.Open(method, urlUtf8, kDefaultHttpTimeoutMs, response.error)) {
         return response;
     }
 
@@ -413,7 +325,7 @@ HttpResponse SendRequest(const std::wstring& method, const std::string& urlUtf8,
     }
 
     if (!WinHttpSendRequest(
-            request,
+            http.Handle(),
             headersBlob.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headersBlob.c_str(),
             headersBlob.empty() ? 0 : static_cast<DWORD>(headersBlob.size()),
             body.empty() ? WINHTTP_NO_REQUEST_DATA : const_cast<char*>(body.data()),
@@ -421,30 +333,24 @@ HttpResponse SendRequest(const std::wstring& method, const std::string& urlUtf8,
             static_cast<DWORD>(body.size()),
             0)) {
         response.error = "Failed to send HTTP request.";
-        WinHttpCloseHandle(request);
-        WinHttpCloseHandle(connection);
-        WinHttpCloseHandle(session);
         return response;
     }
 
-    if (!WinHttpReceiveResponse(request, nullptr)) {
+    if (!WinHttpReceiveResponse(http.Handle(), nullptr)) {
         response.error = "Failed to receive HTTP response.";
-        WinHttpCloseHandle(request);
-        WinHttpCloseHandle(connection);
-        WinHttpCloseHandle(session);
         return response;
     }
 
     DWORD statusCode = 0;
     DWORD statusSize = sizeof(statusCode);
-    WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusSize, WINHTTP_NO_HEADER_INDEX);
+    WinHttpQueryHeaders(http.Handle(), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusSize, WINHTTP_NO_HEADER_INDEX);
     response.statusCode = statusCode;
 
     DWORD rawHeaderSize = 0;
-    WinHttpQueryHeaders(request, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX, WINHTTP_NO_OUTPUT_BUFFER, &rawHeaderSize, WINHTTP_NO_HEADER_INDEX);
+    WinHttpQueryHeaders(http.Handle(), WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX, WINHTTP_NO_OUTPUT_BUFFER, &rawHeaderSize, WINHTTP_NO_HEADER_INDEX);
     if (GetLastError() == ERROR_INSUFFICIENT_BUFFER && rawHeaderSize > sizeof(wchar_t)) {
         std::wstring headerWide(static_cast<size_t>(rawHeaderSize / sizeof(wchar_t)), L'\0');
-        if (WinHttpQueryHeaders(request, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX, headerWide.data(), &rawHeaderSize, WINHTTP_NO_HEADER_INDEX)) {
+        if (WinHttpQueryHeaders(http.Handle(), WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX, headerWide.data(), &rawHeaderSize, WINHTTP_NO_HEADER_INDEX)) {
             ParseHeaders(ToUtf8(headerWide), response.headersLower);
         }
     }
@@ -452,7 +358,7 @@ HttpResponse SendRequest(const std::wstring& method, const std::string& urlUtf8,
     std::string responseBody;
     while (true) {
         DWORD available = 0;
-        if (!WinHttpQueryDataAvailable(request, &available)) {
+        if (!WinHttpQueryDataAvailable(http.Handle(), &available)) {
             response.error = "Failed while reading HTTP response.";
             break;
         }
@@ -461,7 +367,7 @@ HttpResponse SendRequest(const std::wstring& method, const std::string& urlUtf8,
         }
         std::string chunk(static_cast<size_t>(available), '\0');
         DWORD read = 0;
-        if (!WinHttpReadData(request, chunk.data(), available, &read)) {
+        if (!WinHttpReadData(http.Handle(), chunk.data(), available, &read)) {
             response.error = "Failed while receiving HTTP response body.";
             break;
         }
@@ -469,10 +375,33 @@ HttpResponse SendRequest(const std::wstring& method, const std::string& urlUtf8,
         responseBody += chunk;
     }
     response.body = std::move(responseBody);
+    return response;
+}
 
-    WinHttpCloseHandle(request);
-    WinHttpCloseHandle(connection);
-    WinHttpCloseHandle(session);
+HttpResponse SendRequest(const std::wstring& method, const std::string& urlUtf8, const std::vector<std::wstring>& headers, const std::string& body)
+{
+    HttpResponse response;
+    constexpr int kMaxAttempts = 3;
+    for (int attempt = 1; attempt <= kMaxAttempts; ++attempt) {
+        if (g_cancelRequested.load(std::memory_order_relaxed)) {
+            response.error = "YouTube request was cancelled.";
+            return response;
+        }
+
+        response = SendRequestOnce(method, urlUtf8, headers, body);
+        if (!response.error.empty()) {
+            return response;
+        }
+        if (!IsTransientHttpStatus(response.statusCode) || attempt == kMaxAttempts) {
+            return response;
+        }
+
+        if (g_cancelRequested.load(std::memory_order_relaxed)) {
+            response.error = "YouTube request was cancelled.";
+            return response;
+        }
+        Sleep(static_cast<DWORD>(250 * attempt));
+    }
     return response;
 }
 
@@ -499,50 +428,15 @@ HttpResponse UploadFileToResumableSession(
         return response;
     }
 
-    const std::wstring url = ToWide(sessionUrlUtf8);
-    if (url.empty()) {
-        response.error = "Invalid resumable upload URL.";
-        return response;
-    }
-
-    URL_COMPONENTSW parts{};
-    std::wstring host;
-    std::wstring pathAndQuery;
-    bool isHttps = true;
-    INTERNET_PORT port = INTERNET_DEFAULT_HTTPS_PORT;
-    std::string crackError;
-    if (!CrackUrl(url, parts, host, pathAndQuery, isHttps, port, crackError)) {
-        response.error = crackError;
-        return response;
-    }
-
-    HINTERNET session = WinHttpOpen(L"Bean/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!session) {
-        response.error = "WinHTTP initialization failed.";
-        return response;
-    }
-    WinHttpSetTimeouts(session, 60000, 60000, 60000, 60000);
-
-    HINTERNET connection = WinHttpConnect(session, host.c_str(), port, 0);
-    if (!connection) {
-        response.error = "Failed to connect to upload host.";
-        WinHttpCloseHandle(session);
-        return response;
-    }
-
-    const DWORD requestFlags = isHttps ? WINHTTP_FLAG_SECURE : 0;
-    HINTERNET request = WinHttpOpenRequest(connection, L"PUT", pathAndQuery.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, requestFlags);
-    if (!request) {
-        response.error = "Failed to start upload request.";
-        WinHttpCloseHandle(connection);
-        WinHttpCloseHandle(session);
+    WinHttpRequest http;
+    if (!http.Open(L"PUT", sessionUrlUtf8, 60000, response.error)) {
         return response;
     }
 
     const std::wstring headers = L"Content-Type: application/octet-stream\r\n";
     const DWORD totalLength = static_cast<DWORD>(fileSize);
     if (!WinHttpSendRequest(
-            request,
+            http.Handle(),
             headers.c_str(),
             static_cast<DWORD>(headers.size()),
             WINHTTP_NO_REQUEST_DATA,
@@ -550,9 +444,6 @@ HttpResponse UploadFileToResumableSession(
             totalLength,
             0)) {
         response.error = "Failed to begin upload request.";
-        WinHttpCloseHandle(request);
-        WinHttpCloseHandle(connection);
-        WinHttpCloseHandle(session);
         return response;
     }
 
@@ -564,17 +455,18 @@ HttpResponse UploadFileToResumableSession(
 
     std::array<char, 1024 * 256> buffer{};
     while (stream.good()) {
+        if (g_cancelRequested.load(std::memory_order_relaxed)) {
+            response.error = "YouTube upload was cancelled.";
+            return response;
+        }
         stream.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
         const std::streamsize got = stream.gcount();
         if (got <= 0) {
             break;
         }
         DWORD written = 0;
-        if (!WinHttpWriteData(request, buffer.data(), static_cast<DWORD>(got), &written) || written != static_cast<DWORD>(got)) {
+        if (!WinHttpWriteData(http.Handle(), buffer.data(), static_cast<DWORD>(got), &written) || written != static_cast<DWORD>(got)) {
             response.error = "Failed while streaming video bytes to YouTube.";
-            WinHttpCloseHandle(request);
-            WinHttpCloseHandle(connection);
-            WinHttpCloseHandle(session);
             return response;
         }
         bytesSent += static_cast<uint64_t>(written);
@@ -583,23 +475,20 @@ HttpResponse UploadFileToResumableSession(
         }
     }
 
-    if (!WinHttpReceiveResponse(request, nullptr)) {
+    if (!WinHttpReceiveResponse(http.Handle(), nullptr)) {
         response.error = "Upload request completed without a valid response.";
-        WinHttpCloseHandle(request);
-        WinHttpCloseHandle(connection);
-        WinHttpCloseHandle(session);
         return response;
     }
 
     DWORD statusCode = 0;
     DWORD statusSize = sizeof(statusCode);
-    WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusSize, WINHTTP_NO_HEADER_INDEX);
+    WinHttpQueryHeaders(http.Handle(), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusSize, WINHTTP_NO_HEADER_INDEX);
     response.statusCode = statusCode;
 
     std::string body;
     while (true) {
         DWORD available = 0;
-        if (!WinHttpQueryDataAvailable(request, &available)) {
+        if (!WinHttpQueryDataAvailable(http.Handle(), &available)) {
             response.error = "Failed while reading upload response.";
             break;
         }
@@ -608,7 +497,7 @@ HttpResponse UploadFileToResumableSession(
         }
         std::string chunk(static_cast<size_t>(available), '\0');
         DWORD read = 0;
-        if (!WinHttpReadData(request, chunk.data(), available, &read)) {
+        if (!WinHttpReadData(http.Handle(), chunk.data(), available, &read)) {
             response.error = "Failed while receiving upload response.";
             break;
         }
@@ -616,10 +505,6 @@ HttpResponse UploadFileToResumableSession(
         body += chunk;
     }
     response.body = std::move(body);
-
-    WinHttpCloseHandle(request);
-    WinHttpCloseHandle(connection);
-    WinHttpCloseHandle(session);
     return response;
 }
 
@@ -694,9 +579,25 @@ std::string PrivacyToString(YouTubePrivacy privacy)
 
 } // namespace
 
+void YouTubeUploader::RequestCancel()
+{
+    g_cancelRequested.store(true, std::memory_order_relaxed);
+}
+
+void YouTubeUploader::ClearCancel()
+{
+    g_cancelRequested.store(false, std::memory_order_relaxed);
+}
+
+bool YouTubeUploader::IsCancelRequested()
+{
+    return g_cancelRequested.load(std::memory_order_relaxed);
+}
+
 YouTubeAuthResult YouTubeUploader::AuthorizeDesktop(HWND owner, const std::string& authServerUrl)
 {
     YouTubeAuthResult result;
+    ClearCancel();
     const std::string normalizedAuthServerUrl = NormalizeBaseUrl(authServerUrl);
     if (normalizedAuthServerUrl.empty()) {
         result.error = "YouTube auth server URL is not configured.";
@@ -748,6 +649,10 @@ YouTubeAuthResult YouTubeUploader::AuthorizeDesktop(HWND owner, const std::strin
 
     constexpr int kPollAttempts = 300;
     for (int attempt = 0; attempt < kPollAttempts; ++attempt) {
+        if (IsCancelRequested()) {
+            result.error = "YouTube authorization was cancelled.";
+            return result;
+        }
         const auto pollResponse = SendRequest(
             L"GET",
             normalizedAuthServerUrl + "/poll?session_id=" + UrlEncode(sessionId) + "&poll_token=" + UrlEncode(pollToken),
@@ -766,7 +671,14 @@ YouTubeAuthResult YouTubeUploader::AuthorizeDesktop(HWND owner, const std::strin
 
         const std::string status = ReadJsonString(pollResponse.body, "status");
         if (status == "pending") {
-            Sleep(1000);
+            // Sleep in short slices so cancel is noticed within ~100ms.
+            for (int slice = 0; slice < 10; ++slice) {
+                if (IsCancelRequested()) {
+                    result.error = "YouTube authorization was cancelled.";
+                    return result;
+                }
+                Sleep(100);
+            }
             continue;
         }
         if (status == "error") {
@@ -803,6 +715,7 @@ YouTubeUploadResult YouTubeUploader::UploadVideo(
     const UploadProgressCallback& progressCallback)
 {
     YouTubeUploadResult result;
+    ClearCancel();
     if (credentials.clientId.empty()) {
         result.error = "YouTube client ID is required.";
         return result;

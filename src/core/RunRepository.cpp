@@ -33,6 +33,8 @@ using sqlite3_bind_text_fn = int(*)(sqlite3_stmt*, int, const char*, int, void(*
 using sqlite3_bind_null_fn = int(*)(sqlite3_stmt*, int);
 using sqlite3_bind_int_fn = int(*)(sqlite3_stmt*, int, int);
 using sqlite3_step_fn = int(*)(sqlite3_stmt*);
+using sqlite3_reset_fn = int(*)(sqlite3_stmt*);
+using sqlite3_clear_bindings_fn = int(*)(sqlite3_stmt*);
 using sqlite3_finalize_fn = int(*)(sqlite3_stmt*);
 using sqlite3_column_text_fn = const unsigned char*(*)(sqlite3_stmt*, int);
 using sqlite3_column_int_fn = int(*)(sqlite3_stmt*, int);
@@ -49,6 +51,8 @@ struct SqliteApi {
     sqlite3_bind_null_fn bind_null = nullptr;
     sqlite3_bind_int_fn bind_int = nullptr;
     sqlite3_step_fn step = nullptr;
+    sqlite3_reset_fn reset = nullptr;
+    sqlite3_clear_bindings_fn clear_bindings = nullptr;
     sqlite3_finalize_fn finalize = nullptr;
     sqlite3_column_text_fn column_text = nullptr;
     sqlite3_column_int_fn column_int = nullptr;
@@ -81,6 +85,8 @@ bool LoadSqliteApi(SqliteApi& api, std::string& error)
         && load(api.bind_null, "sqlite3_bind_null")
         && load(api.bind_int, "sqlite3_bind_int")
         && load(api.step, "sqlite3_step")
+        && load(api.reset, "sqlite3_reset")
+        && load(api.clear_bindings, "sqlite3_clear_bindings")
         && load(api.finalize, "sqlite3_finalize")
         && load(api.column_text, "sqlite3_column_text")
         && load(api.column_int, "sqlite3_column_int")
@@ -255,6 +261,15 @@ RunRepository::RunRepository(std::filesystem::path dbPath)
 {
 }
 
+RunRepository::~RunRepository()
+{
+    std::scoped_lock lock(mutex_);
+    if (db_ != nullptr) {
+        GetSqliteApi().close(static_cast<sqlite3*>(db_));
+        db_ = nullptr;
+    }
+}
+
 bool RunRepository::Initialize(std::string& error)
 {
     std::scoped_lock lock(mutex_);
@@ -332,11 +347,16 @@ bool RunRepository::EnsureInitialized(std::string& error)
             return false;
         }
     }
-    api.close(db);
     if (!ok) {
+        api.close(db);
         return false;
     }
 
+    ExecuteSql(db, "PRAGMA foreign_keys = ON;", error);
+    error.clear();
+
+    // Kept open for the repository's lifetime; mutex_ serializes all use.
+    db_ = db;
     initialized_ = true;
     return true;
 }
@@ -349,20 +369,8 @@ bool RunRepository::UpsertRun(const RunRecord& record, std::string& error)
     }
 
     auto& api = GetSqliteApi();
-    sqlite3* db = nullptr;
-    if (api.open_v2(dbPath_.string().c_str(), &db, SQLITE_OPEN_READWRITE, nullptr) != SQLITE_OK || !db) {
-        error = "Unable to open runs database for write.";
-        if (db) {
-            api.close(db);
-        }
-        return false;
-    }
-    if (!ExecuteSql(db, "PRAGMA foreign_keys = ON;", error)) {
-        api.close(db);
-        return false;
-    }
+    auto* db = static_cast<sqlite3*>(db_);
     if (!ExecuteSql(db, "BEGIN IMMEDIATE TRANSACTION;", error)) {
-        api.close(db);
         return false;
     }
 
@@ -389,7 +397,6 @@ bool RunRepository::UpsertRun(const RunRecord& record, std::string& error)
     if (api.prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
         error = "Unable to prepare run upsert statement.";
         ExecuteSql(db, "ROLLBACK;", error);
-        api.close(db);
         return false;
     }
 
@@ -413,7 +420,6 @@ bool RunRepository::UpsertRun(const RunRecord& record, std::string& error)
     if (stepRc != SQLITE_DONE) {
         error = "Failed to upsert run record.";
         ExecuteSql(db, "ROLLBACK;", error);
-        api.close(db);
         return false;
     }
 
@@ -422,7 +428,6 @@ bool RunRepository::UpsertRun(const RunRecord& record, std::string& error)
     if (api.prepare_v2(db, findRunIdSql, -1, &findRunIdStmt, nullptr) != SQLITE_OK || !findRunIdStmt) {
         error = "Unable to prepare run id query statement.";
         ExecuteSql(db, "ROLLBACK;", error);
-        api.close(db);
         return false;
     }
     api.bind_text(findRunIdStmt, 1, record.videoPath.string().c_str(), -1, SQLITE_TRANSIENT);
@@ -431,7 +436,6 @@ bool RunRepository::UpsertRun(const RunRecord& record, std::string& error)
         api.finalize(findRunIdStmt);
         error = "Unable to fetch run id for participant upsert.";
         ExecuteSql(db, "ROLLBACK;", error);
-        api.close(db);
         return false;
     }
     const int runId = api.column_int(findRunIdStmt, 0);
@@ -442,7 +446,6 @@ bool RunRepository::UpsertRun(const RunRecord& record, std::string& error)
     if (api.prepare_v2(db, deleteParticipantsSql, -1, &deleteStmt, nullptr) != SQLITE_OK || !deleteStmt) {
         error = "Unable to prepare participant delete statement.";
         ExecuteSql(db, "ROLLBACK;", error);
-        api.close(db);
         return false;
     }
     api.bind_int(deleteStmt, 1, runId);
@@ -451,7 +454,6 @@ bool RunRepository::UpsertRun(const RunRecord& record, std::string& error)
     if (deleteStepRc != SQLITE_DONE) {
         error = "Failed to clear existing run participants.";
         ExecuteSql(db, "ROLLBACK;", error);
-        api.close(db);
         return false;
     }
 
@@ -460,14 +462,20 @@ bool RunRepository::UpsertRun(const RunRecord& record, std::string& error)
             "INSERT INTO run_participants ("
             "run_id, unit_guid, player_name, realm, region, spec_id"
             ") VALUES (?, ?, ?, ?, ?, ?);";
+
+        // Prepared once and reset per row rather than re-prepared inside the
+        // loop, which cost a compile per participant.
+        sqlite3_stmt* participantStmt = nullptr;
+        if (api.prepare_v2(db, insertParticipantSql, -1, &participantStmt, nullptr) != SQLITE_OK || !participantStmt) {
+            error = "Unable to prepare participant insert statement.";
+            ExecuteSql(db, "ROLLBACK;", error);
+            return false;
+        }
+
         for (const auto& participant : record.participants) {
-            sqlite3_stmt* participantStmt = nullptr;
-            if (api.prepare_v2(db, insertParticipantSql, -1, &participantStmt, nullptr) != SQLITE_OK || !participantStmt) {
-                error = "Unable to prepare participant insert statement.";
-                ExecuteSql(db, "ROLLBACK;", error);
-                api.close(db);
-                return false;
-            }
+            api.reset(participantStmt);
+            api.clear_bindings(participantStmt);
+
             api.bind_int(participantStmt, 1, runId);
             api.bind_text(participantStmt, 2, participant.guid.c_str(), -1, SQLITE_TRANSIENT);
             BindTextOrNull(participantStmt, 3, participant.name);
@@ -475,25 +483,21 @@ bool RunRepository::UpsertRun(const RunRecord& record, std::string& error)
             BindTextOrNull(participantStmt, 5, participant.region);
             BindIntOrNull(participantStmt, 6, participant.specId);
 
-            const int participantStepRc = api.step(participantStmt);
-            if (participantStepRc != SQLITE_DONE) {
+            if (api.step(participantStmt) != SQLITE_DONE) {
                 api.finalize(participantStmt);
                 error = "Failed to insert run participant.";
                 ExecuteSql(db, "ROLLBACK;", error);
-                api.close(db);
                 return false;
             }
-            api.finalize(participantStmt);
         }
+        api.finalize(participantStmt);
     }
 
     if (!ExecuteSql(db, "COMMIT;", error)) {
         ExecuteSql(db, "ROLLBACK;", error);
-        api.close(db);
         return false;
     }
 
-    api.close(db);
     return true;
 }
 
@@ -503,20 +507,14 @@ std::optional<RunRecord> RunRepository::GetRunByVideoPath(const std::filesystem:
     if (!EnsureInitialized(error)) {
         return std::nullopt;
     }
+    return ReadRunByVideoPathLocked(videoPath, error);
+}
 
+std::optional<RunRecord> RunRepository::ReadRunByVideoPathLocked(
+    const std::filesystem::path& videoPath, std::string& error)
+{
     auto& api = GetSqliteApi();
-    sqlite3* db = nullptr;
-    if (api.open_v2(dbPath_.string().c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK || !db) {
-        error = "Unable to open runs database for read.";
-        if (db) {
-            api.close(db);
-        }
-        return std::nullopt;
-    }
-    if (!ExecuteSql(db, "PRAGMA foreign_keys = ON;", error)) {
-        api.close(db);
-        return std::nullopt;
-    }
+    auto* db = static_cast<sqlite3*>(db_);
 
     const char* sql =
         "SELECT video_path, video_file_name, trigger_reason, stop_reason, result, "
@@ -527,7 +525,6 @@ std::optional<RunRecord> RunRepository::GetRunByVideoPath(const std::filesystem:
     sqlite3_stmt* stmt = nullptr;
     if (api.prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
         error = "Unable to prepare run query statement.";
-        api.close(db);
         return std::nullopt;
     }
     api.bind_text(stmt, 1, videoPath.string().c_str(), -1, SQLITE_TRANSIENT);
@@ -535,7 +532,6 @@ std::optional<RunRecord> RunRepository::GetRunByVideoPath(const std::filesystem:
     const int stepRc = api.step(stmt);
     if (stepRc != SQLITE_ROW) {
         api.finalize(stmt);
-        api.close(db);
         return std::nullopt;
     }
 
@@ -574,7 +570,6 @@ std::optional<RunRecord> RunRepository::GetRunByVideoPath(const std::filesystem:
     sqlite3_stmt* participantStmt = nullptr;
     if (api.prepare_v2(db, participantSql, -1, &participantStmt, nullptr) != SQLITE_OK || !participantStmt) {
         error = "Unable to prepare run participant query statement.";
-        api.close(db);
         return std::nullopt;
     }
     api.bind_int(participantStmt, 1, runId);
@@ -605,8 +600,45 @@ std::optional<RunRecord> RunRepository::GetRunByVideoPath(const std::filesystem:
     }
     api.finalize(participantStmt);
 
-    api.close(db);
     return record;
+}
+
+std::vector<RunRecord> RunRepository::ListRuns(std::string& error)
+{
+    std::scoped_lock lock(mutex_);
+    std::vector<RunRecord> runs;
+    if (!EnsureInitialized(error)) {
+        return runs;
+    }
+
+    auto& api = GetSqliteApi();
+    auto* db = static_cast<sqlite3*>(db_);
+
+    // Collect the paths first, then reuse the single-row reader for each so the
+    // column mapping and participant join stay in one place.
+    const char* sql = "SELECT video_path FROM runs;";
+    sqlite3_stmt* stmt = nullptr;
+    if (api.prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+        error = "Unable to prepare run list statement.";
+        return runs;
+    }
+
+    std::vector<std::string> videoPaths;
+    while (api.step(stmt) == SQLITE_ROW) {
+        if (const auto* text = reinterpret_cast<const char*>(api.column_text(stmt, 0)); text) {
+            videoPaths.emplace_back(text);
+        }
+    }
+    api.finalize(stmt);
+
+    runs.reserve(videoPaths.size());
+    for (const auto& videoPath : videoPaths) {
+        std::string rowError;
+        if (auto record = ReadRunByVideoPathLocked(videoPath, rowError); record.has_value()) {
+            runs.push_back(std::move(*record));
+        }
+    }
+    return runs;
 }
 
 std::filesystem::path RunRepository::GetDatabasePath() const

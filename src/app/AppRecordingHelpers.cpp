@@ -1,6 +1,9 @@
 #include "app/AppContext.h"
 #include "app/AppRecordingHelpers.h"
 
+#include "core/WowData.h"
+#include "util/Strings.h"
+
 #include <algorithm>
 #include <cwctype>
 #include <iomanip>
@@ -8,24 +11,49 @@
 
 namespace {
 
+using bean::util::ToWide;
+
 std::wstring ToWideUtf8(const std::string& input)
 {
-    if (input.empty()) {
-        return {};
-    }
-    const int size = MultiByteToWideChar(CP_UTF8, 0, input.c_str(), -1, nullptr, 0);
-    if (size <= 0) {
-        return {};
-    }
-    std::wstring output(static_cast<size_t>(size), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, input.c_str(), -1, output.data(), size);
-    if (!output.empty() && output.back() == L'\0') {
-        output.pop_back();
-    }
-    return output;
+    return ToWide(input);
 }
 
 } // namespace
+
+std::vector<std::filesystem::path> EnumerateRecordingMediaFiles(const std::filesystem::path& folder)
+{
+    std::vector<std::filesystem::path> files;
+    if (folder.empty()) {
+        return files;
+    }
+
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(folder, ec)) {
+        if (ec) {
+            break;
+        }
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        const auto ext = entry.path().extension().wstring();
+        if (_wcsicmp(ext.c_str(), L".mp4") != 0 && _wcsicmp(ext.c_str(), L".mkv") != 0) {
+            continue;
+        }
+        files.push_back(entry.path());
+    }
+
+    std::sort(files.begin(), files.end(), [](const auto& a, const auto& b) {
+        std::error_code aEc;
+        std::error_code bEc;
+        const auto aTime = std::filesystem::last_write_time(a, aEc);
+        const auto bTime = std::filesystem::last_write_time(b, bEc);
+        if (!aEc && !bEc) {
+            return aTime > bTime;
+        }
+        return a.filename().wstring() < b.filename().wstring();
+    });
+    return files;
+}
 
 std::wstring FormatElapsed(std::chrono::seconds elapsed)
 {
@@ -41,21 +69,6 @@ std::wstring FormatElapsed(std::chrono::seconds elapsed)
         swprintf_s(buffer, L"%02d:%02d", minutes, seconds);
     }
     return buffer;
-}
-
-std::string DungeonNameForChallengeMap(int challengeMapId)
-{
-    switch (challengeMapId) {
-    case 161: return "Skyreach";
-    case 239: return "Seat of the Triumvirate";
-    case 402: return "Algeth'ar Academy";
-    case 556: return "Pit of Saron";
-    case 557: return "Windrunner Spire";
-    case 558: return "Magisters' Terrace";
-    case 559: return "Nexus-Point Xenas";
-    case 560: return "Maisara Caverns";
-    default: return {};
-    }
 }
 
 std::wstring FormatBytes(uintmax_t bytes)

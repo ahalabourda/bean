@@ -1,5 +1,8 @@
 #include "core/SettingsStore.h"
 
+#include "util/Json.h"
+#include "util/Strings.h"
+
 #include <windows.h>
 #include <wincrypt.h>
 
@@ -8,6 +11,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <vector>
@@ -15,14 +19,17 @@
 namespace bean::core {
 namespace {
 
-std::string Trim(const std::string& value)
+using bean::util::EscapeJson;
+using bean::util::Trim;
+
+// Guards config.json across every SettingsStore instance in the process. The
+// UI thread and the detached YouTube workers all persist settings, and several
+// transient SettingsStore objects resolve to the same path, so this cannot be
+// a per-instance member.
+std::mutex& ConfigFileMutex()
 {
-    const auto begin = value.find_first_not_of(" \t\r\n");
-    if (begin == std::string::npos) {
-        return {};
-    }
-    const auto end = value.find_last_not_of(" \t\r\n");
-    return value.substr(begin, end - begin + 1);
+    static std::mutex mutex;
+    return mutex;
 }
 
 std::string HexEncode(const BYTE* data, DWORD size)
@@ -123,156 +130,20 @@ std::string NormalizeEncoderPreset(std::string preset)
     return "high";
 }
 
-std::string EscapeJson(std::string value)
-{
-    std::string escaped;
-    escaped.reserve(value.size());
-    for (char ch : value) {
-        if (ch == '\\' || ch == '"') {
-            escaped.push_back('\\');
-        }
-        escaped.push_back(ch);
-    }
-    return escaped;
-}
-
-std::string UnescapeJson(const std::string& value)
-{
-    std::string unescaped;
-    unescaped.reserve(value.size());
-
-    bool escape = false;
-    for (char ch : value) {
-        if (escape) {
-            switch (ch) {
-            case '\\':
-                unescaped.push_back('\\');
-                break;
-            case '"':
-                unescaped.push_back('"');
-                break;
-            case 'n':
-                unescaped.push_back('\n');
-                break;
-            case 'r':
-                unescaped.push_back('\r');
-                break;
-            case 't':
-                unescaped.push_back('\t');
-                break;
-            default:
-                unescaped.push_back(ch);
-                break;
-            }
-            escape = false;
-            continue;
-        }
-
-        if (ch == '\\') {
-            escape = true;
-            continue;
-        }
-        unescaped.push_back(ch);
-    }
-
-    if (escape) {
-        unescaped.push_back('\\');
-    }
-    return unescaped;
-}
-
+// Thin aliases so the many call sites below stay readable.
 std::string ReadQuoted(const std::string& content, const std::string& key)
 {
-    const std::string marker = "\"" + key + "\"";
-    const auto keyPos = content.find(marker);
-    if (keyPos == std::string::npos) {
-        return {};
-    }
-    const auto colonPos = content.find(':', keyPos + marker.size());
-    if (colonPos == std::string::npos) {
-        return {};
-    }
-    const auto firstQuote = content.find('"', colonPos + 1);
-    if (firstQuote == std::string::npos) {
-        return {};
-    }
-    size_t secondQuote = std::string::npos;
-    bool escape = false;
-    for (size_t i = firstQuote + 1; i < content.size(); ++i) {
-        const char ch = content[i];
-        if (escape) {
-            escape = false;
-            continue;
-        }
-        if (ch == '\\') {
-            escape = true;
-            continue;
-        }
-        if (ch == '"') {
-            secondQuote = i;
-            break;
-        }
-    }
-    if (secondQuote == std::string::npos) {
-        return {};
-    }
-    return UnescapeJson(content.substr(firstQuote + 1, secondQuote - firstQuote - 1));
+    return util::ReadJsonString(content, key);
 }
 
 int ReadInt(const std::string& content, const std::string& key, int fallback)
 {
-    const std::string marker = "\"" + key + "\"";
-    const auto keyPos = content.find(marker);
-    if (keyPos == std::string::npos) {
-        return fallback;
-    }
-    const auto colonPos = content.find(':', keyPos + marker.size());
-    if (colonPos == std::string::npos) {
-        return fallback;
-    }
-    auto valueStart = content.find_first_not_of(" \t\r\n", colonPos + 1);
-    if (valueStart == std::string::npos) {
-        return fallback;
-    }
-    auto valueEnd = content.find_first_of(",}\r\n", valueStart);
-    if (valueEnd == std::string::npos) {
-        valueEnd = content.size();
-    }
-    const std::string token = Trim(content.substr(valueStart, valueEnd - valueStart));
-    try {
-        return std::stoi(token);
-    } catch (...) {
-        return fallback;
-    }
+    return util::ReadJsonInt(content, key, fallback);
 }
 
 bool ReadBool(const std::string& content, const std::string& key, bool fallback)
 {
-    const std::string marker = "\"" + key + "\"";
-    const auto keyPos = content.find(marker);
-    if (keyPos == std::string::npos) {
-        return fallback;
-    }
-    const auto colonPos = content.find(':', keyPos + marker.size());
-    if (colonPos == std::string::npos) {
-        return fallback;
-    }
-    auto valueStart = content.find_first_not_of(" \t\r\n", colonPos + 1);
-    if (valueStart == std::string::npos) {
-        return fallback;
-    }
-    auto valueEnd = content.find_first_of(",}\r\n", valueStart);
-    if (valueEnd == std::string::npos) {
-        valueEnd = content.size();
-    }
-    const std::string token = Trim(content.substr(valueStart, valueEnd - valueStart));
-    if (token == "true") {
-        return true;
-    }
-    if (token == "false") {
-        return false;
-    }
-    return fallback;
+    return util::ReadJsonBool(content, key, fallback);
 }
 
 int ClampInt(int value, int minValue, int maxValue, int fallback)
@@ -447,6 +318,19 @@ std::string SerializeChatBlockerImageSizesMap(const std::unordered_map<std::stri
 
 } // namespace
 
+const char* AudioCaptureScopeLabel(AppSettings::AudioCaptureScope scope)
+{
+    switch (scope) {
+    case AppSettings::AudioCaptureScope::WowAndDiscord:
+        return "wow+discord";
+    case AppSettings::AudioCaptureScope::AllDesktop:
+        return "all-desktop";
+    case AppSettings::AudioCaptureScope::WowOnly:
+    default:
+        return "wow-only";
+    }
+}
+
 SettingsStore::SettingsStore()
 {
     std::filesystem::path base = GetKnownFolderFromEnv("APPDATA");
@@ -462,6 +346,12 @@ std::filesystem::path SettingsStore::GetConfigPath() const
 }
 
 bool SettingsStore::Load(AppSettings& settings, std::string& error) const
+{
+    std::scoped_lock lock(ConfigFileMutex());
+    return LoadLocked(settings, error);
+}
+
+bool SettingsStore::LoadLocked(AppSettings& settings, std::string& error) const
 {
     error.clear();
 
@@ -563,7 +453,8 @@ bool SettingsStore::Load(AppSettings& settings, std::string& error) const
     settings.youtubeChannelTitle = ReadQuoted(content, "youtubeChannelTitle");
     if (!rawRefreshToken.empty() && rawRefreshToken.rfind("dpapi:", 0) != 0) {
         std::string migrationError;
-        if (!Save(settings, migrationError)) {
+        // SaveLocked, not Save: the mutex is already held by our caller.
+        if (!SaveLocked(settings, migrationError)) {
             error = "Unable to protect the stored YouTube refresh token: " + migrationError;
             return false;
         }
@@ -572,6 +463,12 @@ bool SettingsStore::Load(AppSettings& settings, std::string& error) const
 }
 
 bool SettingsStore::Save(const AppSettings& settings, std::string& error) const
+{
+    std::scoped_lock lock(ConfigFileMutex());
+    return SaveLocked(settings, error);
+}
+
+bool SettingsStore::SaveLocked(const AppSettings& settings, std::string& error) const
 {
     error.clear();
     const auto protectedRefreshToken = ProtectRefreshToken(settings.youtubeRefreshToken);
@@ -586,7 +483,13 @@ bool SettingsStore::Save(const AppSettings& settings, std::string& error) const
         return false;
     }
 
-    std::ofstream stream(configPath_, std::ios::trunc);
+    // Write to a sibling temp file and swap it in, so an interrupted write can
+    // never leave a truncated config behind. This file holds the DPAPI-wrapped
+    // YouTube refresh token, so losing it costs the user their account link.
+    auto tempPath = configPath_;
+    tempPath += L".tmp";
+
+    std::ofstream stream(tempPath, std::ios::trunc | std::ios::binary);
     if (!stream.is_open()) {
         error = "Unable to open config file for write.";
         return false;
@@ -630,10 +533,51 @@ bool SettingsStore::Save(const AppSettings& settings, std::string& error) const
         << "  \"youtubeChannelTitle\": \"" << EscapeJson(settings.youtubeChannelTitle) << "\"\n"
         << "}\n";
 
+    stream.flush();
     if (!stream.good()) {
+        stream.close();
+        std::error_code removeEc;
+        std::filesystem::remove(tempPath, removeEc);
         error = "Failed while writing config file.";
         return false;
     }
+    stream.close();
+
+    // Push the bytes to disk before the swap, otherwise a power loss can leave
+    // the rename applied to a file whose contents never landed.
+    const HANDLE tempHandle = CreateFileW(
+        tempPath.c_str(),
+        GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (tempHandle != INVALID_HANDLE_VALUE) {
+        FlushFileBuffers(tempHandle);
+        CloseHandle(tempHandle);
+    }
+
+    // Keep the previous config as a .bak so a bad write is recoverable by hand.
+    if (std::filesystem::exists(configPath_)) {
+        auto backupPath = configPath_;
+        backupPath += L".bak";
+        std::error_code backupEc;
+        std::filesystem::copy_file(
+            configPath_, backupPath, std::filesystem::copy_options::overwrite_existing, backupEc);
+    }
+
+    if (!MoveFileExW(
+            tempPath.c_str(),
+            configPath_.c_str(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        const DWORD moveError = GetLastError();
+        std::error_code removeEc;
+        std::filesystem::remove(tempPath, removeEc);
+        error = "Failed to replace config file (error " + std::to_string(moveError) + ").";
+        return false;
+    }
+
     return true;
 }
 

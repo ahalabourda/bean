@@ -5,7 +5,7 @@
 namespace bean::obs {
 namespace {
 
-const char* AudioCaptureScopeLabel(RecordingConfig::AudioCaptureScope scope)
+const char* MockAudioCaptureScopeLabel(RecordingConfig::AudioCaptureScope scope)
 {
     switch (scope) {
     case RecordingConfig::AudioCaptureScope::WowAndDiscord:
@@ -20,10 +20,50 @@ const char* AudioCaptureScopeLabel(RecordingConfig::AudioCaptureScope scope)
 
 } // namespace
 
+void MockRecorderEngine::SetFailNextInitialize(std::string errorMessage)
+{
+    std::scoped_lock lock(mutex_);
+    failNextInitialize_ = std::move(errorMessage);
+}
+
+void MockRecorderEngine::SetFailNextStart(std::string errorMessage)
+{
+    std::scoped_lock lock(mutex_);
+    failNextStart_ = std::move(errorMessage);
+}
+
+void MockRecorderEngine::SetRequireWowWindow(bool require)
+{
+    std::scoped_lock lock(mutex_);
+    requireWowWindow_ = require;
+}
+
+void MockRecorderEngine::SetWowWindowPresent(bool present)
+{
+    std::scoped_lock lock(mutex_);
+    wowWindowPresent_ = present;
+}
+
+void MockRecorderEngine::ClearInjectedFailures()
+{
+    std::scoped_lock lock(mutex_);
+    failNextInitialize_.reset();
+    failNextStart_.reset();
+    requireWowWindow_ = false;
+    wowWindowPresent_ = true;
+}
+
 bool MockRecorderEngine::Initialize(const RecordingConfig& config, std::string& error)
 {
     std::scoped_lock lock(mutex_);
     error.clear();
+
+    if (failNextInitialize_.has_value()) {
+        error = *failNextInitialize_;
+        failNextInitialize_.reset();
+        initialized_ = false;
+        return false;
+    }
 
     if (config.outputDirectory.empty()) {
         error = "Output directory is not set.";
@@ -60,11 +100,20 @@ bool MockRecorderEngine::StartRecording(const std::string& fileStem, std::string
         error = "File stem cannot be empty.";
         return false;
     }
+    if (failNextStart_.has_value()) {
+        error = *failNextStart_;
+        failNextStart_.reset();
+        return false;
+    }
+    if (requireWowWindow_ && !wowWindowPresent_) {
+        error = "No World of Warcraft window was detected for game capture.";
+        return false;
+    }
 
     recording_ = true;
     activeFileStem_ = fileStem;
     lastStartDiagnostics_ = std::string("audio=")
-        + AudioCaptureScopeLabel(config_.audioCaptureScope)
+        + MockAudioCaptureScopeLabel(config_.audioCaptureScope)
         + ", microphone=" + (config_.captureMicrophone ? "enabled" : "disabled")
         + ", noise-suppression=" + (config_.microphoneNoiseSuppression ? "enabled" : "disabled")
         + ", micDevice='" + (config_.microphoneDeviceId.empty() ? "default" : config_.microphoneDeviceId) + "'";

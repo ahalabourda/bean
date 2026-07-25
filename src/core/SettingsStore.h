@@ -87,6 +87,11 @@ struct AppSettings {
     std::string youtubeChannelTitle;
 };
 
+// Thread-safe. The UI thread and the YouTube auth/upload workers all persist
+// settings. Serialization is on a process-wide lock rather than a per-instance
+// one because the resource being guarded is the config file, and several
+// short-lived SettingsStore instances point at the same path. Writes replace
+// the file atomically instead of truncating it in place.
 class SettingsStore {
 public:
     SettingsStore();
@@ -97,9 +102,16 @@ public:
     bool Save(const AppSettings& settings, std::string& error) const;
 
 private:
+    bool LoadLocked(AppSettings& settings, std::string& error) const;
+    bool SaveLocked(const AppSettings& settings, std::string& error) const;
+
     std::filesystem::path configPath_;
 };
 
 obs::RecordingConfig ToRecordingConfig(const AppSettings& settings);
+
+// Human-readable label for status lines (e.g. "wow-only"). Distinct from the
+// JSON wire form written by SettingsStore::Save.
+const char* AudioCaptureScopeLabel(AppSettings::AudioCaptureScope scope);
 
 } // namespace bean::core

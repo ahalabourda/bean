@@ -3,6 +3,7 @@
 #include "obs/IRecorderEngine.h"
 
 #include <mutex>
+#include <optional>
 #include <string>
 
 namespace bean::obs {
@@ -16,6 +17,14 @@ public:
     bool IsRecording() const override;
     std::string GetLastStartDiagnostics() const override;
 
+    // Test hooks: inject the failure modes the real engine enforces so
+    // orchestrator error paths are exercisable without OBS.
+    void SetFailNextInitialize(std::string errorMessage);
+    void SetFailNextStart(std::string errorMessage);
+    void SetRequireWowWindow(bool require);
+    void SetWowWindowPresent(bool present);
+    void ClearInjectedFailures();
+
 private:
     mutable std::mutex mutex_;
     RecordingConfig config_{};
@@ -23,6 +32,10 @@ private:
     bool recording_ = false;
     std::string activeFileStem_;
     std::string lastStartDiagnostics_;
+    std::optional<std::string> failNextInitialize_;
+    std::optional<std::string> failNextStart_;
+    bool requireWowWindow_ = false;
+    bool wowWindowPresent_ = true;
 };
 
 } // namespace bean::obs

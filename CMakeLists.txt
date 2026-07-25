@@ -5,7 +5,9 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-option(BEAN_ENABLE_LIBOBS "Enable libobs recorder engine implementation" OFF)
+# When ON (default), the app wires LibObsRecorderEngine at startup. When OFF,
+# it uses MockRecorderEngine instead — useful for CI machines without OBS.
+option(BEAN_ENABLE_LIBOBS "Use LibObsRecorderEngine in the app (OFF = MockRecorderEngine)" ON)
 option(BEAN_ENABLE_VELOPACK "Enable Velopack updater integration" OFF)
 
 set(BEAN_GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
@@ -17,14 +19,18 @@ configure_file(
 )
 
 add_library(bean_core
+    src/core/GameEnvironment.cpp
     src/core/RecordingOrchestrator.cpp
     src/core/RunRepository.cpp
     src/core/SettingsStore.cpp
+    src/core/WowData.cpp
     src/integrations/YouTubeUploader.cpp
     src/log/CombatLogWatcher.cpp
     src/log/MythicRunDetector.cpp
     src/obs/MockRecorderEngine.cpp
     src/obs/LibObsRecorderEngine.cpp
+    src/util/Json.cpp
+    src/util/Strings.cpp
 )
 
 target_include_directories(bean_core PUBLIC src)
@@ -51,6 +57,9 @@ add_executable(bean_app WIN32
     src/app/AppUtilities.cpp
 )
 set_target_properties(bean_app PROPERTIES OUTPUT_NAME "bean")
+if(BEAN_ENABLE_LIBOBS)
+    target_compile_definitions(bean_app PRIVATE BEAN_ENABLE_LIBOBS=1)
+endif()
 
 set(BEAN_EMBEDDED_ICON "${CMAKE_SOURCE_DIR}/assets/icons/bean_idle.ico")
 if(NOT EXISTS "${BEAN_EMBEDDED_ICON}")

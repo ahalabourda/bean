@@ -1,6 +1,6 @@
 # libobs Integration Notes
 
-This project now uses `LibObsRecorderEngine` by default and dynamically loads OBS runtime APIs from an installed OBS distribution.
+This project uses `LibObsRecorderEngine` by default and dynamically loads OBS runtime APIs from an installed OBS distribution.
 
 ## Planned integration steps
 
@@ -22,8 +22,11 @@ This project now uses `LibObsRecorderEngine` by default and dynamically loads OB
 
 ## CMake switch
 
-- `BEAN_ENABLE_LIBOBS` currently does not change runtime behavior.
-- Runtime dependency is an installed OBS distribution with compatible binaries/plugins.
+- `BEAN_ENABLE_LIBOBS` (default **ON**) selects the recorder engine wired into the app:
+  - **ON** → `LibObsRecorderEngine`
+  - **OFF** → `MockRecorderEngine` (useful for CI hosts without OBS)
+- Both engines are always compiled into `bean_core`. Unit tests construct `MockRecorderEngine` directly.
+- Runtime dependency for the libobs path is an installed OBS distribution with compatible binaries/plugins.
 
 ## Safety behavior
 

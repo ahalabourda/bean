@@ -1,7 +1,11 @@
 #include "app/AppStatusLog.h"
 #include "bean_version.h"
 
+#include "core/SettingsStore.h"
+#include "util/Strings.h"
+
 #include <algorithm>
+#include <deque>
 #include <iomanip>
 #include <regex>
 #include <sstream>
@@ -9,65 +13,12 @@
 
 namespace {
 
-std::wstring ToWide(const std::string& input)
-{
-    if (input.empty()) {
-        return {};
-    }
-    const int size = MultiByteToWideChar(CP_UTF8, 0, input.c_str(), -1, nullptr, 0);
-    if (size <= 0) {
-        return {};
-    }
-    std::wstring output(static_cast<size_t>(size), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, input.c_str(), -1, output.data(), size);
-    if (!output.empty() && output.back() == L'\0') {
-        output.pop_back();
-    }
-    return output;
-}
-
-std::string ToUtf8(const std::wstring& input)
-{
-    if (input.empty()) {
-        return {};
-    }
-    const int size = WideCharToMultiByte(CP_UTF8, 0, input.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (size <= 0) {
-        return {};
-    }
-    std::string output(static_cast<size_t>(size), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, input.c_str(), -1, output.data(), size, nullptr, nullptr);
-    if (!output.empty() && output.back() == '\0') {
-        output.pop_back();
-    }
-    return output;
-}
-
-std::wstring GetWindowTextString(HWND hwnd)
-{
-    const int length = GetWindowTextLengthW(hwnd);
-    std::wstring value(static_cast<size_t>(length) + 1, L'\0');
-    GetWindowTextW(hwnd, value.data(), length + 1);
-    value.resize(static_cast<size_t>(length));
-    return value;
-}
+using bean::util::ToUtf8;
+using bean::util::ToWide;
 
 std::wstring VersionText()
 {
     return std::wstring(L"v") + BEAN_APP_VERSION_W;
-}
-
-std::wstring AudioCaptureScopeLabel(bean::core::AppSettings::AudioCaptureScope scope)
-{
-    switch (scope) {
-    case bean::core::AppSettings::AudioCaptureScope::WowAndDiscord:
-        return L"wow+discord";
-    case bean::core::AppSettings::AudioCaptureScope::AllDesktop:
-        return L"all-desktop";
-    case bean::core::AppSettings::AudioCaptureScope::WowOnly:
-    default:
-        return L"wow-only";
-    }
 }
 
 std::wstring ChatBlockerAnchorLabel(bean::core::AppSettings::ChatBlockerAnchor anchor)
@@ -253,7 +204,7 @@ void LogSessionDiagnostics(AppContext* ctx)
         << L", recording-resolution=" << recordingResolutionLabel
         << L"@" << ctx->settings.fps << L"fps"
         << L", post-run tail=" << ctx->settings.postRunStopDelaySeconds << L"s"
-        << L", audio-scope=" << AudioCaptureScopeLabel(ctx->settings.audioCaptureScope)
+        << L", audio-scope=" << ToWide(bean::core::AudioCaptureScopeLabel(ctx->settings.audioCaptureScope))
         << L", microphone=" << (ctx->settings.captureMicrophone ? L"yes" : L"no")
         << L", mic-noise-suppression=" << (ctx->settings.microphoneNoiseSuppression ? L"yes" : L"no");
     SetStatus(ctx, capture.str());
@@ -286,47 +237,36 @@ void SetStatus(AppContext* ctx, const std::wstring& text)
         return;
     }
 
-    const auto existing = GetWindowTextString(ctx->statusText);
     const std::wstring line = L"[" + TimestampNowForStatus() + L"] " + SanitizeStatusTextForPrivacy(text);
     AppendStatusLineToSessionLog(ctx, line);
-    std::wstring combined;
-    if (existing.empty()) {
-        combined = line;
-    } else {
-        combined = existing + L"\r\n" + line;
+
+    const bool wasEmpty = ctx->statusLines.empty();
+    ctx->statusLines.push_back(line);
+    while (ctx->statusLines.size() > kStatusMaxLines) {
+        ctx->statusLines.pop_front();
     }
 
-    std::vector<std::wstring> lines;
-    size_t start = 0;
-    while (start < combined.size()) {
-        size_t end = combined.find(L'\n', start);
-        if (end == std::wstring::npos) {
-            end = combined.size();
+    if (wasEmpty || ctx->statusLines.size() == kStatusMaxLines) {
+        // First line, or we just trimmed the front: rewrite the control once.
+        std::wostringstream rebuilt;
+        for (size_t i = 0; i < ctx->statusLines.size(); ++i) {
+            if (i > 0) {
+                rebuilt << L"\r\n";
+            }
+            rebuilt << ctx->statusLines[i];
         }
-        std::wstring entry = combined.substr(start, end - start);
-        if (!entry.empty() && entry.back() == L'\r') {
-            entry.pop_back();
-        }
-        lines.push_back(std::move(entry));
-        start = end + 1;
+        const std::wstring combined = rebuilt.str();
+        SetWindowTextW(ctx->statusText, combined.c_str());
+        SendMessageW(ctx->statusText, EM_SETSEL, static_cast<WPARAM>(combined.size()), static_cast<LPARAM>(combined.size()));
+        SendMessageW(ctx->statusText, EM_SCROLLCARET, 0, 0);
+        return;
     }
 
-    if (lines.size() > kStatusMaxLines) {
-        const size_t trimCount = lines.size() - kStatusMaxLines;
-        lines.erase(lines.begin(), lines.begin() + static_cast<std::ptrdiff_t>(trimCount));
-    }
-
-    std::wostringstream rebuilt;
-    for (size_t i = 0; i < lines.size(); ++i) {
-        if (i > 0) {
-            rebuilt << L"\r\n";
-        }
-        rebuilt << lines[i];
-    }
-    combined = rebuilt.str();
-
-    SetWindowTextW(ctx->statusText, combined.c_str());
-    SendMessageW(ctx->statusText, EM_SETSEL, static_cast<WPARAM>(combined.size()), static_cast<LPARAM>(combined.size()));
+    // Steady state: append only. Avoids GetWindowText + full reparse every message.
+    const std::wstring append = L"\r\n" + line;
+    const int length = GetWindowTextLengthW(ctx->statusText);
+    SendMessageW(ctx->statusText, EM_SETSEL, static_cast<WPARAM>(length), static_cast<LPARAM>(length));
+    SendMessageW(ctx->statusText, EM_REPLACESEL, FALSE, reinterpret_cast<LPARAM>(append.c_str()));
     SendMessageW(ctx->statusText, EM_SCROLLCARET, 0, 0);
 }
 

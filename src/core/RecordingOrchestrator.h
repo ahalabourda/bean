@@ -89,8 +89,18 @@ private:
     };
 
     void HandleCombatLogLine(const std::string& line);
+    void ProcessCombatLogLine(const std::string& line);
+    void CombatLogWorkerLoop();
+    void StartCombatLogWorker();
+    void StopCombatLogWorker();
     void ResetMythicTrackingState();
-    bool StartRecordingInternal(RecordingStartReason reason, std::string& error);
+    // Caller must own `lock`. The lock is released for the duration of the
+    // blocking engine Initialize/StartRecording calls so Tick and other
+    // orchestrator entry points are not stalled behind OBS warmup.
+    bool StartRecordingInternal(
+        RecordingStartReason reason,
+        std::string& error,
+        std::unique_lock<std::mutex>& lock);
     bool StopRecordingInternal(
         RecordingStopReason reason,
         std::string& error,
@@ -130,7 +140,20 @@ private:
     log::MythicRunDetector detector_;
     AppSettings settings_{};
     OrchestratorState state_ = OrchestratorState::Idle;
+    // True while Initialize/StartRecording are running outside mutex_. Guards
+    // against overlapping starts and tells Tick not to treat the gap as idle.
+    bool recordingStartInProgress_ = false;
+    // Guarded separately from mutex_ because the trim worker pushes status from
+    // a background thread while the UI thread may be installing the callback.
+    mutable std::mutex statusCallbackMutex_;
     StatusCallback statusCallback_;
+    // Combat log lines are handed off by the watcher thread and processed here,
+    // so neither the watcher nor the UI thread ever blocks on recording start.
+    std::thread combatLogWorker_;
+    std::mutex combatLogQueueMutex_;
+    std::condition_variable combatLogQueueCv_;
+    std::deque<std::string> combatLogQueue_;
+    bool combatLogWorkerStopRequested_ = false;
     std::optional<std::chrono::steady_clock::time_point> mythicRunStartedAt_;
     std::optional<std::chrono::steady_clock::time_point> postRunStopAt_;
     std::optional<RecordingStopReason> postRunStopReason_;

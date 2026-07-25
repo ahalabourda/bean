@@ -1,5 +1,7 @@
 #include "obs/LibObsRecorderEngine.h"
 
+#include "util/Strings.h"
+
 #include <Windows.h>
 #include <gdiplus.h>
 
@@ -360,23 +362,7 @@ struct obs_audio_info {
     speaker_layout speakers;
 };
 
-std::string ToUtf8(const std::filesystem::path& path)
-{
-    const auto wide = path.wstring();
-    if (wide.empty()) {
-        return {};
-    }
-    const int size = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (size <= 0) {
-        return {};
-    }
-    std::string result(static_cast<size_t>(size), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, result.data(), size, nullptr, nullptr);
-    if (!result.empty() && result.back() == '\0') {
-        result.pop_back();
-    }
-    return result;
-}
+using bean::util::ToUtf8;
 
 struct WowWindowSearchState {
     HWND wowWindow = nullptr;
@@ -411,23 +397,6 @@ bool IsLikelyWowGameClientExecutableName(std::wstring exeName)
     // Common game-client binary names.
     return stem == L"wow"
         || stem == L"wowclassic";
-}
-
-std::string ToUtf8(const std::wstring& value)
-{
-    if (value.empty()) {
-        return {};
-    }
-    const int size = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (size <= 0) {
-        return {};
-    }
-    std::string result(static_cast<size_t>(size), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, result.data(), size, nullptr, nullptr);
-    if (!result.empty() && result.back() == '\0') {
-        result.pop_back();
-    }
-    return result;
 }
 
 int GetGdiPlusEncoderClsid(const wchar_t* mimeType, CLSID& outClsid)
@@ -797,6 +766,34 @@ bool LoadProc(HMODULE module, const char* name, T& out, std::string& error)
     return true;
 }
 
+// Runs the supplied cleanup on scope exit unless dismissed. Used to guarantee
+// partially-created OBS objects are released on every failure path, including
+// ones added later, since libobs has no RAII of its own.
+template <typename F>
+class ScopeGuard {
+public:
+    explicit ScopeGuard(F cleanup)
+        : cleanup_(std::move(cleanup))
+    {
+    }
+
+    ~ScopeGuard()
+    {
+        if (active_) {
+            cleanup_();
+        }
+    }
+
+    ScopeGuard(const ScopeGuard&) = delete;
+    ScopeGuard& operator=(const ScopeGuard&) = delete;
+
+    void Dismiss() { active_ = false; }
+
+private:
+    F cleanup_;
+    bool active_ = true;
+};
+
 } // namespace
 
 int ResolveConstantQualityValueForPreset(const std::string& encoderPreset)
@@ -916,7 +913,7 @@ bool LibObsRecorderEngine::Initialize(const RecordingConfig& config, std::string
 
 bool LibObsRecorderEngine::StartRecording(const std::string& fileStem, std::string& error)
 {
-    std::scoped_lock lock(mutex_);
+    std::unique_lock lock(mutex_);
     error.clear();
     lastStartDiagnostics_.clear();
     ClearLastObsLogLine();
@@ -932,6 +929,53 @@ bool LibObsRecorderEngine::StartRecording(const std::string& fileStem, std::stri
 
     ReleaseObsObjects();
 
+    // Everything created below is torn down automatically unless the output
+    // actually starts. Individual failure paths only need to set `error`.
+    ScopeGuard cleanup([this] { ReleaseObsObjects(); });
+
+    std::string audioSourceDebug;
+    std::string micSourceDebug;
+    std::string blockerDebug;
+    if (!SetupGameCaptureSource(error)
+        || !SetupAudioSources(audioSourceDebug, error)
+        || !SetupMicrophoneSource(micSourceDebug, error)
+        || !SetupSceneAndChatBlocker(blockerDebug, error)) {
+        return false;
+    }
+
+    void* sceneSource = api_->obs_scene_get_source(scene_);
+    if (!sceneSource) {
+        error = "Failed to get source from scene.";
+        return false;
+    }
+    api_->obs_set_output_source(0, sceneSource);
+
+    // Game capture needs a moment to attach. Holding mutex_ across this sleep
+    // blocked StopRecording, diagnostics, and live mic filter updates for 1.5s.
+    lock.unlock();
+    std::this_thread::sleep_for(kGameCaptureWarmupDelay);
+    lock.lock();
+    if (!initialized_) {
+        error = "Recorder was shut down during game-capture warmup.";
+        return false;
+    }
+    if (recording_) {
+        error = "Recording was started by another caller during warmup.";
+        return false;
+    }
+
+    const bool useMp4 = (config_.containerFormat == "mp4");
+    const auto extension = useMp4 ? ".mp4" : ".mkv";
+    const auto outputPath = config_.outputDirectory / (fileStem + extension);
+    if (!StartOutputWithEncoders(outputPath, audioSourceDebug, micSourceDebug, blockerDebug, error)) {
+        return false;
+    }
+    cleanup.Dismiss();
+    return true;
+}
+
+bool LibObsRecorderEngine::SetupGameCaptureSource(std::string& error)
+{
     AudioCaptureBinding wowWindowBinding;
     if (!DetectWowAudioCaptureBinding(wowWindowBinding)) {
         error = "No World of Warcraft window was detected for game capture.";
@@ -958,17 +1002,32 @@ bool LibObsRecorderEngine::StartRecording(const std::string& fileStem, std::stri
         error = "Failed to create game capture source. Ensure win-capture plugin is available.";
         return false;
     }
+    // Stash the WoW binding on the desktop-audio placeholder path via a
+    // thread-local is awkward; SetupAudioSources re-detects WoW. Acceptable:
+    // detection is cheap relative to OBS setup.
+    return true;
+}
 
-    std::string audioSourceDebug;
-    const auto createProcessAudioSource = [&](const AudioCaptureBinding& binding, const char* sourceName, void*& outSource, std::string& createError, const std::string& fallbackTitle, const std::string& fallbackClass, const std::string& fallbackExeName) {
+bool LibObsRecorderEngine::SetupAudioSources(std::string& audioDebug, std::string& error)
+{
+    audioDebug.clear();
+    const auto createProcessAudioSource = [&](
+        const AudioCaptureBinding& binding,
+        const char* sourceName,
+        void*& outSource,
+        std::string& createError,
+        const std::string& fallbackTitle,
+        const std::string& fallbackClass,
+        const std::string& fallbackExeName) {
         auto* audioSettings = api_->obs_data_create();
         if (!audioSettings) {
             createError = "Failed to create process audio settings.";
             return false;
         }
-        const std::string windowSetting = BuildObsWasapiProcessWindowSetting(binding, fallbackTitle, fallbackClass, fallbackExeName);
+        const std::string windowSetting = BuildObsWasapiProcessWindowSetting(
+            binding, fallbackTitle, fallbackClass, fallbackExeName);
         api_->obs_data_set_string(audioSettings, "window", windowSetting.c_str());
-        api_->obs_data_set_int(audioSettings, "priority", 2); // Match by executable.
+        api_->obs_data_set_int(audioSettings, "priority", 2);
         api_->obs_data_set_bool(audioSettings, "exclude", false);
         outSource = api_->obs_source_create("wasapi_process_output_capture", sourceName, audioSettings, nullptr);
         api_->obs_data_release(audioSettings);
@@ -979,11 +1038,19 @@ bool LibObsRecorderEngine::StartRecording(const std::string& fileStem, std::stri
         return true;
     };
 
+    AudioCaptureBinding wowWindowBinding;
     if (config_.audioCaptureScope == RecordingConfig::AudioCaptureScope::WowOnly
         || config_.audioCaptureScope == RecordingConfig::AudioCaptureScope::WowAndDiscord) {
-        const AudioCaptureBinding& audioBinding = wowWindowBinding;
+        if (!DetectWowAudioCaptureBinding(wowWindowBinding)) {
+            error = "No World of Warcraft window was detected for game capture.";
+            return false;
+        }
+        const std::string wowWindowSelector = BuildObsWasapiProcessWindowSetting(
+            wowWindowBinding, "World of Warcraft", "GxWindowClass", "wow.exe");
         std::string sourceError;
-        if (!createProcessAudioSource(audioBinding, "BeanWowAudio", desktopAudioSource_, sourceError, "World of Warcraft", "GxWindowClass", "wow.exe")) {
+        if (!createProcessAudioSource(
+                wowWindowBinding, "BeanWowAudio", desktopAudioSource_, sourceError,
+                "World of Warcraft", "GxWindowClass", "wow.exe")) {
             error = "Failed to create WoW-only audio capture source. Verify OBS supports Application Audio Capture and try updating OBS.";
             if (!sourceError.empty()) {
                 error += " Internal: " + sourceError;
@@ -992,19 +1059,18 @@ bool LibObsRecorderEngine::StartRecording(const std::string& fileStem, std::stri
             if (!logSnippet.empty()) {
                 error += " OBS: " + logSnippet;
             }
-            ReleaseObsObjects();
             return false;
         }
         std::ostringstream os;
-        os << "WoW process capture (pid=" << audioBinding.processId;
-        if (!audioBinding.executablePath.empty()) {
-            os << ", exe='" << audioBinding.executablePath << "'";
+        os << "WoW process capture (pid=" << wowWindowBinding.processId;
+        if (!wowWindowBinding.executablePath.empty()) {
+            os << ", exe='" << wowWindowBinding.executablePath << "'";
         }
-        if (!audioBinding.windowClass.empty()) {
-            os << ", class='" << audioBinding.windowClass << "'";
+        if (!wowWindowBinding.windowClass.empty()) {
+            os << ", class='" << wowWindowBinding.windowClass << "'";
         }
-        if (!audioBinding.windowTitle.empty()) {
-            os << ", title='" << audioBinding.windowTitle << "'";
+        if (!wowWindowBinding.windowTitle.empty()) {
+            os << ", title='" << wowWindowBinding.windowTitle << "'";
         }
         os << ", windowSelector='" << wowWindowSelector << "'";
         os << ")";
@@ -1012,11 +1078,12 @@ bool LibObsRecorderEngine::StartRecording(const std::string& fileStem, std::stri
             AudioCaptureBinding discordBinding;
             if (!DetectDiscordAudioCaptureBinding(discordBinding)) {
                 error = "WoW + Discord audio capture is enabled, but Discord was not detected. Start Discord and try again.";
-                ReleaseObsObjects();
                 return false;
             }
             std::string discordSourceError;
-            if (!createProcessAudioSource(discordBinding, "BeanDiscordAudio", discordAudioSource_, discordSourceError, "Discord", "Chrome_WidgetWin_1", "discord.exe")) {
+            if (!createProcessAudioSource(
+                    discordBinding, "BeanDiscordAudio", discordAudioSource_, discordSourceError,
+                    "Discord", "Chrome_WidgetWin_1", "discord.exe")) {
                 error = "Failed to create Discord process audio capture source. Verify OBS supports Application Audio Capture and try updating OBS.";
                 if (!discordSourceError.empty()) {
                     error += " Internal: " + discordSourceError;
@@ -1025,7 +1092,6 @@ bool LibObsRecorderEngine::StartRecording(const std::string& fileStem, std::stri
                 if (!logSnippet.empty()) {
                     error += " OBS: " + logSnippet;
                 }
-                ReleaseObsObjects();
                 return false;
             }
             os << " + Discord process capture (pid=" << discordBinding.processId;
@@ -1038,66 +1104,81 @@ bool LibObsRecorderEngine::StartRecording(const std::string& fileStem, std::stri
             if (!discordBinding.windowTitle.empty()) {
                 os << ", title='" << discordBinding.windowTitle << "'";
             }
-            const std::string discordWindowSelector = BuildObsWasapiProcessWindowSetting(discordBinding, "Discord", "Chrome_WidgetWin_1", "discord.exe");
+            const std::string discordWindowSelector = BuildObsWasapiProcessWindowSetting(
+                discordBinding, "Discord", "Chrome_WidgetWin_1", "discord.exe");
             os << ", windowSelector='" << discordWindowSelector << "'";
             os << ")";
         }
-        audioSourceDebug = os.str();
-    } else {
-        auto* audioSettings = api_->obs_data_create();
-        if (!audioSettings) {
-            error = "Failed to create desktop audio settings.";
-            return false;
-        }
-        api_->obs_data_set_string(audioSettings, "device_id", "default");
-        desktopAudioSource_ = api_->obs_source_create("wasapi_output_capture", "BeanDesktopAudio", audioSettings, nullptr);
-        api_->obs_data_release(audioSettings);
-        audioSourceDebug = "Desktop output capture (device='default')";
+        audioDebug = os.str();
+        return true;
     }
 
-    std::string micSourceDebug = "disabled";
-    if (config_.captureMicrophone) {
-        auto* micSettings = api_->obs_data_create();
-        if (!micSettings) {
-            error = "Failed to create microphone settings.";
-            ReleaseObsObjects();
-            return false;
+    auto* audioSettings = api_->obs_data_create();
+    if (!audioSettings) {
+        error = "Failed to create desktop audio settings.";
+        return false;
+    }
+    api_->obs_data_set_string(audioSettings, "device_id", "default");
+    desktopAudioSource_ = api_->obs_source_create("wasapi_output_capture", "BeanDesktopAudio", audioSettings, nullptr);
+    api_->obs_data_release(audioSettings);
+    if (!desktopAudioSource_) {
+        error = "Failed to create desktop audio capture source.";
+        const auto logSnippet = GetRecentObsLogSnippet();
+        if (!logSnippet.empty()) {
+            error += " OBS: " + logSnippet;
         }
-        const std::string microphoneDeviceId = config_.microphoneDeviceId.empty() ? "default" : config_.microphoneDeviceId;
-        api_->obs_data_set_string(micSettings, "device_id", microphoneDeviceId.c_str());
-        microphoneAudioSource_ = api_->obs_source_create("wasapi_input_capture", "BeanMicrophone", micSettings, nullptr);
-        api_->obs_data_release(micSettings);
-        if (!microphoneAudioSource_) {
-            error = "Failed to create microphone audio source.";
-            const auto logSnippet = GetRecentObsLogSnippet();
-            if (!logSnippet.empty()) {
-                error += " OBS: " + logSnippet;
-            }
-            ReleaseObsObjects();
-            return false;
+        return false;
+    }
+    audioDebug = "Desktop output capture (device='default')";
+    return true;
+}
+
+bool LibObsRecorderEngine::SetupMicrophoneSource(std::string& micDebug, std::string& error)
+{
+    micDebug = "disabled";
+    if (!config_.captureMicrophone) {
+        return true;
+    }
+    auto* micSettings = api_->obs_data_create();
+    if (!micSettings) {
+        error = "Failed to create microphone settings.";
+        return false;
+    }
+    const std::string microphoneDeviceId =
+        config_.microphoneDeviceId.empty() ? "default" : config_.microphoneDeviceId;
+    api_->obs_data_set_string(micSettings, "device_id", microphoneDeviceId.c_str());
+    microphoneAudioSource_ = api_->obs_source_create("wasapi_input_capture", "BeanMicrophone", micSettings, nullptr);
+    api_->obs_data_release(micSettings);
+    if (!microphoneAudioSource_) {
+        error = "Failed to create microphone audio source.";
+        const auto logSnippet = GetRecentObsLogSnippet();
+        if (!logSnippet.empty()) {
+            error += " OBS: " + logSnippet;
         }
-        micSourceDebug = "enabled (device='" + microphoneDeviceId + "')";
-        if (config_.microphoneNoiseSuppression) {
-            std::string filterError;
-            if (ApplyMicrophoneNoiseSuppressionFilter(true, filterError)) {
-                micSourceDebug += ", noise-suppression=enabled";
-            } else {
-                // Noise suppression is optional; preserve the recording with
-                // the microphone source unfiltered if OBS rejects the filter.
-                micSourceDebug += ", noise-suppression=unavailable (" + filterError + ")";
-            }
+        return false;
+    }
+    micDebug = "enabled (device='" + microphoneDeviceId + "')";
+    if (config_.microphoneNoiseSuppression) {
+        std::string filterError;
+        if (ApplyMicrophoneNoiseSuppressionFilter(true, filterError)) {
+            micDebug += ", noise-suppression=enabled";
         } else {
-            micSourceDebug += ", noise-suppression=disabled";
+            micDebug += ", noise-suppression=unavailable (" + filterError + ")";
         }
+    } else {
+        micDebug += ", noise-suppression=disabled";
     }
+    return true;
+}
 
-    std::string blockerDebug = "disabled";
+bool LibObsRecorderEngine::SetupSceneAndChatBlocker(std::string& blockerDebug, std::string& error)
+{
+    blockerDebug = "disabled";
     void* blockerItem = nullptr;
 
     scene_ = api_->obs_scene_create("BeanScene");
     if (!scene_) {
         error = "Failed to create OBS scene.";
-        ReleaseObsObjects();
         return false;
     }
     api_->obs_scene_add(scene_, gameCaptureSource_);
@@ -1105,7 +1186,6 @@ bool LibObsRecorderEngine::StartRecording(const std::string& fileStem, std::stri
         auto* blockerSettings = api_->obs_data_create();
         if (!blockerSettings) {
             error = "Failed to create chat blocker settings.";
-            ReleaseObsObjects();
             return false;
         }
         std::filesystem::path blockerImagePath;
@@ -1119,7 +1199,6 @@ bool LibObsRecorderEngine::StartRecording(const std::string& fileStem, std::stri
             if (blockerImagePath.empty() || !std::filesystem::exists(blockerImagePath, customImageEc) || customImageEc) {
                 api_->obs_data_release(blockerSettings);
                 error = "Custom chat blocker image is missing. Pick a new image in Chat Privacy settings.";
-                ReleaseObsObjects();
                 return false;
             }
         } else {
@@ -1128,7 +1207,6 @@ bool LibObsRecorderEngine::StartRecording(const std::string& fileStem, std::stri
             if (!EnsureBlackPng(blockerImagePath, blockerImageError)) {
                 api_->obs_data_release(blockerSettings);
                 error = blockerImageError.empty() ? "Failed to create blocker image file." : blockerImageError;
-                ReleaseObsObjects();
                 return false;
             }
         }
@@ -1140,7 +1218,6 @@ bool LibObsRecorderEngine::StartRecording(const std::string& fileStem, std::stri
         api_->obs_data_release(blockerSettings);
         if (!chatBlockerSource_) {
             error = "Failed to create chat blocker image source.";
-            ReleaseObsObjects();
             return false;
         }
         blockerItem = api_->obs_scene_add(scene_, chatBlockerSource_);
@@ -1195,23 +1272,21 @@ bool LibObsRecorderEngine::StartRecording(const std::string& fileStem, std::stri
     if (blockerItem && api_->obs_sceneitem_set_order) {
         api_->obs_sceneitem_set_order(blockerItem, kObsOrderMoveTop);
     }
+    return true;
+}
 
-    void* sceneSource = api_->obs_scene_get_source(scene_);
-    if (!sceneSource) {
-        error = "Failed to get source from scene.";
-        ReleaseObsObjects();
-        return false;
-    }
-    api_->obs_set_output_source(0, sceneSource);
-    std::this_thread::sleep_for(kGameCaptureWarmupDelay);
-
+bool LibObsRecorderEngine::StartOutputWithEncoders(
+    const std::filesystem::path& outputPath,
+    const std::string& audioDebug,
+    const std::string& micDebug,
+    const std::string& blockerDebug,
+    std::string& error)
+{
+    error.clear();
     const bool useMp4 = (config_.containerFormat == "mp4");
-    const auto extension = useMp4 ? ".mp4" : ".mkv";
-    const auto outputPath = config_.outputDirectory / (fileStem + extension);
     auto* outputSettings = api_->obs_data_create();
     if (!outputSettings) {
         error = "Failed to allocate output settings.";
-        ReleaseObsObjects();
         return false;
     }
     const auto outputPathUtf8 = ToUtf8(outputPath);
@@ -1225,7 +1300,6 @@ bool LibObsRecorderEngine::StartRecording(const std::string& fileStem, std::stri
         if (!logSnippet.empty()) {
             error += " OBS: " + logSnippet;
         }
-        ReleaseObsObjects();
         return false;
     }
 
@@ -1236,7 +1310,6 @@ bool LibObsRecorderEngine::StartRecording(const std::string& fileStem, std::stri
     auto* audioEncSettings = api_->obs_data_create();
     if (!audioEncSettings) {
         error = "Failed to allocate audio encoder settings.";
-        ReleaseObsObjects();
         return false;
     }
     api_->obs_data_set_int(audioEncSettings, "bitrate", 160);
@@ -1248,7 +1321,6 @@ bool LibObsRecorderEngine::StartRecording(const std::string& fileStem, std::stri
         if (!logSnippet.empty()) {
             error += " OBS: " + logSnippet;
         }
-        ReleaseObsObjects();
         return false;
     }
 
@@ -1276,7 +1348,6 @@ bool LibObsRecorderEngine::StartRecording(const std::string& fileStem, std::stri
             auto* videoSettings = api_->obs_data_create();
             if (!videoSettings) {
                 error = "Failed to allocate video encoder settings.";
-                ReleaseObsObjects();
                 return false;
             }
             ApplyVideoEncoderSettings(
@@ -1301,12 +1372,16 @@ bool LibObsRecorderEngine::StartRecording(const std::string& fileStem, std::stri
             api_->obs_output_set_video_encoder(output_, videoEncoder_);
             if (api_->obs_output_start(output_)) {
                 recording_ = true;
-                lastStartDiagnostics_ = "audio=" + audioSourceDebug
-                    + ", microphone=" + micSourceDebug
+                lastStartDiagnostics_ = "audio=" + audioDebug
+                    + ", microphone=" + micDebug
                     + ", container=" + config_.containerFormat
                     + ", blocker=" + blockerDebug;
                 return true;
             }
+
+            // A failed start can still leave the output half-armed; stop it
+            // before swapping the encoder or the next attempt inherits it.
+            api_->obs_output_stop(output_);
 
             std::string attemptError;
             if (api_->obs_output_get_last_error) {
@@ -1336,7 +1411,6 @@ bool LibObsRecorderEngine::StartRecording(const std::string& fileStem, std::stri
     if (!logSnippet.empty()) {
         error += " OBS: " + logSnippet;
     }
-    ReleaseObsObjects();
     return false;
 }
 
@@ -1377,8 +1451,9 @@ bool LibObsRecorderEngine::SetMicrophoneNoiseSuppressionEnabled(bool enabled, st
 
 bool LibObsRecorderEngine::IsRecording() const
 {
-    std::scoped_lock lock(mutex_);
-    return recording_;
+    // Lock-free so the UI timer never stalls behind OBS setup. The warmup sleep
+    // no longer holds mutex_, but encoder creation can still take noticeable time.
+    return recording_.load(std::memory_order_acquire);
 }
 
 std::string LibObsRecorderEngine::GetLastStartDiagnostics() const
@@ -1480,10 +1555,22 @@ bool LibObsRecorderEngine::LoadObsApi(const std::filesystem::path& obsBinDir, st
 bool LibObsRecorderEngine::InitializeObsCore(const std::filesystem::path& obsRoot, std::string& error)
 {
     error.clear();
-    if (initialized_) {
-        return true;
+
+    // obs_startup and module loading are one-time and expensive. The video
+    // config, however, must be re-applied whenever resolution or FPS changed,
+    // which is why the caller re-Initializes before every recording.
+    if (!coreStarted_) {
+        if (!StartObsCore(obsRoot, error)) {
+            return false;
+        }
+        coreStarted_ = true;
     }
 
+    return ApplyVideoConfig(error);
+}
+
+bool LibObsRecorderEngine::StartObsCore(const std::filesystem::path& obsRoot, std::string& error)
+{
     ClearLastObsLogLine();
     obsRoot_ = obsRoot;
     SetDllDirectoryW(obsBinDir_.wstring().c_str());
@@ -1595,6 +1682,13 @@ bool LibObsRecorderEngine::InitializeObsCore(const std::filesystem::path& obsRoo
     api_->obs_post_load_modules();
     api_->obs_log_loaded_modules();
 
+    return true;
+}
+
+bool LibObsRecorderEngine::ApplyVideoConfig(std::string& error)
+{
+    error.clear();
+
     const auto d3d11Path = obsBinDir_ / "libobs-d3d11.dll";
     const auto openglPath = obsBinDir_ / "libobs-opengl.dll";
 
@@ -1605,6 +1699,13 @@ bool LibObsRecorderEngine::InitializeObsCore(const std::filesystem::path& obsRoo
     videoWidth_ = baseWidth;
     videoHeight_ = baseHeight;
     const uint32_t fps = static_cast<uint32_t>(config_.fps > 0 ? config_.fps : 60);
+
+    const AppliedVideoConfig desired{baseWidth, baseHeight, width, height, fps};
+    if (appliedVideoConfig_ == desired) {
+        // Already live with exactly this geometry; obs_reset_video would be a
+        // no-op at best and can fail outright while outputs are active.
+        return true;
+    }
 
     struct VideoAttempt {
         const char* moduleName;
@@ -1659,6 +1760,8 @@ bool LibObsRecorderEngine::InitializeObsCore(const std::filesystem::path& obsRoo
     if (videoResetResult != 0) {
         const auto logSnippet = GetRecentObsLogSnippet();
         api_->obs_shutdown();
+        coreStarted_ = false;
+        appliedVideoConfig_ = {};
         std::ostringstream os;
         os << "obs_reset_video failed (code " << videoResetResult
            << ", width " << width << ", height " << height << ", fps " << fps
@@ -1676,6 +1779,8 @@ bool LibObsRecorderEngine::InitializeObsCore(const std::filesystem::path& obsRoo
     if (!api_->obs_reset_audio(&ai)) {
         const auto logSnippet = GetRecentObsLogSnippet();
         api_->obs_shutdown();
+        coreStarted_ = false;
+        appliedVideoConfig_ = {};
         error = "obs_reset_audio failed.";
         if (!logSnippet.empty()) {
             error += " OBS: " + logSnippet;
@@ -1683,6 +1788,7 @@ bool LibObsRecorderEngine::InitializeObsCore(const std::filesystem::path& obsRoo
         return false;
     }
 
+    appliedVideoConfig_ = desired;
     return true;
 }
 
@@ -1820,6 +1926,8 @@ void LibObsRecorderEngine::ShutdownObsCore()
     }
     delete api_;
     api_ = nullptr;
+    coreStarted_ = false;
+    appliedVideoConfig_ = {};
     initialized_ = false;
     recording_ = false;
 }

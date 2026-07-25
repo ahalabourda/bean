@@ -54,6 +54,12 @@ class YouTubeUploader {
 public:
     using UploadProgressCallback = std::function<void(uint64_t bytesSent, uint64_t totalBytes, const std::string& phase)>;
 
+    // Cooperative cancel for the long-running auth poll and upload stream.
+    // Call RequestCancel() from the UI thread; the worker checks between waits.
+    static void RequestCancel();
+    static void ClearCancel();
+    static bool IsCancelRequested();
+
     static YouTubeAuthResult AuthorizeDesktop(HWND owner, const std::string& authServerUrl);
     static YouTubeUploadResult UploadVideo(
         const YouTubeCredentials& credentials,

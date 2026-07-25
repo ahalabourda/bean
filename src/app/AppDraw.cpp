@@ -32,30 +32,6 @@ bool IsConfigurationTabValid(const AppContext* ctx)
     return ctx && (ctx->outputAvailable || ctx->outputFolderWillBeCreatedOnRecordStart) && ctx->wowLogAvailable;
 }
 
-void DrawCheckOrXGlyph(HDC dc, const RECT& bounds, bool valid)
-{
-    const COLORREF indicatorColor = valid ? kColorSuccess : kColorFailure;
-    HPEN pen = CreatePen(PS_SOLID, 2, indicatorColor);
-    HGDIOBJ oldPen = pen ? SelectObject(dc, pen) : nullptr;
-    const int half = (bounds.right - bounds.left) / 2;
-    if (valid) {
-        MoveToEx(dc, bounds.left + 1, bounds.top + half, nullptr);
-        LineTo(dc, bounds.left + half - 1, bounds.bottom - 1);
-        LineTo(dc, bounds.right - 1, bounds.top + 1);
-    } else {
-        MoveToEx(dc, bounds.left, bounds.top, nullptr);
-        LineTo(dc, bounds.right, bounds.bottom);
-        MoveToEx(dc, bounds.left, bounds.bottom, nullptr);
-        LineTo(dc, bounds.right, bounds.top);
-    }
-    if (oldPen) {
-        SelectObject(dc, oldPen);
-    }
-    if (pen) {
-        DeleteObject(pen);
-    }
-}
-
 std::string BuildSpecIconKey(const std::string& className, const std::string& specName)
 {
     std::string classPart;
@@ -280,12 +256,9 @@ void PaintRecordingsHeader(HWND header, HDC hdc)
         }
     }
 
-    HPEN linePen = CreatePen(PS_SOLID, 1, kColorListGrid);
-    HGDIOBJ oldPen = nullptr;
-    if (linePen) {
-        oldPen = SelectObject(hdc, linePen);
-    }
-    if (linePen) {
+    EnsureThemeResources();
+    HGDIOBJ oldPen = gTheme.listGridPen ? SelectObject(hdc, gTheme.listGridPen) : nullptr;
+    if (gTheme.listGridPen) {
         const int columnCountForLines = static_cast<int>(SendMessageW(header, HDM_GETITEMCOUNT, 0, 0));
         for (int i = 0; i < columnCountForLines; ++i) {
             RECT cell{};
@@ -301,11 +274,33 @@ void PaintRecordingsHeader(HWND header, HDC hdc)
     if (oldPen) {
         SelectObject(hdc, oldPen);
     }
-    if (linePen) {
-        DeleteObject(linePen);
-    }
     if (oldFont) {
         SelectObject(hdc, oldFont);
+    }
+}
+
+} // namespace
+
+namespace {
+
+void DrawCheckOrXGlyph(HDC dc, const RECT& bounds, bool valid)
+{
+    EnsureThemeResources();
+    HPEN pen = valid ? gTheme.successPen : gTheme.failurePen;
+    HGDIOBJ oldPen = pen ? SelectObject(dc, pen) : nullptr;
+    const int half = (bounds.right - bounds.left) / 2;
+    if (valid) {
+        MoveToEx(dc, bounds.left + 1, bounds.top + half, nullptr);
+        LineTo(dc, bounds.left + half - 1, bounds.bottom - 1);
+        LineTo(dc, bounds.right - 1, bounds.top + 1);
+    } else {
+        MoveToEx(dc, bounds.left, bounds.top, nullptr);
+        LineTo(dc, bounds.right, bounds.bottom);
+        MoveToEx(dc, bounds.left, bounds.bottom, nullptr);
+        LineTo(dc, bounds.right, bounds.top);
+    }
+    if (oldPen) {
+        SelectObject(dc, oldPen);
     }
 }
 
@@ -343,6 +338,33 @@ void EnsureThemeResources()
     if (!gTheme.tooltipBrush) {
         gTheme.tooltipBrush = CreateSolidBrush(kColorTooltipBg);
     }
+    if (!gTheme.successPen) {
+        gTheme.successPen = CreatePen(PS_SOLID, 2, kColorSuccess);
+    }
+    if (!gTheme.failurePen) {
+        gTheme.failurePen = CreatePen(PS_SOLID, 2, kColorFailure);
+    }
+    if (!gTheme.listGridPen) {
+        gTheme.listGridPen = CreatePen(PS_SOLID, 1, kColorListGrid);
+    }
+    if (!gTheme.mutedDotPen) {
+        gTheme.mutedDotPen = CreatePen(PS_SOLID, 1, RGB(138, 151, 183));
+    }
+    if (!gTheme.recordingDotPen) {
+        gTheme.recordingDotPen = CreatePen(PS_SOLID, 1, RGB(255, 112, 130));
+    }
+    if (!gTheme.successBrush) {
+        gTheme.successBrush = CreateSolidBrush(kColorSuccess);
+    }
+    if (!gTheme.failureBrush) {
+        gTheme.failureBrush = CreateSolidBrush(kColorFailure);
+    }
+    if (!gTheme.mutedDotBrush) {
+        gTheme.mutedDotBrush = CreateSolidBrush(RGB(45, 53, 76));
+    }
+    if (!gTheme.recordingDotBrush) {
+        gTheme.recordingDotBrush = CreateSolidBrush(RGB(255, 112, 130));
+    }
 }
 
 void DestroyThemeResources()
@@ -357,6 +379,15 @@ void DestroyThemeResources()
     if (gTheme.panelSolidBrush) { DeleteObject(gTheme.panelSolidBrush); gTheme.panelSolidBrush = nullptr; }
     if (gTheme.panelBorderBrush) { DeleteObject(gTheme.panelBorderBrush); gTheme.panelBorderBrush = nullptr; }
     if (gTheme.tooltipBrush) { DeleteObject(gTheme.tooltipBrush); gTheme.tooltipBrush = nullptr; }
+    if (gTheme.successPen) { DeleteObject(gTheme.successPen); gTheme.successPen = nullptr; }
+    if (gTheme.failurePen) { DeleteObject(gTheme.failurePen); gTheme.failurePen = nullptr; }
+    if (gTheme.listGridPen) { DeleteObject(gTheme.listGridPen); gTheme.listGridPen = nullptr; }
+    if (gTheme.mutedDotPen) { DeleteObject(gTheme.mutedDotPen); gTheme.mutedDotPen = nullptr; }
+    if (gTheme.recordingDotPen) { DeleteObject(gTheme.recordingDotPen); gTheme.recordingDotPen = nullptr; }
+    if (gTheme.successBrush) { DeleteObject(gTheme.successBrush); gTheme.successBrush = nullptr; }
+    if (gTheme.failureBrush) { DeleteObject(gTheme.failureBrush); gTheme.failureBrush = nullptr; }
+    if (gTheme.mutedDotBrush) { DeleteObject(gTheme.mutedDotBrush); gTheme.mutedDotBrush = nullptr; }
+    if (gTheme.recordingDotBrush) { DeleteObject(gTheme.recordingDotBrush); gTheme.recordingDotBrush = nullptr; }
 }
 
 void DestroyParticipantSpecIcons(AppContext* ctx)
@@ -596,8 +627,9 @@ void DrawStyledButton(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
     else if (isTab) { fill = RGB(32, 38, 56); border = RGB(76, 94, 136); }
 
     SetBkMode(drawInfo->hDC, TRANSPARENT);
-    HBRUSH clearBrush = CreateSolidBrush(kColorPanelBottom);
-    if (clearBrush) { FillRect(drawInfo->hDC, &rc, clearBrush); DeleteObject(clearBrush); }
+    if (gTheme.panelSolidBrush) {
+        FillRect(drawInfo->hDC, &rc, gTheme.panelSolidBrush);
+    }
     const int cornerRadius = isTab ? 12 : (isLinkDisplay ? 6 : 9);
     HPEN borderPen = CreatePen(PS_SOLID, isActiveTab ? 2 : 1, border);
     HBRUSH fillBrush = CreateSolidBrush(fill);
@@ -617,29 +649,16 @@ void DrawStyledButton(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
     }
     SetTextColor(drawInfo->hDC, text);
     if (isLinkDisplay) {
-        const COLORREF indicatorColor = ctx && ctx->youtubeLinked ? kColorSuccess : kColorFailure;
         const int centerY = (rc.top + rc.bottom) / 2;
         const int indicatorLeft = rc.left + 12;
         const int indicatorSize = 11;
         const int half = indicatorSize / 2;
-        const int left = indicatorLeft;
-        const int top = centerY - half;
-        const int right = left + indicatorSize;
-        const int bottom = top + indicatorSize;
-        HPEN iconPen = CreatePen(PS_SOLID, 2, indicatorColor);
-        HGDIOBJ oldIconPen = iconPen ? SelectObject(drawInfo->hDC, iconPen) : nullptr;
-        if (ctx && ctx->youtubeLinked) {
-            MoveToEx(drawInfo->hDC, left + 1, top + half, nullptr);
-            LineTo(drawInfo->hDC, left + half - 1, bottom - 1);
-            LineTo(drawInfo->hDC, right - 1, top + 1);
-        } else {
-            MoveToEx(drawInfo->hDC, left, top, nullptr);
-            LineTo(drawInfo->hDC, right, bottom);
-            MoveToEx(drawInfo->hDC, left, bottom, nullptr);
-            LineTo(drawInfo->hDC, right, top);
-        }
-        if (oldIconPen) SelectObject(drawInfo->hDC, oldIconPen);
-        if (iconPen) DeleteObject(iconPen);
+        RECT glyphBounds{};
+        glyphBounds.left = indicatorLeft;
+        glyphBounds.top = centerY - half;
+        glyphBounds.right = indicatorLeft + indicatorSize;
+        glyphBounds.bottom = glyphBounds.top + indicatorSize;
+        DrawCheckOrXGlyph(drawInfo->hDC, glyphBounds, ctx && ctx->youtubeLinked);
         textRect.left += 34;
         textRect.right -= 8;
         DrawTextW(drawInfo->hDC, textBuffer, -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -671,9 +690,11 @@ void DrawStatusLight(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
     if (!drawInfo || !ctx) {
         return;
     }
+    EnsureThemeResources();
     RECT rc = drawInfo->rcItem;
-    HBRUSH clearBrush = CreateSolidBrush(kColorInputBg);
-    if (clearBrush) { FillRect(drawInfo->hDC, &rc, clearBrush); DeleteObject(clearBrush); }
+    if (gTheme.inputBrush) {
+        FillRect(drawInfo->hDC, &rc, gTheme.inputBrush);
+    }
     if (drawInfo->CtlID == IDC_WOW_WINDOW_ICON
         || drawInfo->CtlID == IDC_OBS_INSTALL_ICON
         || drawInfo->CtlID == IDC_FFMPEG_ICON
@@ -691,34 +712,32 @@ void DrawStatusLight(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
         } else {
             isValid = ctx->advancedCombatLoggingEnabled;
         }
-        const COLORREF indicatorColor = isValid ? RGB(80, 214, 142) : RGB(241, 100, 125);
         const int centerX = (rc.left + rc.right) / 2;
         const int centerY = (rc.top + rc.bottom) / 2;
         const int indicatorSize = 11;
         const int half = indicatorSize / 2;
-        const int left = centerX - half;
-        const int top = centerY - half;
-        const int right = centerX + half;
-        const int bottom = centerY + half;
-        HPEN pen = CreatePen(PS_SOLID, 2, indicatorColor);
-        HGDIOBJ oldPen = pen ? SelectObject(drawInfo->hDC, pen) : nullptr;
-        if (isValid) {
-            MoveToEx(drawInfo->hDC, left + 1, top + half, nullptr);
-            LineTo(drawInfo->hDC, left + half - 1, bottom - 1);
-            LineTo(drawInfo->hDC, right - 1, top + 1);
-        } else {
-            MoveToEx(drawInfo->hDC, left, top, nullptr);
-            LineTo(drawInfo->hDC, right, bottom);
-            MoveToEx(drawInfo->hDC, left, bottom, nullptr);
-            LineTo(drawInfo->hDC, right, top);
-        }
-        if (oldPen) SelectObject(drawInfo->hDC, oldPen);
-        if (pen) DeleteObject(pen);
+        RECT glyphBounds{};
+        glyphBounds.left = centerX - half;
+        glyphBounds.top = centerY - half;
+        glyphBounds.right = centerX + half;
+        glyphBounds.bottom = centerY + half;
+        DrawCheckOrXGlyph(drawInfo->hDC, glyphBounds, isValid);
         return;
     }
     const bool active = (drawInfo->CtlID == IDC_MONITOR_ICON) ? ctx->isMonitoring : ctx->isRecording;
-    const COLORREF dotColor = active ? ((drawInfo->CtlID == IDC_MONITOR_ICON) ? RGB(80, 214, 142) : RGB(255, 112, 130)) : RGB(138, 151, 183);
-    const COLORREF fillColor = active ? dotColor : RGB(45, 53, 76);
+    const bool isMonitor = drawInfo->CtlID == IDC_MONITOR_ICON;
+    HPEN pen = nullptr;
+    HBRUSH brush = nullptr;
+    if (active && isMonitor) {
+        pen = gTheme.successPen;
+        brush = gTheme.successBrush;
+    } else if (active) {
+        pen = gTheme.recordingDotPen;
+        brush = gTheme.recordingDotBrush;
+    } else {
+        pen = gTheme.mutedDotPen;
+        brush = gTheme.mutedDotBrush;
+    }
     const int width = rc.right - rc.left;
     const int height = rc.bottom - rc.top;
     const int diameter = (std::max)(6, (std::min)(10, (std::min)(width, height) - 2));
@@ -726,15 +745,11 @@ void DrawStatusLight(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
     const int top = rc.top + (height - diameter) / 2;
     const int right = left + diameter;
     const int bottom = top + diameter;
-    HPEN pen = CreatePen(PS_SOLID, 1, dotColor);
-    HBRUSH brush = CreateSolidBrush(fillColor);
     HGDIOBJ oldPen = pen ? SelectObject(drawInfo->hDC, pen) : nullptr;
     HGDIOBJ oldBrush = brush ? SelectObject(drawInfo->hDC, brush) : nullptr;
     Ellipse(drawInfo->hDC, left, top, right, bottom);
     if (oldBrush) SelectObject(drawInfo->hDC, oldBrush);
     if (oldPen) SelectObject(drawInfo->hDC, oldPen);
-    if (brush) DeleteObject(brush);
-    if (pen) DeleteObject(pen);
 }
 
 void DrawLengthValue(const DRAWITEMSTRUCT* drawInfo)
@@ -908,8 +923,8 @@ void DrawRecordingsGridLines(const NMLVCUSTOMDRAW* customDraw, const AppContext*
     if (!ListView_GetItemRect(ctx->recordingsList, 0, &firstRow, LVIR_BOUNDS)) {
         return;
     }
-    HPEN gridPen = CreatePen(PS_SOLID, 1, kColorListGrid);
-    HGDIOBJ oldPen = gridPen ? SelectObject(customDraw->nmcd.hdc, gridPen) : nullptr;
+    EnsureThemeResources();
+    HGDIOBJ oldPen = gTheme.listGridPen ? SelectObject(customDraw->nmcd.hdc, gTheme.listGridPen) : nullptr;
     for (int i = 0; i < itemCount; ++i) {
         RECT rowRect{};
         if (!ListView_GetItemRect(ctx->recordingsList, i, &rowRect, LVIR_BOUNDS)) {
@@ -931,7 +946,6 @@ void DrawRecordingsGridLines(const NMLVCUSTOMDRAW* customDraw, const AppContext*
         LineTo(customDraw->nmcd.hdc, x - 1, client.bottom);
     }
     if (oldPen) SelectObject(customDraw->nmcd.hdc, oldPen);
-    if (gridPen) DeleteObject(gridPen);
 }
 
 LRESULT CALLBACK RecordingsHeaderSubclassProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR refData)
@@ -965,30 +979,17 @@ void DrawYouTubeLinkStatus(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx
         return;
     }
     RECT rc = drawInfo->rcItem;
-    HBRUSH clearBrush = CreateSolidBrush(kColorPanelBottom);
-    if (clearBrush) { FillRect(drawInfo->hDC, &rc, clearBrush); DeleteObject(clearBrush); }
-    const bool linked = ctx->youtubeLinked;
-    const COLORREF indicatorColor = linked ? kColorSuccess : kColorFailure;
+    if (gTheme.panelSolidBrush) {
+        FillRect(drawInfo->hDC, &rc, gTheme.panelSolidBrush);
+    }
     const int centerX = (rc.left + rc.right) / 2;
     const int centerY = (rc.top + rc.bottom) / 2;
     const int indicatorSize = 11;
     const int half = indicatorSize / 2;
-    const int left = centerX - half;
-    const int top = centerY - half;
-    const int right = centerX + half;
-    const int bottom = centerY + half;
-    HPEN pen = CreatePen(PS_SOLID, 2, indicatorColor);
-    HGDIOBJ oldPen = pen ? SelectObject(drawInfo->hDC, pen) : nullptr;
-    if (linked) {
-        MoveToEx(drawInfo->hDC, left + 1, top + half, nullptr);
-        LineTo(drawInfo->hDC, left + half - 1, bottom - 1);
-        LineTo(drawInfo->hDC, right - 1, top + 1);
-    } else {
-        MoveToEx(drawInfo->hDC, left, top, nullptr);
-        LineTo(drawInfo->hDC, right, bottom);
-        MoveToEx(drawInfo->hDC, left, bottom, nullptr);
-        LineTo(drawInfo->hDC, right, top);
-    }
-    if (oldPen) SelectObject(drawInfo->hDC, oldPen);
-    if (pen) DeleteObject(pen);
+    RECT glyphBounds{};
+    glyphBounds.left = centerX - half;
+    glyphBounds.top = centerY - half;
+    glyphBounds.right = centerX + half;
+    glyphBounds.bottom = centerY + half;
+    DrawCheckOrXGlyph(drawInfo->hDC, glyphBounds, ctx->youtubeLinked);
 }

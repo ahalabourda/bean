@@ -238,6 +238,9 @@ TaskbarOverlayState ResolveTaskbarOverlayState(const AppContext* ctx)
     if (ctx->isRecording) {
         return TaskbarOverlayState::Recording;
     }
+    if (ctx->autoRecordFailed) {
+        return TaskbarOverlayState::Warning;
+    }
     const bool prerequisitesHealthy = ctx->wowWindowDetected && ctx->obsInstallDetected && ctx->ffmpegDetected;
     return prerequisitesHealthy ? TaskbarOverlayState::MonitoringReady : TaskbarOverlayState::Warning;
 }

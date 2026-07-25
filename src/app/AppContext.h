@@ -11,6 +11,7 @@
 #include <atomic>
 #include <array>
 #include <chrono>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -36,6 +37,7 @@ inline constexpr UINT WM_BEAN_CLIPS_UI_REFRESH = WM_APP + 105;
 inline constexpr UINT WM_BEAN_CLIPS_EXPORT_COMPLETE = WM_APP + 107;
 inline constexpr UINT WM_BEAN_UPDATE_AVAILABILITY_READY = WM_APP + 108;
 inline constexpr UINT WM_BEAN_CLIPS_MEDIA_EVENT = WM_APP + 109;
+inline constexpr UINT WM_BEAN_FFMPEG_PROBE_COMPLETE = WM_APP + 110;
 inline constexpr wchar_t kStatusLogFilePrefix[] = L"bean-status-log-";
 inline constexpr wchar_t kStatusLogFileExtension[] = L".txt";
 inline constexpr size_t kStatusLogRetentionCount = 5;
@@ -43,6 +45,11 @@ inline constexpr wchar_t kYouTubeOAuthCredentialsMissingMessage[] =
     L"YouTube auth server is unavailable. Please try again later.";
 inline constexpr UINT_PTR kLiveStatusTimerId = 1;
 inline constexpr UINT_PTR kClipsExportStatusTimerId = 2;
+inline constexpr UINT_PTR kConfigurationAutoSaveTimerId = 3;
+inline constexpr UINT_PTR kChatBlockerAutoSaveTimerId = 4;
+// Edit controls raise EN_CHANGE per keystroke. Coalesce them so typing a path
+// does not rewrite config.json and reconfigure the orchestrator per character.
+inline constexpr UINT kAutoSaveDebounceMs = 400;
 inline constexpr int kClipHotkeyId = 1;
 inline constexpr int kManualStartHotkeyId = 2;
 inline constexpr int kManualStopHotkeyId = 3;
@@ -90,6 +97,16 @@ struct VisualTheme {
     HBRUSH panelSolidBrush = nullptr;
     HBRUSH panelBorderBrush = nullptr;
     HBRUSH tooltipBrush = nullptr;
+    // Cached for owner-draw hot paths (status glyphs, list grids, dots).
+    HPEN successPen = nullptr;
+    HPEN failurePen = nullptr;
+    HPEN listGridPen = nullptr;
+    HPEN mutedDotPen = nullptr;
+    HPEN recordingDotPen = nullptr;
+    HBRUSH successBrush = nullptr;
+    HBRUSH failureBrush = nullptr;
+    HBRUSH mutedDotBrush = nullptr;
+    HBRUSH recordingDotBrush = nullptr;
 };
 
 struct MicrophoneOption {
@@ -103,6 +120,11 @@ enum class TaskbarOverlayState {
     Recording,
     Warning
 };
+
+// Set when mythic auto-start fails so the taskbar overlay shows Warning without
+// requiring the Status tab to be open. Cleared on a successful recording start
+// or when monitoring stops.
+inline constexpr char kAutoRecordFailedStatusPrefix[] = "AUTO-RECORD FAILED";
 
 struct AppIconSet {
     HICON smallIcon = nullptr;
@@ -396,6 +418,7 @@ struct AppContext {
     bool wowLogAvailable = false;
     bool isMonitoring = false;
     bool isRecording = false;
+    bool autoRecordFailed = false;
     bool wowWindowDetected = false;
     bool obsInstallDetected = false;
     bool ffmpegDetected = false;
@@ -411,6 +434,9 @@ struct AppContext {
     bool configurationAutoSaveArmed = false;
     bool outputFolderWillBeCreatedOnRecordStart = false;
     bool ffmpegCheckRequested = false;
+    // Probing ffmpeg means launching it, so it runs on a worker thread and
+    // reports back with WM_BEAN_FFMPEG_PROBE_COMPLETE.
+    std::atomic<bool> ffmpegProbeInFlight{false};
     std::optional<std::chrono::steady_clock::time_point> wowWindowLastCheckedAt;
     int detectedWowClientWidth = 0;
     int detectedWowClientHeight = 0;
@@ -492,6 +518,9 @@ struct AppContext {
     int clipsVideoSourceHeight = 0;
     std::ofstream statusLogStream;
     bool statusLogWriteFailed = false;
+    // Authoritative status tab lines. SetStatus appends here instead of
+    // reading the edit control back out and re-parsing it on every message.
+    std::deque<std::wstring> statusLines;
     enum class MainTab {
         Status,
         Configuration,

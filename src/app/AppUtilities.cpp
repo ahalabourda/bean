@@ -1,5 +1,7 @@
 #include "app/AppUtilities.h"
 
+#include "util/Strings.h"
+
 #include <wincodec.h>
 
 #include <algorithm>
@@ -12,19 +14,7 @@ namespace {
 
 std::wstring ToWideUtf8(const std::string& input)
 {
-    if (input.empty()) {
-        return {};
-    }
-    const int size = MultiByteToWideChar(CP_UTF8, 0, input.c_str(), -1, nullptr, 0);
-    if (size <= 0) {
-        return {};
-    }
-    std::wstring output(static_cast<size_t>(size), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, input.c_str(), -1, output.data(), size);
-    if (!output.empty() && output.back() == L'\0') {
-        output.pop_back();
-    }
-    return output;
+    return bean::util::ToWide(input);
 }
 
 std::string BuildSpecIconKey(const std::string& className, const std::string& specName)

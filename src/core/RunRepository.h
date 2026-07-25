@@ -35,21 +35,36 @@ struct RunRecord {
     std::vector<Participant> participants;
 };
 
+// Thread-safe. Holds one SQLite connection open for its lifetime rather than
+// reconnecting per call, which previously meant one open/close cycle per video
+// file every time the recordings list refreshed.
 class RunRepository {
 public:
     RunRepository();
     explicit RunRepository(std::filesystem::path dbPath);
+    ~RunRepository();
+
+    RunRepository(const RunRepository&) = delete;
+    RunRepository& operator=(const RunRepository&) = delete;
 
     bool Initialize(std::string& error);
     std::optional<RunRecord> GetRunByVideoPath(const std::filesystem::path& videoPath, std::string& error);
+
+    // Returns every stored run keyed by its video path. Preferred over calling
+    // GetRunByVideoPath in a loop when populating the recordings list.
+    std::vector<RunRecord> ListRuns(std::string& error);
+
     bool UpsertRun(const RunRecord& record, std::string& error);
     std::filesystem::path GetDatabasePath() const;
 
 private:
     bool EnsureInitialized(std::string& error);
+    std::optional<RunRecord> ReadRunByVideoPathLocked(const std::filesystem::path& videoPath, std::string& error);
 
     std::filesystem::path dbPath_;
     bool initialized_ = false;
+    // Opaque handle to the shared connection; guarded by mutex_.
+    void* db_ = nullptr;
     std::mutex mutex_;
 };
 

@@ -1,5 +1,7 @@
 #include "core/RecordingOrchestrator.h"
 
+#include "core/WowData.h"
+
 #include <windows.h>
 
 #include <algorithm>
@@ -262,21 +264,6 @@ std::string BuildWatcherDebugStatus(const log::CombatLogWatcher::DebugSnapshot& 
     return os.str();
 }
 
-std::string DungeonNameForChallengeMap(int challengeMapId)
-{
-    switch (challengeMapId) {
-    case 161: return "Skyreach";
-    case 239: return "Seat of the Triumvirate";
-    case 402: return "Algeth'ar Academy";
-    case 556: return "Pit of Saron";
-    case 557: return "Windrunner Spire";
-    case 558: return "Magisters' Terrace";
-    case 559: return "Nexus-Point Xenas";
-    case 560: return "Maisara Caverns";
-    default: return {};
-    }
-}
-
 std::string BuildFileToken(std::string value, const std::string& fallback)
 {
     std::string token;
@@ -292,19 +279,6 @@ std::string BuildFileToken(std::string value, const std::string& fallback)
 const char* BoolLabel(bool value)
 {
     return value ? "yes" : "no";
-}
-
-const char* AudioCaptureScopeLabel(AppSettings::AudioCaptureScope scope)
-{
-    switch (scope) {
-    case AppSettings::AudioCaptureScope::WowAndDiscord:
-        return "wow+discord";
-    case AppSettings::AudioCaptureScope::AllDesktop:
-        return "all-desktop";
-    case AppSettings::AudioCaptureScope::WowOnly:
-    default:
-        return "wow-only";
-    }
 }
 
 const char* ToString(RecordingStartReason reason)
@@ -356,7 +330,7 @@ RecordingOrchestrator::~RecordingOrchestrator()
 
 void RecordingOrchestrator::SetStatusCallback(StatusCallback callback)
 {
-    std::scoped_lock lock(mutex_);
+    std::scoped_lock lock(statusCallbackMutex_);
     statusCallback_ = std::move(callback);
 }
 
@@ -417,6 +391,8 @@ bool RecordingOrchestrator::StartMonitoring(std::string& error)
 
     RecoverClipJournal();
 
+    // Start the consumer before the producer so no line is dropped.
+    StartCombatLogWorker();
     if (!watcher_.Start([this](const std::string& line) { HandleCombatLogLine(line); }, error)) {
         PushStatus("Monitoring start failed: " + error);
         return false;
@@ -430,8 +406,13 @@ bool RecordingOrchestrator::StartMonitoring(std::string& error)
 
 void RecordingOrchestrator::StopMonitoring()
 {
-    std::scoped_lock lock(mutex_);
+    // Shut the producer and consumer down *before* taking mutex_. Both threads
+    // can be mid-callback needing that lock, and joining them while holding it
+    // would deadlock.
     watcher_.Stop();
+    StopCombatLogWorker();
+
+    std::scoped_lock lock(mutex_);
     ResetMythicTrackingState();
     if (state_ == OrchestratorState::Armed) {
         state_ = OrchestratorState::Idle;
@@ -456,9 +437,9 @@ void RecordingOrchestrator::ResetMythicTrackingState()
 
 bool RecordingOrchestrator::StartManualRecording(std::string& error)
 {
-    std::scoped_lock lock(mutex_);
+    std::unique_lock lock(mutex_);
     ResetMythicTrackingState();
-    return StartRecordingInternal(RecordingStartReason::Manual, error);
+    return StartRecordingInternal(RecordingStartReason::Manual, error, lock);
 }
 
 bool RecordingOrchestrator::StopManualRecording(std::string& error)
@@ -502,7 +483,17 @@ bool RecordingOrchestrator::RequestClip(std::string& error)
 
 void RecordingOrchestrator::Tick()
 {
-    std::scoped_lock lock(mutex_);
+    // Called from the UI timer, so it must never block. StartRecordingInternal
+    // releases mutex_ while OBS warms up, so try_lock usually succeeds; the
+    // recordingStartInProgress_ flag covers that window instead.
+    std::unique_lock lock(mutex_, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        return;
+    }
+    if (recordingStartInProgress_) {
+        return;
+    }
+
     const auto now = std::chrono::steady_clock::now();
     const auto nowWallClock = std::chrono::system_clock::now();
 
@@ -623,7 +614,66 @@ bool RecordingOrchestrator::IsMonitoring() const
 
 void RecordingOrchestrator::HandleCombatLogLine(const std::string& line)
 {
-    std::scoped_lock lock(mutex_);
+    // Runs on the watcher thread. Hand the line off and return immediately:
+    // processing it can start a recording, which takes seconds, and stalling
+    // the watcher means log lines queue up behind it unread.
+    {
+        std::scoped_lock queueLock(combatLogQueueMutex_);
+        if (combatLogWorkerStopRequested_) {
+            return;
+        }
+        combatLogQueue_.push_back(line);
+    }
+    combatLogQueueCv_.notify_one();
+}
+
+void RecordingOrchestrator::CombatLogWorkerLoop()
+{
+    for (;;) {
+        std::string line;
+        {
+            std::unique_lock queueLock(combatLogQueueMutex_);
+            combatLogQueueCv_.wait(queueLock, [this]() {
+                return combatLogWorkerStopRequested_ || !combatLogQueue_.empty();
+            });
+            if (combatLogWorkerStopRequested_) {
+                return;
+            }
+            line = std::move(combatLogQueue_.front());
+            combatLogQueue_.pop_front();
+        }
+        ProcessCombatLogLine(line);
+    }
+}
+
+void RecordingOrchestrator::StartCombatLogWorker()
+{
+    std::scoped_lock queueLock(combatLogQueueMutex_);
+    combatLogWorkerStopRequested_ = false;
+    combatLogQueue_.clear();
+    if (!combatLogWorker_.joinable()) {
+        combatLogWorker_ = std::thread([this]() { CombatLogWorkerLoop(); });
+    }
+}
+
+void RecordingOrchestrator::StopCombatLogWorker()
+{
+    // Must not be called while holding mutex_: the worker takes mutex_ inside
+    // ProcessCombatLogLine, so joining it under that lock would deadlock.
+    {
+        std::scoped_lock queueLock(combatLogQueueMutex_);
+        combatLogWorkerStopRequested_ = true;
+        combatLogQueue_.clear();
+    }
+    combatLogQueueCv_.notify_all();
+    if (combatLogWorker_.joinable()) {
+        combatLogWorker_.join();
+    }
+}
+
+void RecordingOrchestrator::ProcessCombatLogLine(const std::string& line)
+{
+    std::unique_lock lock(mutex_);
     lastCombatLogLineAt_ = std::chrono::steady_clock::now();
     lastCombatLogLineAtWallClock_ = std::chrono::system_clock::now();
     const auto participantsBeforeProcessingLine = detector_.GetParticipants();
@@ -657,7 +707,13 @@ void RecordingOrchestrator::HandleCombatLogLine(const std::string& line)
                 break;
             }
         }
-        StartRecordingInternal(RecordingStartReason::MythicStart, error);
+        if (!StartRecordingInternal(RecordingStartReason::MythicStart, error, lock)) {
+            // This is the moment the whole app exists for. A failure here is
+            // otherwise invisible until the player finds no video afterwards.
+            PushStatus("AUTO-RECORD FAILED for detected mythic start: "
+                + (error.empty() ? std::string("unknown error") : error));
+            break;
+        }
         if (activeRecordingMetadata_.has_value() && event->mapName.has_value() && !event->mapName->empty()) {
             activeRecordingMetadata_->observedDungeonName = *event->mapName;
         }
@@ -719,9 +775,16 @@ void RecordingOrchestrator::HandleCombatLogLine(const std::string& line)
     }
 }
 
-bool RecordingOrchestrator::StartRecordingInternal(RecordingStartReason reason, std::string& error)
+bool RecordingOrchestrator::StartRecordingInternal(
+    RecordingStartReason reason,
+    std::string& error,
+    std::unique_lock<std::mutex>& lock)
 {
-    if (engine_->IsRecording()) {
+    if (!lock.owns_lock()) {
+        error = "Internal error: StartRecordingInternal called without lock.";
+        return false;
+    }
+    if (recordingStartInProgress_ || engine_->IsRecording()) {
         error = "Already recording.";
         return false;
     }
@@ -736,21 +799,48 @@ bool RecordingOrchestrator::StartRecordingInternal(RecordingStartReason reason, 
     observedCombatLogFile_.reset();
     observedCombatLogWriteTime_.reset();
 
-    // Reinitialize before every recording so setting changes made while monitoring
-    // is already armed (for example audio capture scope) are applied immediately.
+    // Snapshot everything the unlocked engine calls need. Settings must not be
+    // read again after the unlock, because ApplySettings can mutate them.
     auto recordingConfig = ToRecordingConfig(settings_);
+    const auto fileStem = BuildFileStem(reason);
+    const int selectedHeight = settings_.recordingResolutionHeight;
+    const bool useMp4 = settings_.videoContainer == "mp4";
+    const auto outputDirectory = settings_.outputDirectory;
+    const auto challengeMapId = lastChallengeMapId_;
+    const auto keystoneLevel = lastKeystoneLevel_;
+    const auto participants = detector_.GetParticipants();
+    const bool mythicRunActive = mythicRunStartedAt_.has_value();
+
     PushStatus(
         "Recording video output: " + std::to_string(recordingConfig.width)
         + "x" + std::to_string(recordingConfig.height)
-        + " (selected height=" + std::to_string(settings_.recordingResolutionHeight) + ")");
-    if (!engine_->Initialize(recordingConfig, error)) {
+        + " (selected height=" + std::to_string(selectedHeight) + ")");
+
+    recordingStartInProgress_ = true;
+    lock.unlock();
+
+    // Reinitialize before every recording so setting changes made while monitoring
+    // is already armed (for example audio capture scope) are applied immediately.
+    bool initialized = engine_->Initialize(recordingConfig, error);
+    bool started = false;
+    if (initialized) {
+        started = engine_->StartRecording(fileStem, error);
+    }
+
+    lock.lock();
+    recordingStartInProgress_ = false;
+
+    if (!initialized) {
         PushStatus("Initialize failed: " + error);
         return false;
     }
-
-    const auto fileStem = BuildFileStem(reason);
-    if (!engine_->StartRecording(fileStem, error)) {
+    if (!started) {
         PushStatus("Start recording failed: " + error);
+        return false;
+    }
+    if (!engine_->IsRecording()) {
+        error = "Recording stopped unexpectedly during start.";
+        PushStatus(error);
         return false;
     }
 
@@ -758,15 +848,14 @@ bool RecordingOrchestrator::StartRecordingInternal(RecordingStartReason reason, 
     state_ = OrchestratorState::Recording;
     ActiveRecordingMetadata metadata;
     metadata.triggerReason = reason;
-    const bool useMp4 = settings_.videoContainer == "mp4";
     const auto extension = useMp4 ? ".mp4" : ".mkv";
-    metadata.videoPath = settings_.outputDirectory / (fileStem + extension);
+    metadata.videoPath = outputDirectory / (fileStem + extension);
     metadata.recordingStartedAt = std::chrono::system_clock::now();
     metadata.recordingStartedAtSteady = std::chrono::steady_clock::now();
-    metadata.challengeMapId = lastChallengeMapId_;
-    metadata.keystoneLevel = lastKeystoneLevel_;
-    metadata.participants = detector_.GetParticipants();
-    if (mythicRunStartedAt_.has_value()) {
+    metadata.challengeMapId = challengeMapId;
+    metadata.keystoneLevel = keystoneLevel;
+    metadata.participants = participants;
+    if (mythicRunActive) {
         metadata.mythicRunStartedAt = std::chrono::system_clock::now();
     }
     activeRecordingMetadata_ = std::move(metadata);
@@ -898,10 +987,6 @@ bool RecordingOrchestrator::AppendClipJournalRequest(
     std::filesystem::create_directories(ClipJournalPath().parent_path(), ec);
     if (ec) {
         error = "Unable to create clip journal folder: " + ec.message();
-        return false;
-    }
-    if (ec) {
-        error = "Unable to create output folder: " + ec.message();
         return false;
     }
     std::ofstream stream(ClipJournalPath(), std::ios::app);
@@ -1339,8 +1424,17 @@ std::string RecordingOrchestrator::BuildFileStem(RecordingStartReason reason) co
 
 void RecordingOrchestrator::PushStatus(const std::string& status) const
 {
-    if (statusCallback_) {
-        statusCallback_(status);
+    // Copy under the lock and invoke outside it. The trim worker calls this from
+    // a background thread, so reading statusCallback_ directly would race with
+    // SetStatusCallback, and holding the lock during the callback would let UI
+    // code re-enter the orchestrator.
+    StatusCallback callback;
+    {
+        std::scoped_lock lock(statusCallbackMutex_);
+        callback = statusCallback_;
+    }
+    if (callback) {
+        callback(status);
     }
 }
 

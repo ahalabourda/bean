@@ -1,6 +1,7 @@
 #include "core/RecordingOrchestrator.h"
 #include "core/RunRepository.h"
 #include "core/SettingsStore.h"
+#include "integrations/YouTubeUploader.h"
 #include "log/CombatLogWatcher.h"
 #include "log/MythicRunDetector.h"
 #include "obs/MockRecorderEngine.h"
@@ -60,6 +61,14 @@ void AppendLine(const std::filesystem::path& file, const std::string& line)
     out << line << "\n";
 }
 
+// Appends raw bytes with no trailing newline, simulating WoW flushing a buffer
+// that happens to end in the middle of a line.
+void AppendRaw(const std::filesystem::path& file, const std::string& text)
+{
+    std::ofstream out(file, std::ios::app | std::ios::binary);
+    out << text;
+}
+
 void TestResolveSpecInfo()
 {
     const auto monk = bean::log::ResolveSpecInfo(268);
@@ -103,6 +112,18 @@ void TestMockRecorderEnginePublicMethods()
     const bool stopped = engine.StopRecording(error);
     Expect(stopped, "StopRecording should succeed while recording.");
     Expect(!engine.IsRecording(), "Engine should report not recording after StopRecording.");
+
+    engine.SetFailNextStart("injected start failure");
+    Expect(engine.Initialize(config, error), "Re-initialize after stop should succeed.");
+    Expect(!engine.StartRecording("fail-me", error), "Injected start failure should fail StartRecording.");
+    Expect(error.find("injected start failure") != std::string::npos, "Injected start failure should surface its message.");
+    Expect(!engine.IsRecording(), "Engine should not be recording after injected start failure.");
+
+    engine.SetRequireWowWindow(true);
+    engine.SetWowWindowPresent(false);
+    Expect(!engine.StartRecording("no-wow", error), "Missing WoW window should fail when required.");
+    Expect(error.find("World of Warcraft") != std::string::npos, "Missing WoW failure should mention the game.");
+    engine.ClearInjectedFailures();
 }
 
 void TestSettingsStoreLoadSaveAndConversion()
@@ -282,6 +303,146 @@ void TestCombatLogWatcherPublicMethods()
     Expect(!watcher.IsRunning(), "Watcher should stop after Stop.");
 }
 
+// Regression: a read that lands mid-line used to drop that line entirely and
+// then deliver its tail as though it were a whole line.
+void TestCombatLogWatcherHandlesPartialLines()
+{
+    const auto dir = MakeTempDir("watcher-partial-line");
+    const auto file = dir / "WoWCombatLog-010101_000000.txt";
+    {
+        std::ofstream seed(file, std::ios::trunc | std::ios::binary);
+        seed << "seed line\n";
+    }
+
+    bean::log::CombatLogWatcher watcher;
+    watcher.SetLogDirectory(dir);
+
+    std::mutex linesMutex;
+    std::vector<std::string> seenLines;
+    std::string error;
+    const bool started = watcher.Start([&](const std::string& line) {
+        std::scoped_lock lock(linesMutex);
+        seenLines.push_back(line);
+    }, error);
+    Expect(started, "Partial-line watcher should start.");
+
+    Expect(WaitUntil([&]() {
+        return watcher.GetDebugSnapshot().activeFile == file;
+    }, std::chrono::seconds(5)), "Partial-line watcher should latch the log file.");
+
+    // Write the first half of an event and give the watcher time to see it.
+    AppendRaw(file, "6/19/2026 21:00:00.000-7  CHALLENGE_MODE_ST");
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    {
+        std::scoped_lock lock(linesMutex);
+        Expect(seenLines.empty(), "An incomplete line must not be delivered.");
+    }
+
+    // Complete it. The full line must arrive exactly once, intact.
+    AppendRaw(file, "ART,402,10\n");
+
+    Expect(WaitUntil([&]() {
+        std::scoped_lock lock(linesMutex);
+        return !seenLines.empty();
+    }, std::chrono::seconds(5)), "Completed line should be delivered.");
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    watcher.Stop();
+
+    std::scoped_lock lock(linesMutex);
+    Expect(seenLines.size() == 1, "Exactly one line should be delivered for one newline.");
+    if (!seenLines.empty()) {
+        Expect(
+            seenLines.front() == "6/19/2026 21:00:00.000-7  CHALLENGE_MODE_START,402,10",
+            "Reassembled line should match what was written, not a fragment.");
+    }
+}
+
+// Regression: a new log appearing mid-session (game crash and relaunch) must be
+// picked up, and must be read from the start rather than tailed from the end.
+void TestCombatLogWatcherFollowsNewLogFile()
+{
+    const auto dir = MakeTempDir("watcher-log-rotation");
+    const auto firstFile = dir / "WoWCombatLog-010101_000000.txt";
+    {
+        std::ofstream seed(firstFile, std::ios::trunc | std::ios::binary);
+        seed << "old session line\n";
+    }
+
+    bean::log::CombatLogWatcher watcher;
+    watcher.SetLogDirectory(dir);
+
+    std::mutex linesMutex;
+    std::vector<std::string> seenLines;
+    std::string error;
+    Expect(watcher.Start([&](const std::string& line) {
+        std::scoped_lock lock(linesMutex);
+        seenLines.push_back(line);
+    }, error), "Rotation watcher should start.");
+
+    Expect(WaitUntil([&]() {
+        return watcher.GetDebugSnapshot().activeFile == firstFile;
+    }, std::chrono::seconds(5)), "Rotation watcher should latch the first log.");
+
+    AppendLine(firstFile, "line before crash");
+    Expect(WaitUntil([&]() {
+        std::scoped_lock lock(linesMutex);
+        return seenLines.size() == 1;
+    }, std::chrono::seconds(5)), "Line from the first log should be delivered.");
+
+    // Simulate the relaunch: a newer log file appears with content already in it.
+    const auto secondFile = dir / "WoWCombatLog-010101_000001.txt";
+    {
+        std::ofstream fresh(secondFile, std::ios::trunc | std::ios::binary);
+        fresh << "line after relaunch\n";
+    }
+
+    Expect(WaitUntil([&]() {
+        return watcher.GetDebugSnapshot().activeFile == secondFile;
+    }, std::chrono::seconds(10)), "Watcher should switch to the newly created log.");
+
+    Expect(WaitUntil([&]() {
+        std::scoped_lock lock(linesMutex);
+        return std::find(seenLines.begin(), seenLines.end(), "line after relaunch") != seenLines.end();
+    }, std::chrono::seconds(5)), "New log should be read from the start, not tailed.");
+
+    watcher.Stop();
+}
+
+// Regression: an interrupted Save must never leave a truncated config behind,
+// and a completed Save must be durable.
+void TestSettingsStoreAtomicSave()
+{
+    const auto appData = MakeTempDir("settings-atomic-appdata");
+    _putenv_s("APPDATA", appData.string().c_str());
+
+    bean::core::SettingsStore store;
+    const auto configPath = store.GetConfigPath();
+
+    bean::core::AppSettings settings;
+    settings.outputDirectory = MakeTempDir("settings-atomic-output");
+    settings.fps = 90;
+
+    std::string error;
+    Expect(store.Save(settings, error), "First atomic save should succeed.");
+    Expect(std::filesystem::exists(configPath), "Config file should exist after save.");
+
+    auto tempPath = configPath;
+    tempPath += L".tmp";
+    Expect(!std::filesystem::exists(tempPath), "Temp file should not survive a successful save.");
+
+    settings.fps = 30;
+    Expect(store.Save(settings, error), "Second atomic save should succeed.");
+
+    auto backupPath = configPath;
+    backupPath += L".bak";
+    Expect(std::filesystem::exists(backupPath), "Second save should leave a recoverable backup.");
+
+    bean::core::AppSettings reloaded;
+    Expect(store.Load(reloaded, error), "Load after atomic save should succeed.");
+    Expect(reloaded.fps == 30, "Reloaded settings should reflect the latest save.");
+}
+
 void TestRecordingOrchestratorPublicMethods()
 {
     auto engine = std::make_unique<bean::obs::MockRecorderEngine>();
@@ -360,6 +521,52 @@ void TestRecordingOrchestratorPublicMethods()
     Expect(hasStopStatus, "Status callback should include recording stop status.");
 }
 
+void TestRecordingOrchestratorReportsStartFailure()
+{
+    auto engine = std::make_unique<bean::obs::MockRecorderEngine>();
+    auto* mock = engine.get();
+    mock->SetFailNextStart("encoder unavailable");
+
+    bean::core::RecordingOrchestrator orchestrator(std::move(engine));
+    bean::core::AppSettings settings;
+    settings.outputDirectory = MakeTempDir("orchestrator-fail-output");
+    settings.wowLogDirectory = MakeTempDir("orchestrator-fail-logs");
+    settings.videoContainer = "mkv";
+    orchestrator.ApplySettings(settings);
+
+    std::mutex statusMutex;
+    std::vector<std::string> statuses;
+    orchestrator.SetStatusCallback([&](const std::string& status) {
+        std::scoped_lock lock(statusMutex);
+        statuses.push_back(status);
+    });
+
+    std::string error;
+    Expect(!orchestrator.StartManualRecording(error), "Manual start should fail when the engine rejects StartRecording.");
+    Expect(error.find("encoder unavailable") != std::string::npos, "Manual start error should include the engine message.");
+    Expect(orchestrator.GetState() != bean::core::OrchestratorState::Recording,
+        "Failed start must not leave the orchestrator in Recording.");
+
+    const bool hasFailureStatus = [&]() {
+        std::scoped_lock lock(statusMutex);
+        return std::any_of(statuses.begin(), statuses.end(), [](const std::string& status) {
+            return status.find("Start recording failed") != std::string::npos
+                || status.find("encoder unavailable") != std::string::npos;
+        });
+    }();
+    Expect(hasFailureStatus, "Status callback should report the failed start.");
+}
+
+void TestYouTubeCancelFlag()
+{
+    bean::integrations::YouTubeUploader::ClearCancel();
+    Expect(!bean::integrations::YouTubeUploader::IsCancelRequested(), "Cancel flag should be clear after ClearCancel.");
+    bean::integrations::YouTubeUploader::RequestCancel();
+    Expect(bean::integrations::YouTubeUploader::IsCancelRequested(), "Cancel flag should be set after RequestCancel.");
+    bean::integrations::YouTubeUploader::ClearCancel();
+    Expect(!bean::integrations::YouTubeUploader::IsCancelRequested(), "Cancel flag should be clear again after ClearCancel.");
+}
+
 } // namespace
 
 int main()
@@ -367,9 +574,14 @@ int main()
     TestResolveSpecInfo();
     TestMockRecorderEnginePublicMethods();
     TestSettingsStoreLoadSaveAndConversion();
+    TestSettingsStoreAtomicSave();
     TestRunRepositoryPublicMethods();
     TestCombatLogWatcherPublicMethods();
+    TestCombatLogWatcherHandlesPartialLines();
+    TestCombatLogWatcherFollowsNewLogFile();
     TestRecordingOrchestratorPublicMethods();
+    TestRecordingOrchestratorReportsStartFailure();
+    TestYouTubeCancelFlag();
 
     if (gFailures == 0) {
         std::cout << "All core public API tests passed.";

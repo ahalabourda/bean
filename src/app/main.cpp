@@ -6,8 +6,17 @@
 #include "app/AppStatusLog.h"
 #include "app/AppUtilities.h"
 #include "app/BeanUpdater.h"
+#include "core/GameEnvironment.h"
+#include "core/WowData.h"
+#include "obs/IRecorderEngine.h"
 #include "integrations/YouTubeUploader.h"
+#if defined(BEAN_ENABLE_LIBOBS) && BEAN_ENABLE_LIBOBS
 #include "obs/LibObsRecorderEngine.h"
+#else
+#include "obs/MockRecorderEngine.h"
+#endif
+#include "util/Json.h"
+#include "util/Strings.h"
 #include "bean_version.h"
 
 #include <windows.h>
@@ -63,39 +72,9 @@ std::wstring MainWindowTitleText()
     return std::wstring(kWindowTitleBase) + std::wstring(L" - ") + VersionText();
 }
 
-std::wstring ToWide(const std::string& input)
-{
-    if (input.empty()) {
-        return {};
-    }
-    const int size = MultiByteToWideChar(CP_UTF8, 0, input.c_str(), -1, nullptr, 0);
-    if (size <= 0) {
-        return {};
-    }
-    std::wstring output(static_cast<size_t>(size), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, input.c_str(), -1, output.data(), size);
-    if (!output.empty() && output.back() == L'\0') {
-        output.pop_back();
-    }
-    return output;
-}
-
-std::string ToUtf8(const std::wstring& input)
-{
-    if (input.empty()) {
-        return {};
-    }
-    const int size = WideCharToMultiByte(CP_UTF8, 0, input.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (size <= 0) {
-        return {};
-    }
-    std::string output(static_cast<size_t>(size), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, input.c_str(), -1, output.data(), size, nullptr, nullptr);
-    if (!output.empty() && output.back() == '\0') {
-        output.pop_back();
-    }
-    return output;
-}
+using bean::util::ToUtf8;
+using bean::util::ToWide;
+using bean::util::Trim;
 
 std::wstring GetWindowTextString(HWND hwnd)
 {
@@ -108,9 +87,6 @@ std::wstring GetWindowTextString(HWND hwnd)
 
 bool DirectoryExists(const std::wstring& path);
 std::string GetEnvString(const char* name);
-std::string Trim(std::string value);
-std::vector<std::filesystem::path> EnumerateDriveRootsStartingAtC();
-bool ResolveObsInstallRootForUi(std::filesystem::path& root);
 
 void UpdateTransparentStaticText(HWND control, const wchar_t* newText)
 {
@@ -791,7 +767,18 @@ bool IsFfmpegExecutableRunnable(const std::filesystem::path& executablePath)
         return false;
     }
 
-    WaitForSingleObject(processInfo.hProcess, INFINITE);
+    // Bounded wait: "ffmpeg -version" is near-instant, and a hung binary must
+    // not pin the probe thread forever.
+    constexpr DWORD kProbeTimeoutMs = 5000;
+    const DWORD waitResult = WaitForSingleObject(processInfo.hProcess, kProbeTimeoutMs);
+    if (waitResult != WAIT_OBJECT_0) {
+        TerminateProcess(processInfo.hProcess, 1);
+        WaitForSingleObject(processInfo.hProcess, 1000);
+        CloseHandle(processInfo.hThread);
+        CloseHandle(processInfo.hProcess);
+        return false;
+    }
+
     DWORD exitCode = 1;
     const BOOL gotExitCode = GetExitCodeProcess(processInfo.hProcess, &exitCode);
     CloseHandle(processInfo.hThread);
@@ -916,31 +903,7 @@ void RefreshClipsSourceList(AppContext* ctx)
         return;
     }
 
-    std::vector<std::filesystem::path> files;
-    std::error_code ec;
-    for (const auto& entry : std::filesystem::directory_iterator(folderPath, ec)) {
-        if (ec) {
-            break;
-        }
-        if (!entry.is_regular_file()) {
-            continue;
-        }
-        const auto ext = entry.path().extension().wstring();
-        if (_wcsicmp(ext.c_str(), L".mp4") != 0 && _wcsicmp(ext.c_str(), L".mkv") != 0) {
-            continue;
-        }
-        files.push_back(entry.path());
-    }
-    std::sort(files.begin(), files.end(), [](const auto& a, const auto& b) {
-        std::error_code aEc;
-        std::error_code bEc;
-        const auto aTime = std::filesystem::last_write_time(a, aEc);
-        const auto bTime = std::filesystem::last_write_time(b, bEc);
-        if (!aEc && !bEc) {
-            return aTime > bTime;
-        }
-        return a.filename().wstring() < b.filename().wstring();
-    });
+    const std::vector<std::filesystem::path> files = EnumerateRecordingMediaFiles(folderPath);
 
     int restoreSelectionIndex = -1;
     for (size_t i = 0; i < files.size(); ++i) {
@@ -1456,47 +1419,11 @@ std::vector<MicrophoneOption> EnumerateMicrophoneOptions()
 void RefreshMicrophoneOptionsUi(AppContext* ctx);
 void RefreshMicrophoneDeviceOptionsUi(AppContext* ctx);
 
-std::string Trim(std::string value)
-{
-    const auto begin = value.find_first_not_of(" \t\r\n");
-    if (begin == std::string::npos) {
-        return {};
-    }
-    const auto end = value.find_last_not_of(" \t\r\n");
-    return value.substr(begin, end - begin + 1);
-}
-
 std::string ReadQuotedJson(const std::string& content, const std::string& key)
 {
-    const std::string marker = "\"" + key + "\"";
-    const auto keyPos = content.find(marker);
-    if (keyPos == std::string::npos) {
-        return {};
-    }
-    const auto colonPos = content.find(':', keyPos + marker.size());
-    if (colonPos == std::string::npos) {
-        return {};
-    }
-    const auto firstQuote = content.find('"', colonPos + 1);
-    if (firstQuote == std::string::npos) {
-        return {};
-    }
-    bool escape = false;
-    for (size_t i = firstQuote + 1; i < content.size(); ++i) {
-        const char ch = content[i];
-        if (escape) {
-            escape = false;
-            continue;
-        }
-        if (ch == '\\') {
-            escape = true;
-            continue;
-        }
-        if (ch == '"') {
-            return content.substr(firstQuote + 1, i - firstQuote - 1);
-        }
-    }
-    return {};
+    // Now unescapes, which the local copy this replaced did not. Values with a
+    // backslash previously came back with the escape sequence still in them.
+    return bean::util::ReadJsonString(content, key);
 }
 
 std::string GetEnvString(const char* name)
@@ -1823,292 +1750,39 @@ bool StartsWith(const std::wstring& value, const std::wstring& prefix)
     return value.size() >= prefix.size() && value.compare(0, prefix.size(), prefix) == 0;
 }
 
-bool IsWarcraftRecorderProcessToken(const std::wstring& value)
+struct FfmpegProbeResult {
+    bool runnable = false;
+    std::optional<std::filesystem::path> executablePath;
+};
+
+// Launches ffmpeg to confirm it actually runs, so this must never happen on the
+// UI thread. The result comes back via WM_BEAN_FFMPEG_PROBE_COMPLETE.
+void BeginFfmpegProbe(AppContext* ctx)
 {
-    if (value.empty()) {
-        return false;
+    if (!ctx || !ctx->mainWindow) {
+        return;
     }
-    const std::wstring normalized = NormalizeProcessOrWindowToken(value);
-    return StartsWith(normalized, L"warcraftrecorder")
-        || StartsWith(normalized, L"warccraftrecorder");
-}
-
-bool IsWarcraftRecorderWindowToken(const std::wstring& value)
-{
-    if (value.empty()) {
-        return false;
-    }
-    const std::wstring normalized = NormalizeProcessOrWindowToken(value);
-    return StartsWith(normalized, L"warcraftrecorder")
-        || StartsWith(normalized, L"warccraftrecorder");
-}
-
-bool IsWarcraftRecorderProcessId(DWORD processId)
-{
-    if (processId == 0) {
-        return false;
-    }
-    HANDLE processHandle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
-    if (!processHandle) {
-        return false;
-    }
-    wchar_t processPath[MAX_PATH] = {};
-    DWORD processPathSize = static_cast<DWORD>(std::size(processPath));
-    bool isWarcraftRecorder = false;
-    if (QueryFullProcessImageNameW(processHandle, 0, processPath, &processPathSize)) {
-        const std::wstring exeName = std::filesystem::path(processPath).filename().wstring();
-        isWarcraftRecorder = IsWarcraftRecorderProcessToken(exeName);
-    }
-    CloseHandle(processHandle);
-    return isWarcraftRecorder;
-}
-
-bool DetectWarcraftRecorderByProcessSnapshot()
-{
-    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snapshot == INVALID_HANDLE_VALUE) {
-        return false;
+    if (ctx->ffmpegProbeInFlight.exchange(true)) {
+        return;
     }
 
-    PROCESSENTRY32W processEntry{};
-    processEntry.dwSize = sizeof(processEntry);
-    if (!Process32FirstW(snapshot, &processEntry)) {
-        CloseHandle(snapshot);
-        return false;
-    }
-
-    do {
-        if (IsWarcraftRecorderProcessToken(processEntry.szExeFile)) {
-            CloseHandle(snapshot);
-            return true;
+    const HWND targetWindow = ctx->mainWindow;
+    std::thread([targetWindow]() {
+        auto* result = new FfmpegProbeResult();
+        // Resolve without the context: this thread must not touch AppContext.
+        result->executablePath = ResolveFfmpegExecutablePath(nullptr);
+        result->runnable = result->executablePath.has_value()
+            && IsFfmpegExecutableRunnable(*result->executablePath);
+        if (!PostMessageW(targetWindow, WM_BEAN_FFMPEG_PROBE_COMPLETE, 0, reinterpret_cast<LPARAM>(result))) {
+            delete result;
         }
-    } while (Process32NextW(snapshot, &processEntry));
-
-    CloseHandle(snapshot);
-    return false;
-}
-
-BOOL CALLBACK DetectWarcraftRecorderWindowProc(HWND hwnd, LPARAM lParam)
-{
-    if (!IsWindowVisible(hwnd)) {
-        return TRUE;
-    }
-    const int length = GetWindowTextLengthW(hwnd);
-    if (length <= 0) {
-        return TRUE;
-    }
-
-    std::wstring title(static_cast<size_t>(length) + 1, L'\0');
-    GetWindowTextW(hwnd, title.data(), length + 1);
-    title.resize(static_cast<size_t>(length));
-    if (!IsWarcraftRecorderWindowToken(title)) {
-        return TRUE;
-    }
-
-    DWORD processId = 0;
-    GetWindowThreadProcessId(hwnd, &processId);
-    if (!IsWarcraftRecorderProcessId(processId)) {
-        return TRUE;
-    }
-
-    auto* found = reinterpret_cast<bool*>(lParam);
-    *found = true;
-    return FALSE;
-}
-
-bool DetectWarcraftRecorderByWindowTitle()
-{
-    bool found = false;
-    EnumWindows(DetectWarcraftRecorderWindowProc, reinterpret_cast<LPARAM>(&found));
-    return found;
-}
-
-bool DetectWarcraftRecorderForUi()
-{
-    return DetectWarcraftRecorderByProcessSnapshot() || DetectWarcraftRecorderByWindowTitle();
-}
-
-std::vector<std::filesystem::path> EnumerateDriveRootsStartingAtC()
-{
-    std::vector<std::filesystem::path> roots;
-    const DWORD logicalDrives = GetLogicalDrives();
-    if (logicalDrives == 0) {
-        roots.emplace_back(R"(C:\)");
-        return roots;
-    }
-
-    const auto addDriveIfPresent = [&](wchar_t driveLetter) {
-        const DWORD bit = 1u << (driveLetter - L'A');
-        if ((logicalDrives & bit) != 0) {
-            std::wstring root;
-            root.push_back(driveLetter);
-            root += L":\\";
-            roots.emplace_back(std::move(root));
-        }
-    };
-
-    for (wchar_t driveLetter = L'C'; driveLetter <= L'Z'; ++driveLetter) {
-        addDriveIfPresent(driveLetter);
-    }
-    for (wchar_t driveLetter = L'A'; driveLetter < L'C'; ++driveLetter) {
-        addDriveIfPresent(driveLetter);
-    }
-
-    if (roots.empty()) {
-        roots.emplace_back(R"(C:\)");
-    }
-    return roots;
-}
-
-bool ResolveObsInstallRootForUi(std::filesystem::path& root)
-{
-    const auto envRootText = Trim(GetEnvString("BEAN_OBS_ROOT"));
-    if (!envRootText.empty()) {
-        const std::filesystem::path envRoot = ToWide(envRootText);
-        if (std::filesystem::exists(envRoot / "bin" / "64bit" / "obs.dll")) {
-            root = envRoot;
-            return true;
-        }
-    }
-
-    for (const auto& driveRoot : EnumerateDriveRootsStartingAtC()) {
-        const std::filesystem::path candidates[] = {
-            driveRoot / "Program Files" / "obs-studio",
-            driveRoot / "Program Files (x86)" / "obs-studio"
-        };
-        for (const auto& candidate : candidates) {
-            if (std::filesystem::exists(candidate / "bin" / "64bit" / "obs.dll")) {
-                root = candidate;
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-bool DetectUsableObsInstallForUi()
-{
-    std::filesystem::path root;
-    if (!ResolveObsInstallRootForUi(root)) {
-        return false;
-    }
-
-    const auto bin64 = root / "bin" / "64bit";
-    if (!std::filesystem::exists(bin64 / "obs.dll")) {
-        return false;
-    }
-    if (!std::filesystem::exists(bin64 / "obs-ffmpeg-mux.exe")) {
-        return false;
-    }
-    if (!std::filesystem::exists(root / "obs-plugins" / "64bit")) {
-        return false;
-    }
-    if (!std::filesystem::exists(root / "data" / "libobs")) {
-        return false;
-    }
-    const bool hasGraphicsBackend = std::filesystem::exists(bin64 / "libobs-d3d11.dll")
-        || std::filesystem::exists(bin64 / "libobs-opengl.dll");
-    return hasGraphicsBackend;
-}
-
-bool DetectFfmpegForUi(AppContext* ctx)
-{
-    const auto executablePath = ResolveFfmpegExecutablePath(ctx);
-    return executablePath.has_value() && IsFfmpegExecutableRunnable(*executablePath);
-}
-
-std::filesystem::path ResolveDefaultWowLogDirectory()
-{
-    for (const auto& driveRoot : EnumerateDriveRootsStartingAtC()) {
-        const std::filesystem::path candidates[] = {
-            driveRoot / "Program Files (x86)" / "World of Warcraft" / "_retail_" / "Logs",
-            driveRoot / "Program Files" / "World of Warcraft" / "_retail_" / "Logs"
-        };
-        for (const auto& candidate : candidates) {
-            if (DirectoryExists(candidate.wstring())) {
-                return candidate;
-            }
-        }
-    }
-
-    // Preserve historical fallback when no install is auto-detected.
-    return R"(C:\Program Files (x86)\World of Warcraft\_retail_\Logs)";
-}
-
-std::string ToLowerAscii(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
-        return static_cast<char>(std::tolower(ch));
-    });
-    return value;
-}
-
-std::optional<std::filesystem::path> ResolveWowInstallDirectoryFromLogDirectory(const std::filesystem::path& logDirectory)
-{
-    if (logDirectory.empty()) {
-        return std::nullopt;
-    }
-    std::filesystem::path normalized = logDirectory.lexically_normal();
-    if (normalized.filename() == L"Logs") {
-        normalized = normalized.parent_path();
-    }
-    if (normalized.filename() == L"_retail_") {
-        const auto installDirectory = normalized.parent_path();
-        if (!installDirectory.empty()) {
-            return installDirectory;
-        }
-    }
-    return std::nullopt;
-}
-
-std::optional<std::filesystem::path> ResolveWowInstallDirectoryForUi(const AppContext* ctx)
-{
-    if (ctx) {
-        if (const auto fromSettings = ResolveWowInstallDirectoryFromLogDirectory(ctx->settings.wowLogDirectory)) {
-            return fromSettings;
-        }
-    }
-
-    if (const auto fromAutoDetection = ResolveWowInstallDirectoryFromLogDirectory(ResolveDefaultWowLogDirectory())) {
-        return fromAutoDetection;
-    }
-    return std::nullopt;
+    }).detach();
 }
 
 bool DetectAdvancedCombatLoggingForUi(const AppContext* ctx)
 {
-    const auto installDirectory = ResolveWowInstallDirectoryForUi(ctx);
-    if (!installDirectory.has_value()) {
-        return false;
-    }
-    const auto configPath = *installDirectory / "_retail_" / "WTF" / "Config.wtf";
-
-    std::ifstream stream(configPath);
-    if (!stream.is_open()) {
-        return false;
-    }
-
-    std::string line;
-    while (std::getline(stream, line)) {
-        const std::string trimmed = Trim(line);
-        if (trimmed.empty()) {
-            continue;
-        }
-
-        std::istringstream parser(trimmed);
-        std::string setToken;
-        std::string keyToken;
-        std::string valueToken;
-        if (!(parser >> setToken >> keyToken >> valueToken)) {
-            continue;
-        }
-        if (ToLowerAscii(setToken) != "set" || ToLowerAscii(keyToken) != "advancedcombatlogging") {
-            continue;
-        }
-        return valueToken == "\"1\"";
-    }
-
-    return false;
+    return bean::core::IsAdvancedCombatLoggingEnabled(
+        ctx ? ctx->settings.wowLogDirectory : std::filesystem::path{});
 }
 
 bool EnsureChatPreviewFrameBitmap(AppContext* ctx, HDC referenceDc, int width, int height)
@@ -2852,6 +2526,30 @@ void RepopulateRecordingsListControl(AppContext* ctx)
     UpdateRecordingInfoPane(ctx, ListView_GetNextItem(ctx->recordingsList, -1, LVNI_SELECTED));
 }
 
+bool RecordingListDisplayEqual(
+    const std::vector<AppContext::RecordingItem>& left,
+    const std::vector<AppContext::RecordingItem>& right)
+{
+    if (left.size() != right.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < left.size(); ++i) {
+        const auto& a = left[i];
+        const auto& b = right[i];
+        if (a.path != b.path
+            || a.modified != b.modified
+            || a.dungeonName != b.dungeonName
+            || a.keystoneText != b.keystoneText
+            || a.durationText != b.durationText
+            || a.dateText != b.dateText
+            || a.outcome != b.outcome
+            || a.participants.size() != b.participants.size()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void RefreshRecordingsList(AppContext* ctx)
 {
     if (!ctx || !ctx->recordingsList || !ctx->recordingsLabel) {
@@ -2863,47 +2561,65 @@ void RefreshRecordingsList(AppContext* ctx)
         folder = ToWide(ctx->settings.outputDirectory.string());
     }
 
-    ListView_DeleteAllItems(ctx->recordingsList);
-    ctx->recordingItems.clear();
-    UpdateRecordingInfoPane(ctx, -1);
-
     if (!DirectoryExists(folder)) {
+        if (!ctx->recordingItems.empty()) {
+            ListView_DeleteAllItems(ctx->recordingsList);
+            ctx->recordingItems.clear();
+            UpdateRecordingInfoPane(ctx, -1);
+        }
         SetWindowTextW(ctx->recordingsLabel, L"Recordings folder is unavailable.");
         return;
     }
 
-    std::error_code ec;
-    for (const auto& entry : std::filesystem::directory_iterator(folder, ec)) {
-        if (ec) {
-            break;
+    // One query for the whole table instead of one per video file. A user with
+    // a few hundred recordings previously triggered that many separate queries
+    // on every refresh, and refresh happens on tab switches and path edits.
+    std::unordered_map<std::string, bean::core::RunRecord> runsByVideoPath;
+    if (ctx->runRepository) {
+        std::string dbError;
+        for (auto& run : ctx->runRepository->ListRuns(dbError)) {
+            auto key = run.videoPath.string();
+            runsByVideoPath.emplace(std::move(key), std::move(run));
         }
-        if (!entry.is_regular_file()) {
-            continue;
-        }
+    }
 
-        const auto extension = entry.path().extension().wstring();
-        if (_wcsicmp(extension.c_str(), L".mkv") != 0 && _wcsicmp(extension.c_str(), L".mp4") != 0) {
-            continue;
-        }
+    // Reuse metadata for files whose mtime has not changed, so a tab switch
+    // does not rebuild participant rows for every historical recording.
+    std::unordered_map<std::wstring, const AppContext::RecordingItem*> previousByPath;
+    previousByPath.reserve(ctx->recordingItems.size());
+    for (const auto& item : ctx->recordingItems) {
+        previousByPath.emplace(item.path.wstring(), &item);
+    }
 
+    std::vector<AppContext::RecordingItem> nextItems;
+    for (const auto& mediaPath : EnumerateRecordingMediaFiles(folder)) {
         std::error_code timeEc;
-        const auto modified = std::filesystem::last_write_time(entry.path(), timeEc);
+        const auto modified = std::filesystem::last_write_time(mediaPath, timeEc);
+        const auto writeTime = timeEc ? std::filesystem::file_time_type::clock::now() : modified;
+
+        const auto previousIt = previousByPath.find(mediaPath.wstring());
+        if (previousIt != previousByPath.end() && previousIt->second->modified == writeTime) {
+            nextItems.push_back(*previousIt->second);
+            continue;
+        }
 
         AppContext::RecordingItem row;
-        row.path = entry.path();
+        row.path = mediaPath;
         row.fileName = row.path.filename().wstring();
         row.dungeonName.clear();
-        row.modified = timeEc ? std::filesystem::file_time_type::clock::now() : modified;
+        row.modified = writeTime;
         row.dateText = FormatLocalDate(FileTimeToSystemClock(row.modified));
 
-        if (ctx->runRepository) {
-            std::string dbError;
-            const auto run = ctx->runRepository->GetRunByVideoPath(row.path, dbError);
+        {
+            const auto runIt = runsByVideoPath.find(row.path.string());
+            const std::optional<bean::core::RunRecord> run = runIt == runsByVideoPath.end()
+                ? std::nullopt
+                : std::optional<bean::core::RunRecord>(runIt->second);
             if (run.has_value()) {
                 if (run->dungeonName.has_value() && !run->dungeonName->empty()) {
                     row.dungeonName = ToWide(*run->dungeonName);
                 } else if (run->challengeMapId.has_value()) {
-                    const auto inferredDungeonName = DungeonNameForChallengeMap(*run->challengeMapId);
+                    const auto inferredDungeonName = bean::core::DungeonNameForChallengeMap(*run->challengeMapId);
                     if (!inferredDungeonName.empty()) {
                         row.dungeonName = ToWide(inferredDungeonName);
                     }
@@ -2950,12 +2666,17 @@ void RefreshRecordingsList(AppContext* ctx)
         if (row.keystoneLevel < 0) {
             row.keystoneText = L"-";
         }
-        ctx->recordingItems.push_back(std::move(row));
+        nextItems.push_back(std::move(row));
     }
 
+    const auto previousItems = std::move(ctx->recordingItems);
+    ctx->recordingItems = std::move(nextItems);
     BackfillRecordingParticipantsFromKnownGuids(ctx);
     SortRecordingItems(ctx);
-    RepopulateRecordingsListControl(ctx);
+
+    if (!RecordingListDisplayEqual(previousItems, ctx->recordingItems)) {
+        RepopulateRecordingsListControl(ctx);
+    }
 
     std::wostringstream summary;
     summary << L"Folder: " << folder << L" (" << ctx->recordingItems.size() << L" file";
@@ -3125,6 +2846,9 @@ void RefreshLiveStatus(AppContext* ctx)
     }
     ctx->isMonitoring = monitoring;
     ctx->isRecording = recording;
+    if (!monitoring) {
+        ctx->autoRecordFailed = false;
+    }
     const bool recordingStateChanged = (wasRecording != ctx->isRecording);
     const bool wowWasDetected = ctx->wowWindowDetected;
     const int wowWasWidth = ctx->detectedWowClientWidth;
@@ -3147,20 +2871,21 @@ void RefreshLiveStatus(AppContext* ctx)
     bool obsStatusRefreshed = false;
     if (!ctx->obsInstallLastCheckedAt.has_value()
         || (now - *ctx->obsInstallLastCheckedAt) >= kObsInstallPollInterval) {
-        ctx->obsInstallDetected = DetectUsableObsInstallForUi();
+        ctx->obsInstallDetected = bean::core::IsUsableObsInstallPresent();
         ctx->obsInstallLastCheckedAt = now;
         obsStatusRefreshed = true;
     }
     const bool ffmpegWasDetected = ctx->ffmpegDetected;
-    bool ffmpegStatusRefreshed = false;
+    // ffmpegStatusRefreshed stays false here: the probe is asynchronous, and the
+    // UI is repainted when WM_BEAN_FFMPEG_PROBE_COMPLETE arrives instead.
+    const bool ffmpegStatusRefreshed = false;
     if (ctx->ffmpegCheckRequested
         || (!ctx->ffmpegDetected
             && (!ctx->ffmpegLastCheckedAt.has_value()
                 || (now - *ctx->ffmpegLastCheckedAt) >= kObsInstallPollInterval))) {
-        ctx->ffmpegDetected = DetectFfmpegForUi(ctx);
         ctx->ffmpegLastCheckedAt = now;
         ctx->ffmpegCheckRequested = false;
-        ffmpegStatusRefreshed = true;
+        BeginFfmpegProbe(ctx);
     }
     const bool warcraftRecorderWasDetected = ctx->warcraftRecorderDetected;
     bool warcraftRecorderStatusRefreshed = false;
@@ -3169,7 +2894,7 @@ void RefreshLiveStatus(AppContext* ctx)
         : kWarcraftRecorderPollInterval;
     if (!ctx->warcraftRecorderLastCheckedAt.has_value()
         || (now - *ctx->warcraftRecorderLastCheckedAt) >= warcraftRecorderPollInterval) {
-        ctx->warcraftRecorderDetected = DetectWarcraftRecorderForUi();
+        ctx->warcraftRecorderDetected = bean::core::IsWarcraftRecorderRunning();
         ctx->warcraftRecorderLastCheckedAt = now;
         warcraftRecorderStatusRefreshed = true;
     }
@@ -3691,7 +3416,7 @@ bool CaptureKeybindKey(AppContext* ctx, WPARAM virtualKey)
     return true;
 }
 
-void AutoSaveChatBlockerSettings(AppContext* ctx)
+void CommitChatBlockerSettings(AppContext* ctx)
 {
     if (!ctx || !ctx->orchestrator || !ctx->chatBlockerAutoSaveArmed) {
         return;
@@ -3718,7 +3443,7 @@ void AutoSaveChatBlockerSettings(AppContext* ctx)
     ctx->orchestrator->ApplySettings(ctx->settings);
 }
 
-void AutoSaveConfigurationSettings(AppContext* ctx)
+void CommitConfigurationSettings(AppContext* ctx)
 {
     if (!ctx || !ctx->orchestrator || !ctx->configurationAutoSaveArmed) {
         return;
@@ -3732,6 +3457,41 @@ void AutoSaveConfigurationSettings(AppContext* ctx)
         return;
     }
     ctx->orchestrator->ApplySettings(ctx->settings);
+}
+
+// Restarting an existing timer resets its countdown, so repeated calls while the
+// user is still typing collapse into a single save once they pause.
+void ScheduleAutoSave(AppContext* ctx, UINT_PTR timerId)
+{
+    if (!ctx || !ctx->mainWindow) {
+        return;
+    }
+    SetTimer(ctx->mainWindow, timerId, kAutoSaveDebounceMs, nullptr);
+}
+
+void AutoSaveChatBlockerSettings(AppContext* ctx)
+{
+    ScheduleAutoSave(ctx, kChatBlockerAutoSaveTimerId);
+}
+
+void AutoSaveConfigurationSettings(AppContext* ctx)
+{
+    ScheduleAutoSave(ctx, kConfigurationAutoSaveTimerId);
+}
+
+// Runs any save still sitting in the debounce window. Called before the window
+// goes away so a quick edit-then-close cannot lose the change.
+void FlushPendingAutoSaves(AppContext* ctx)
+{
+    if (!ctx || !ctx->mainWindow) {
+        return;
+    }
+    if (KillTimer(ctx->mainWindow, kConfigurationAutoSaveTimerId)) {
+        CommitConfigurationSettings(ctx);
+    }
+    if (KillTimer(ctx->mainWindow, kChatBlockerAutoSaveTimerId)) {
+        CommitChatBlockerSettings(ctx);
+    }
 }
 
 bool DirectoryExists(const std::wstring& path)
@@ -3816,7 +3576,7 @@ bool ApplyReasonableDefaults(bean::core::AppSettings& settings, std::string& war
     }
 
     if (settings.wowLogDirectory.empty()) {
-        settings.wowLogDirectory = ResolveDefaultWowLogDirectory();
+        settings.wowLogDirectory = bean::core::ResolveDefaultWowLogDirectory();
         changed = true;
     }
     if (settings.videoEncoder.empty()) {
@@ -5822,6 +5582,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             }
             return 0;
         }
+        if (wParam == kConfigurationAutoSaveTimerId) {
+            KillTimer(hwnd, kConfigurationAutoSaveTimerId);
+            CommitConfigurationSettings(ctx);
+            return 0;
+        }
+        if (wParam == kChatBlockerAutoSaveTimerId) {
+            KillTimer(hwnd, kChatBlockerAutoSaveTimerId);
+            CommitChatBlockerSettings(ctx);
+            return 0;
+        }
         if (wParam == kLiveStatusTimerId) {
             if (ctx && ctx->orchestrator) {
                 ctx->orchestrator->Tick();
@@ -5843,7 +5613,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
     case WM_BEAN_STATUS: {
         auto* text = reinterpret_cast<std::wstring*>(lParam);
         if (ctx && text) {
+            if (text->find(L"AUTO-RECORD FAILED") != std::wstring::npos) {
+                ctx->autoRecordFailed = true;
+            } else if (text->find(L"Recording started") != std::wstring::npos) {
+                ctx->autoRecordFailed = false;
+            }
             SetStatus(ctx, *text);
+            ApplyTaskbarOverlayState(ctx);
         }
         delete text;
         return 0;
@@ -5966,7 +5742,37 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         delete payload;
         return 0;
     }
+    case WM_BEAN_FFMPEG_PROBE_COMPLETE: {
+        auto* result = reinterpret_cast<FfmpegProbeResult*>(lParam);
+        if (ctx && result) {
+            const bool wasDetected = ctx->ffmpegDetected;
+            ctx->ffmpegDetected = result->runnable;
+            ctx->ffmpegExecutablePath = result->executablePath;
+            ctx->ffmpegProbeInFlight = false;
+            if (ctx->ffmpegIcon) {
+                InvalidateRect(ctx->ffmpegIcon, nullptr, TRUE);
+            }
+            if (ctx->ffmpegText) {
+                UpdateTransparentStaticText(
+                    ctx->ffmpegText,
+                    ctx->ffmpegDetected ? L"FFmpeg available for trim" : L"FFmpeg not found for trim");
+            }
+            RefreshClipsPlaybackControls(ctx);
+            if (wasDetected != ctx->ffmpegDetected) {
+                if (ctx->statusTabButton) {
+                    InvalidateRect(ctx->statusTabButton, nullptr, TRUE);
+                }
+                ApplyTaskbarOverlayState(ctx);
+            }
+        } else if (ctx) {
+            ctx->ffmpegProbeInFlight = false;
+        }
+        delete result;
+        return 0;
+    }
     case WM_DESTROY:
+        FlushPendingAutoSaves(ctx);
+        bean::integrations::YouTubeUploader::RequestCancel();
         UnregisterHotKey(hwnd, kClipHotkeyId);
         UnregisterHotKey(hwnd, kManualStartHotkeyId);
         UnregisterHotKey(hwnd, kManualStopHotkeyId);
@@ -5992,6 +5798,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         }
         KillTimer(hwnd, kLiveStatusTimerId);
         KillTimer(hwnd, kClipsExportStatusTimerId);
+        KillTimer(hwnd, kConfigurationAutoSaveTimerId);
+        KillTimer(hwnd, kChatBlockerAutoSaveTimerId);
         DestroyParticipantSpecIcons(ctx);
         DestroyThemeResources();
         PostQuitMessage(0);
@@ -6045,7 +5853,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int cmdShow)
         loadError += "Run metadata DB init failed: " + runRepoError;
     }
 
-    auto orchestrator = std::make_unique<bean::core::RecordingOrchestrator>(std::make_unique<bean::obs::LibObsRecorderEngine>());
+#if defined(BEAN_ENABLE_LIBOBS) && BEAN_ENABLE_LIBOBS
+    auto recorderEngine = std::unique_ptr<bean::obs::IRecorderEngine>(
+        std::make_unique<bean::obs::LibObsRecorderEngine>());
+#else
+    auto recorderEngine = std::unique_ptr<bean::obs::IRecorderEngine>(
+        std::make_unique<bean::obs::MockRecorderEngine>());
+#endif
+    auto orchestrator = std::make_unique<bean::core::RecordingOrchestrator>(std::move(recorderEngine));
     orchestrator->SetRunRepository(runRepository);
     orchestrator->ApplySettings(settings);
 
