@@ -519,6 +519,82 @@ struct ClipExportCompletePayload {
     std::wstring message;
 };
 
+struct FfmpegProcessResult {
+    bool launched = false;
+    DWORD launchError = ERROR_SUCCESS;
+    DWORD exitCode = 1;
+    std::wstring output;
+};
+
+FfmpegProcessResult RunFfmpegProcess(const std::filesystem::path& executablePath, const std::wstring& arguments)
+{
+    FfmpegProcessResult result;
+    SECURITY_ATTRIBUTES securityAttributes{};
+    securityAttributes.nLength = sizeof(securityAttributes);
+    securityAttributes.bInheritHandle = TRUE;
+
+    HANDLE outputRead = nullptr;
+    HANDLE outputWrite = nullptr;
+    if (!CreatePipe(&outputRead, &outputWrite, &securityAttributes, 0)) {
+        result.launchError = GetLastError();
+        return result;
+    }
+    if (!SetHandleInformation(outputRead, HANDLE_FLAG_INHERIT, 0)) {
+        result.launchError = GetLastError();
+        CloseHandle(outputRead);
+        CloseHandle(outputWrite);
+        return result;
+    }
+
+    STARTUPINFOW startupInfo{};
+    startupInfo.cb = sizeof(startupInfo);
+    startupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startupInfo.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    startupInfo.hStdOutput = outputWrite;
+    startupInfo.hStdError = outputWrite;
+    PROCESS_INFORMATION processInfo{};
+    std::wstring commandLine = L"\"" + executablePath.wstring() + L"\" " + arguments;
+    const BOOL created = CreateProcessW(
+        nullptr,
+        commandLine.data(),
+        nullptr,
+        nullptr,
+        TRUE,
+        CREATE_NO_WINDOW,
+        nullptr,
+        executablePath.parent_path().wstring().c_str(),
+        &startupInfo,
+        &processInfo);
+    CloseHandle(outputWrite);
+
+    if (!created) {
+        result.launchError = GetLastError();
+        CloseHandle(outputRead);
+        return result;
+    }
+    result.launched = true;
+
+    std::string output;
+    std::thread outputReader([&output, outputRead]() {
+        std::array<char, 4096> buffer{};
+        DWORD bytesRead = 0;
+        while (ReadFile(outputRead, buffer.data(), static_cast<DWORD>(buffer.size()), &bytesRead, nullptr) && bytesRead > 0) {
+            if (output.size() < 64 * 1024) {
+                output.append(buffer.data(), (std::min)(static_cast<size_t>(bytesRead), 64 * 1024 - output.size()));
+            }
+        }
+        CloseHandle(outputRead);
+    });
+
+    WaitForSingleObject(processInfo.hProcess, INFINITE);
+    GetExitCodeProcess(processInfo.hProcess, &result.exitCode);
+    CloseHandle(processInfo.hThread);
+    CloseHandle(processInfo.hProcess);
+    outputReader.join();
+    result.output = ToWide(output);
+    return result;
+}
+
 void SetClipsExportStatus(AppContext* ctx, AppContext::ClipExportStatus status, const std::wstring& text)
 {
     if (!ctx) {
@@ -679,74 +755,48 @@ std::optional<std::filesystem::path> ResolveFfmpegExecutablePath(AppContext* ctx
     }
 
     std::optional<std::filesystem::path> resolvedPath;
-    if (const auto explicitPath = Trim(GetEnvString("BEAN_FFMPEG_PATH")); !explicitPath.empty()) {
-        const auto candidate = std::filesystem::path(ToWide(explicitPath));
-        if (std::filesystem::exists(candidate)) {
-            resolvedPath = candidate;
-        }
-    }
-
-    if (!resolvedPath.has_value()) {
-        const auto obsRootText = Trim(GetEnvString("BEAN_OBS_ROOT"));
-        if (!obsRootText.empty()) {
-        const auto candidate = std::filesystem::path(ToWide(obsRootText)) / "bin" / "64bit" / "ffmpeg.exe";
-        if (std::filesystem::exists(candidate)) {
-                resolvedPath = candidate;
-            }
-        }
-    }
-
-    std::filesystem::path obsRoot;
-    if (!resolvedPath.has_value() && ResolveObsInstallRootForUi(obsRoot)) {
-        const auto candidate = obsRoot / "bin" / "64bit" / "ffmpeg.exe";
-        if (std::filesystem::exists(candidate)) {
-            resolvedPath = candidate;
-        }
-    }
-
-    if (!resolvedPath.has_value()) {
-        for (const auto& driveRoot : EnumerateDriveRootsStartingAtC()) {
-            const std::filesystem::path commonCandidates[] = {
-                driveRoot / "ffmpeg" / "bin" / "ffmpeg.exe",
-                driveRoot / "Program Files" / "ffmpeg" / "bin" / "ffmpeg.exe",
-                driveRoot / "Program Files (x86)" / "ffmpeg" / "bin" / "ffmpeg.exe",
-                driveRoot / "ProgramData" / "chocolatey" / "bin" / "ffmpeg.exe"
-            };
-            for (const auto& candidate : commonCandidates) {
-                if (std::filesystem::exists(candidate)) {
-                    resolvedPath = candidate;
-                    break;
-                }
-            }
-            if (resolvedPath.has_value()) {
-                break;
-            }
-        }
-    }
-
-    if (!resolvedPath.has_value()) {
-        wchar_t searchPath[MAX_PATH] = {};
-        const DWORD resolvedLen = SearchPathW(nullptr, L"ffmpeg.exe", nullptr, static_cast<DWORD>(std::size(searchPath)), searchPath, nullptr);
-        if (resolvedLen > 0 && resolvedLen < std::size(searchPath)) {
-            resolvedPath = std::filesystem::path(searchPath);
-        }
-    }
-
-    if (!resolvedPath.has_value()) {
-        wchar_t modulePath[MAX_PATH] = {};
-        const DWORD moduleLen = GetModuleFileNameW(nullptr, modulePath, static_cast<DWORD>(std::size(modulePath)));
-        if (moduleLen > 0) {
-            const auto localCandidate = std::filesystem::path(modulePath).parent_path() / "ffmpeg.exe";
-            if (std::filesystem::exists(localCandidate)) {
-                resolvedPath = localCandidate;
-            }
-        }
+    const auto bundledCandidate = GetExecutableDirectory() / "ffmpeg.exe";
+    if (std::filesystem::exists(bundledCandidate)) {
+        resolvedPath = bundledCandidate;
     }
 
     if (ctx) {
         ctx->ffmpegExecutablePath = resolvedPath;
     }
     return resolvedPath;
+}
+
+bool IsFfmpegExecutableRunnable(const std::filesystem::path& executablePath)
+{
+    if (executablePath.empty() || !std::filesystem::exists(executablePath)) {
+        return false;
+    }
+
+    STARTUPINFOW startupInfo{};
+    startupInfo.cb = sizeof(startupInfo);
+    PROCESS_INFORMATION processInfo{};
+    std::wstring commandLine = L"\"" + executablePath.wstring() + L"\" -hide_banner -version";
+    const BOOL created = CreateProcessW(
+        nullptr,
+        commandLine.data(),
+        nullptr,
+        nullptr,
+        FALSE,
+        CREATE_NO_WINDOW,
+        nullptr,
+        executablePath.parent_path().wstring().c_str(),
+        &startupInfo,
+        &processInfo);
+    if (!created) {
+        return false;
+    }
+
+    WaitForSingleObject(processInfo.hProcess, INFINITE);
+    DWORD exitCode = 1;
+    const BOOL gotExitCode = GetExitCodeProcess(processInfo.hProcess, &exitCode);
+    CloseHandle(processInfo.hThread);
+    CloseHandle(processInfo.hProcess);
+    return gotExitCode && exitCode == 0;
 }
 
 bool LoadClipFromSelection(AppContext* ctx, bool reportStatus = true)
@@ -1878,7 +1928,8 @@ bool DetectUsableObsInstallForUi()
 
 bool DetectFfmpegForUi(AppContext* ctx)
 {
-    return ResolveFfmpegExecutablePath(ctx).has_value();
+    const auto executablePath = ResolveFfmpegExecutablePath(ctx);
+    return executablePath.has_value() && IsFfmpegExecutableRunnable(*executablePath);
 }
 
 std::filesystem::path ResolveDefaultWowLogDirectory()
@@ -3825,47 +3876,32 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         const std::filesystem::path inputPath = ctx->clipsLoadedPath;
         const std::filesystem::path ffmpegExe = *ffmpegPath;
         std::thread([ctx, ffmpegExe, inputPath, outputPath, startSeconds, endSeconds]() {
-            std::wstringstream command;
-            command << L"\"" << ffmpegExe.wstring() << L"\""
-                    << L" -y -ss " << startSeconds
-                    << L" -to " << endSeconds
-                    << L" -i \"" << inputPath.wstring() << L"\""
-                    << L" -c copy \"" << outputPath.wstring() << L"\"";
+            const int durationSeconds = endSeconds - startSeconds;
+            std::wstringstream arguments;
+            arguments << L"-y -hide_banner -v error"
+                      << L" -ss " << startSeconds
+                      << L" -i \"" << inputPath.wstring() << L"\""
+                      << L" -t " << durationSeconds
+                      << L" -c copy -avoid_negative_ts make_zero"
+                      << L" \"" << outputPath.wstring() << L"\"";
+            const FfmpegProcessResult process = RunFfmpegProcess(ffmpegExe, arguments.str());
 
-            STARTUPINFOW startupInfo{};
-            startupInfo.cb = sizeof(startupInfo);
-            PROCESS_INFORMATION processInfo{};
-            std::wstring commandLine = command.str();
-            BOOL created = CreateProcessW(
-                nullptr,
-                commandLine.data(),
-                nullptr,
-                nullptr,
-                FALSE,
-                CREATE_NO_WINDOW,
-                nullptr,
-                nullptr,
-                &startupInfo,
-                &processInfo);
-
-            if (!created) {
-                const DWORD errorCode = GetLastError();
+            if (!process.launched) {
                 auto* payload = new ClipExportCompletePayload();
-                payload->message = std::wstring(L"Export failed to start (error ") + std::to_wstring(errorCode) + L").";
+                payload->message = std::wstring(L"Export failed to start (error ")
+                    + std::to_wstring(process.launchError) + L").";
                 PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_EXPORT_COMPLETE, 0, reinterpret_cast<LPARAM>(payload));
-                PostStatus(ctx, std::wstring(L"Clip export failed to start (error ") + std::to_wstring(errorCode) + L").");
+                PostStatus(
+                    ctx,
+                    std::wstring(L"Clip export failed to start (error ")
+                        + std::to_wstring(process.launchError) + L") using "
+                        + ffmpegExe.wstring() + L".");
                 ctx->clipsExportInProgress.store(false);
                 PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_UI_REFRESH, 0, 0);
                 return;
             }
 
-            WaitForSingleObject(processInfo.hProcess, INFINITE);
-            DWORD exitCode = 1;
-            GetExitCodeProcess(processInfo.hProcess, &exitCode);
-            CloseHandle(processInfo.hThread);
-            CloseHandle(processInfo.hProcess);
-
-            if (exitCode == 0) {
+            if (process.exitCode == 0) {
                 auto* payload = new ClipExportCompletePayload();
                 payload->success = true;
                 payload->message = L"Export complete!";
@@ -3873,9 +3909,20 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
                 PostStatus(ctx, std::wstring(L"Clip export complete: ") + outputPath.wstring());
             } else {
                 auto* payload = new ClipExportCompletePayload();
-                payload->message = std::wstring(L"Export failed (ffmpeg exit code ") + std::to_wstring(exitCode) + L").";
+                payload->message = std::wstring(L"Export failed (ffmpeg exit code ")
+                    + std::to_wstring(process.exitCode) + L").";
                 PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_EXPORT_COMPLETE, 0, reinterpret_cast<LPARAM>(payload));
-                PostStatus(ctx, std::wstring(L"Clip export failed (ffmpeg exit code ") + std::to_wstring(exitCode) + L").");
+                std::wstring diagnostic = process.output;
+                while (!diagnostic.empty() && (diagnostic.back() == L'\r' || diagnostic.back() == L'\n' || diagnostic.back() == L' ')) {
+                    diagnostic.pop_back();
+                }
+                PostStatus(
+                    ctx,
+                    std::wstring(L"Clip export failed (ffmpeg exit code ")
+                        + std::to_wstring(process.exitCode)
+                        + L") using "
+                        + ffmpegExe.wstring()
+                        + (diagnostic.empty() ? L"." : L"): " + diagnostic));
             }
             ctx->clipsExportInProgress.store(false);
             PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_UI_REFRESH, 0, 0);

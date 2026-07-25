@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
-#include <cstdlib>
 #include <iomanip>
 #include <sstream>
 
@@ -63,38 +62,6 @@ std::string FormatDurationClock(std::chrono::seconds duration)
     return os.str();
 }
 
-std::wstring ToWide(const std::string& value)
-{
-    if (value.empty()) {
-        return {};
-    }
-    const int needed = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, nullptr, 0);
-    if (needed <= 0) {
-        return {};
-    }
-    std::wstring result(static_cast<size_t>(needed), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, result.data(), needed);
-    if (!result.empty() && result.back() == L'\0') {
-        result.pop_back();
-    }
-    return result;
-}
-
-std::wstring GetEnvWide(const char* name)
-{
-    char* buffer = nullptr;
-    size_t len = 0;
-    if (_dupenv_s(&buffer, &len, name) != 0 || buffer == nullptr || len == 0) {
-        if (buffer) {
-            free(buffer);
-        }
-        return {};
-    }
-    std::string value(buffer);
-    free(buffer);
-    return ToWide(value);
-}
-
 std::wstring QuoteArg(const std::filesystem::path& path)
 {
     return L"\"" + path.wstring() + L"\"";
@@ -107,38 +74,6 @@ std::string FormatWinExitCode(DWORD exitCode)
     return os.str();
 }
 
-std::vector<std::filesystem::path> EnumerateDriveRootsStartingAtC()
-{
-    std::vector<std::filesystem::path> roots;
-    const DWORD logicalDrives = GetLogicalDrives();
-    if (logicalDrives == 0) {
-        roots.emplace_back(R"(C:\)");
-        return roots;
-    }
-
-    const auto addDriveIfPresent = [&](wchar_t driveLetter) {
-        const DWORD bit = 1u << (driveLetter - L'A');
-        if ((logicalDrives & bit) != 0) {
-            std::wstring root;
-            root.push_back(driveLetter);
-            root += L":\\";
-            roots.emplace_back(std::move(root));
-        }
-    };
-
-    for (wchar_t driveLetter = L'C'; driveLetter <= L'Z'; ++driveLetter) {
-        addDriveIfPresent(driveLetter);
-    }
-    for (wchar_t driveLetter = L'A'; driveLetter < L'C'; ++driveLetter) {
-        addDriveIfPresent(driveLetter);
-    }
-
-    if (roots.empty()) {
-        roots.emplace_back(R"(C:\)");
-    }
-    return roots;
-}
-
 std::vector<std::filesystem::path> ResolveFfmpegExecutableCandidates()
 {
     std::vector<std::filesystem::path> candidates;
@@ -149,70 +84,13 @@ std::vector<std::filesystem::path> ResolveFfmpegExecutableCandidates()
         }
         return std::nullopt;
     };
-    const auto addCandidate = [&](const std::filesystem::path& candidate) {
-        if (candidate.empty()) {
-            return;
-        }
-        const auto canonical = candidate.lexically_normal();
-        if (std::find(candidates.begin(), candidates.end(), canonical) == candidates.end()) {
-            candidates.push_back(canonical);
-        }
-    };
-
-    if (const auto candidate = GetEnvWide("BEAN_FFMPEG_PATH"); !candidate.empty()) {
-        if (const auto resolved = existsExe(std::filesystem::path(candidate)); resolved.has_value()) {
-            addCandidate(*resolved);
-        }
-    }
-
-    if (const auto obsRoot = GetEnvWide("BEAN_OBS_ROOT"); !obsRoot.empty()) {
-        const auto candidate = std::filesystem::path(obsRoot) / "bin" / "64bit" / "ffmpeg.exe";
-        if (const auto resolved = existsExe(candidate); resolved.has_value()) {
-            addCandidate(*resolved);
-        }
-    }
-
-    for (const auto& driveRoot : EnumerateDriveRootsStartingAtC()) {
-        const std::filesystem::path defaultObsRoots[] = {
-            driveRoot / "Program Files" / "obs-studio",
-            driveRoot / "Program Files (x86)" / "obs-studio"
-        };
-        for (const auto& root : defaultObsRoots) {
-            const auto candidate = root / "bin" / "64bit" / "ffmpeg.exe";
-            if (const auto resolved = existsExe(candidate); resolved.has_value()) {
-                addCandidate(*resolved);
-            }
-        }
-    }
-
-    for (const auto& driveRoot : EnumerateDriveRootsStartingAtC()) {
-        const std::filesystem::path commonFfmpegLocations[] = {
-            driveRoot / "ffmpeg" / "bin" / "ffmpeg.exe",
-            driveRoot / "Program Files" / "ffmpeg" / "bin" / "ffmpeg.exe",
-            driveRoot / "Program Files (x86)" / "ffmpeg" / "bin" / "ffmpeg.exe",
-            driveRoot / "ProgramData" / "chocolatey" / "bin" / "ffmpeg.exe"
-        };
-        for (const auto& candidate : commonFfmpegLocations) {
-            if (const auto resolved = existsExe(candidate); resolved.has_value()) {
-                addCandidate(*resolved);
-            }
-        }
-    }
-
-    wchar_t pathResolved[MAX_PATH] = {};
-    const DWORD pathLen = SearchPathW(nullptr, L"ffmpeg.exe", nullptr, static_cast<DWORD>(std::size(pathResolved)), pathResolved, nullptr);
-    if (pathLen > 0 && pathLen < std::size(pathResolved)) {
-        if (const auto resolved = existsExe(std::filesystem::path(pathResolved)); resolved.has_value()) {
-            addCandidate(*resolved);
-        }
-    }
 
     wchar_t modulePath[MAX_PATH] = {};
     const DWORD moduleLen = GetModuleFileNameW(nullptr, modulePath, static_cast<DWORD>(std::size(modulePath)));
     if (moduleLen > 0) {
         const auto localCandidate = std::filesystem::path(modulePath).parent_path() / "ffmpeg.exe";
         if (const auto resolved = existsExe(localCandidate); resolved.has_value()) {
-            addCandidate(*resolved);
+            candidates.push_back(resolved->lexically_normal());
         }
     }
 
@@ -861,7 +739,7 @@ bool RecordingOrchestrator::RunCheapTrim(const TrimJob& job, std::string& error)
 
     const auto ffmpegCandidates = ResolveFfmpegExecutableCandidates();
     if (ffmpegCandidates.empty()) {
-        error = "Unable to locate ffmpeg executable (set BEAN_FFMPEG_PATH or install ffmpeg in PATH).";
+        error = "Bundled ffmpeg.exe is missing beside the Bean executable.";
         return false;
     }
     std::vector<std::string> candidateErrors;

@@ -60,6 +60,16 @@ if errorlevel 1 goto :fail
 echo [bean] Bundling FFmpeg from "%FFMPEG_SOURCE_DIR%"...
 copy /Y "%FFMPEG_SOURCE_DIR%\ffmpeg.exe" "%DIST_DIR%\ffmpeg.exe" >nul
 if errorlevel 1 goto :fail
+if not exist "%DIST_DIR%\ffmpeg.exe" (
+  echo [bean] Bundled FFmpeg executable is missing.
+  goto :fail
+)
+echo [bean] Validating bundled FFmpeg...
+"%DIST_DIR%\ffmpeg.exe" -hide_banner -version >nul 2>&1
+if errorlevel 1 (
+  echo [bean] Bundled FFmpeg failed its startup validation.
+  goto :fail
+)
 if exist "%FFMPEG_SOURCE_DIR%\ffprobe.exe" (
   copy /Y "%FFMPEG_SOURCE_DIR%\ffprobe.exe" "%DIST_DIR%\ffprobe.exe" >nul
   if errorlevel 1 goto :fail
@@ -96,73 +106,21 @@ exit /b 0
 set "FFMPEG_SOURCE_EXE="
 set "FFMPEG_SOURCE_DIR="
 
-if defined BEAN_FFMPEG_PATH (
-  if exist "%BEAN_FFMPEG_PATH%" (
-    set "FFMPEG_SOURCE_EXE=%BEAN_FFMPEG_PATH%"
-  )
+if exist "tools\ffmpeg\bin\ffmpeg.exe" (
+  set "FFMPEG_SOURCE_EXE=tools\ffmpeg\bin\ffmpeg.exe"
 )
 
 if not defined FFMPEG_SOURCE_EXE (
+  call :download_ffmpeg
+  if errorlevel 1 exit /b 1
   if exist "tools\ffmpeg\bin\ffmpeg.exe" (
     set "FFMPEG_SOURCE_EXE=tools\ffmpeg\bin\ffmpeg.exe"
   )
 )
 
 if not defined FFMPEG_SOURCE_EXE (
-  if exist "C:\Program Files\ffmpeg\bin\ffmpeg.exe" (
-    set "FFMPEG_SOURCE_EXE=C:\Program Files\ffmpeg\bin\ffmpeg.exe"
-  )
-)
-
-if not defined FFMPEG_SOURCE_EXE (
-  if exist "C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe" (
-    set "FFMPEG_SOURCE_EXE=C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe"
-  )
-)
-
-if not defined FFMPEG_SOURCE_EXE (
-  if exist "C:\ProgramData\chocolatey\bin\ffmpeg.exe" (
-    set "FFMPEG_SOURCE_EXE=C:\ProgramData\chocolatey\bin\ffmpeg.exe"
-  )
-)
-
-if not defined FFMPEG_SOURCE_EXE (
-  if defined BEAN_OBS_ROOT (
-    if exist "%BEAN_OBS_ROOT%\bin\64bit\ffmpeg.exe" (
-      set "FFMPEG_SOURCE_EXE=%BEAN_OBS_ROOT%\bin\64bit\ffmpeg.exe"
-    )
-  )
-)
-
-if not defined FFMPEG_SOURCE_EXE (
-  if exist "C:\Program Files\obs-studio\bin\64bit\ffmpeg.exe" (
-    set "FFMPEG_SOURCE_EXE=C:\Program Files\obs-studio\bin\64bit\ffmpeg.exe"
-  )
-)
-
-if not defined FFMPEG_SOURCE_EXE (
-  for /f "delims=" %%I in ('where ffmpeg.exe 2^>nul') do (
-    if not defined FFMPEG_SOURCE_EXE (
-      set "FFMPEG_SOURCE_EXE=%%~fI"
-    )
-  )
-)
-
-if not defined FFMPEG_SOURCE_EXE (
-  if "%BEAN_FFMPEG_AUTO_DOWNLOAD%"=="0" (
-    echo [bean] FFmpeg auto-download is disabled.
-  ) else (
-    call :download_ffmpeg
-    if errorlevel 1 exit /b 1
-    if exist "tools\ffmpeg\bin\ffmpeg.exe" (
-      set "FFMPEG_SOURCE_EXE=tools\ffmpeg\bin\ffmpeg.exe"
-    )
-  )
-)
-
-if not defined FFMPEG_SOURCE_EXE (
   echo [bean] Could not locate or acquire ffmpeg.exe to bundle.
-  echo [bean] Install ffmpeg, set BEAN_FFMPEG_PATH, or retry with network access.
+  echo [bean] Retry with network access so the bundled copy can be downloaded.
   exit /b 1
 )
 
