@@ -42,6 +42,9 @@ inline constexpr wchar_t kYouTubeOAuthCredentialsMissingMessage[] =
     L"YouTube auth server is unavailable. Please try again later.";
 inline constexpr UINT_PTR kLiveStatusTimerId = 1;
 inline constexpr UINT_PTR kClipsExportStatusTimerId = 2;
+inline constexpr int kClipHotkeyId = 1;
+inline constexpr UINT kClipHotkeyModifiers = MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT;
+inline constexpr UINT kClipHotkeyVirtualKey = VK_F8;
 inline constexpr UINT kLiveStatusIntervalMs = 500;
 inline constexpr auto kChatPreviewCaptureInterval = std::chrono::milliseconds(1000);
 inline constexpr auto kChatPreviewInvalidateInterval = std::chrono::milliseconds(1000);
@@ -144,6 +147,8 @@ enum ControlId {
     IDC_POST_RUN_DELAY_HELP,
     IDC_ADVANCED_LOGGING_HELP,
     IDC_POST_RUN_DELAY_EDIT,
+    IDC_CLIP_DURATION_LABEL,
+    IDC_CLIP_DURATION_EDIT,
     IDC_CONFIGURATION_AUTOSAVE_HINT,
     IDC_MONITOR_START,
     IDC_MONITOR_STOP,
@@ -282,6 +287,7 @@ struct AppContext {
     HWND fpsEdit = nullptr;
     HWND postRunDelayEdit = nullptr;
     HWND postRunDelayHelpIcon = nullptr;
+    HWND clipDurationEdit = nullptr;
     HWND advancedLoggingHelpIcon = nullptr;
     HWND configurationTooltip = nullptr;
     HWND monitorIcon = nullptr;

@@ -87,6 +87,8 @@ void LayoutConfigurationPanel(AppContext* ctx, int panelWidth, int)
     MoveControl(ctx->recorderPanel, IDC_POST_RUN_DELAY_LABEL, xLabel, y, 104, rowHeight);
     MoveControl(ctx->recorderPanel, IDC_POST_RUN_DELAY_HELP, xLabel + 104, y + 4, 16, 16);
     MoveControl(ctx->recorderPanel, IDC_POST_RUN_DELAY_EDIT, xLabel + 120, y, 70, rowHeight);
+    MoveControl(ctx->recorderPanel, IDC_CLIP_DURATION_LABEL, xLabel + 230, y, 116, rowHeight);
+    MoveControl(ctx->recorderPanel, IDC_CLIP_DURATION_EDIT, xLabel + 350, y, 70, rowHeight);
     y += sectionSpacing;
     MoveControl(ctx->recorderPanel, IDC_CONFIGURATION_AUTOSAVE_HINT, xLabel, y, panelWidth - (xLabel * 2), rowHeight);
 }

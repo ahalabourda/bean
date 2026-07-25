@@ -515,6 +515,7 @@ bool SettingsStore::Load(AppSettings& settings, std::string& error) const
     settings.height = ReadInt(content, "height", settings.height);
     settings.fps = ReadInt(content, "fps", settings.fps);
     settings.postRunStopDelaySeconds = ClampInt(ReadInt(content, "postRunStopDelaySeconds", settings.postRunStopDelaySeconds), 0, 600, 30);
+    settings.clipDurationSeconds = ClampInt(ReadInt(content, "clipDurationSeconds", settings.clipDurationSeconds), 1, 3600, 30);
     settings.chatBlockerEnabled = ReadBool(content, "chatBlockerEnabled", settings.chatBlockerEnabled);
     settings.chatBlockerUseCustomImage = ReadBool(content, "chatBlockerUseCustomImage", settings.chatBlockerUseCustomImage);
     const auto chatBlockerCustomImagePath = ReadQuoted(content, "chatBlockerCustomImagePath");
@@ -586,6 +587,7 @@ bool SettingsStore::Save(const AppSettings& settings, std::string& error) const
         << "  \"height\": " << settings.height << ",\n"
         << "  \"fps\": " << settings.fps << ",\n"
         << "  \"postRunStopDelaySeconds\": " << settings.postRunStopDelaySeconds << ",\n"
+        << "  \"clipDurationSeconds\": " << settings.clipDurationSeconds << ",\n"
         << "  \"chatBlockerEnabled\": " << (settings.chatBlockerEnabled ? "true" : "false") << ",\n"
         << "  \"chatBlockerUseCustomImage\": " << (settings.chatBlockerUseCustomImage ? "true" : "false") << ",\n"
         << "  \"chatBlockerCustomImagePath\": \"" << EscapeJson(settings.chatBlockerCustomImagePath.string()) << "\",\n"

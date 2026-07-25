@@ -3280,6 +3280,7 @@ void PullSettingsFromUi(AppContext* ctx)
     ctx->settings.height = ReadIntControl(ctx->heightEdit, 1080);
     ctx->settings.fps = ReadIntControl(ctx->fpsEdit, 60);
     ctx->settings.postRunStopDelaySeconds = (std::max)(0, ReadIntControl(ctx->postRunDelayEdit, 30));
+    ctx->settings.clipDurationSeconds = (std::clamp)(ReadIntControl(ctx->clipDurationEdit, 30), 1, 3600);
     const bool customBlockerImage = ctx->chatBlockerImageCustomRadio
         && SendMessageW(ctx->chatBlockerImageCustomRadio, BM_GETCHECK, 0, 0) == BST_CHECKED;
     ctx->settings.chatBlockerCustomImagePath = customBlockerImage ? ResolveSelectedChatBlockerImagePath(ctx) : std::filesystem::path();
@@ -3496,6 +3497,10 @@ bool ApplyReasonableDefaults(bean::core::AppSettings& settings, std::string& war
         settings.postRunStopDelaySeconds = 30;
         changed = true;
     }
+    if (settings.clipDurationSeconds < 1 || settings.clipDurationSeconds > 3600) {
+        settings.clipDurationSeconds = 30;
+        changed = true;
+    }
     if (settings.chatBlockerWidth < 0) {
         settings.chatBlockerWidth = 0;
         changed = true;
@@ -3553,6 +3558,7 @@ void PushSettingsToUi(AppContext* ctx)
     SetWindowTextW(ctx->heightEdit, ToWide(std::to_string(ctx->settings.height)).c_str());
     SetWindowTextW(ctx->fpsEdit, ToWide(std::to_string(ctx->settings.fps)).c_str());
     SetWindowTextW(ctx->postRunDelayEdit, ToWide(std::to_string(ctx->settings.postRunStopDelaySeconds)).c_str());
+    SetWindowTextW(ctx->clipDurationEdit, ToWide(std::to_string(ctx->settings.clipDurationSeconds)).c_str());
     const std::wstring selectedCustomImageFileName = ctx->settings.chatBlockerCustomImagePath.filename().wstring();
     RefreshChatBlockerImageCombo(ctx, selectedCustomImageFileName);
     SendMessageW(ctx->chatBlockerImageBlankRadio, BM_SETCHECK, ctx->settings.chatBlockerUseCustomImage ? BST_UNCHECKED : BST_CHECKED, 0);
@@ -4428,6 +4434,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ctx->postRunDelayEdit = CreateWindowW(L"EDIT", L"30", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER | WS_TABSTOP, xLabel + 120, y, 70, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_POST_RUN_DELAY_EDIT), nullptr, nullptr);
         EnableCtrlASelectAll(ctx->postRunDelayEdit);
         SetWindowSubclass(ctx->postRunDelayHelpIcon, HoverTooltipSubclassProc, 1, reinterpret_cast<DWORD_PTR>(ctx));
+        CreateWindowW(L"STATIC", L"Clip duration (s):", WS_VISIBLE | WS_CHILD, xLabel + 230, y, 116, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_CLIP_DURATION_LABEL), nullptr, nullptr);
+        ctx->clipDurationEdit = CreateWindowW(L"EDIT", L"30", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER | WS_TABSTOP, xLabel + 350, y, 70, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_CLIP_DURATION_EDIT), nullptr, nullptr);
+        EnableCtrlASelectAll(ctx->clipDurationEdit);
         SetWindowSubclass(ctx->outputStatus, HoverTooltipSubclassProc, 1, reinterpret_cast<DWORD_PTR>(ctx));
         y += sectionSpacing;
         CreateWindowW(
@@ -4942,8 +4951,22 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ctx->chatBlockerAutoSaveArmed = true;
         ctx->configurationAutoSaveArmed = true;
         SetTimer(hwnd, kLiveStatusTimerId, kLiveStatusIntervalMs, nullptr);
+        if (!RegisterHotKey(hwnd, kClipHotkeyId, kClipHotkeyModifiers, kClipHotkeyVirtualKey)) {
+            SetStatus(ctx, L"Clip hotkey unavailable (Ctrl+Shift+F8 is already in use).");
+        } else {
+            SetStatus(ctx, L"Ready. Press Ctrl+Shift+F8 during recording to request a clip.");
+        }
         return 0;
     }
+    case WM_HOTKEY:
+        if (wParam == kClipHotkeyId && ctx && ctx->orchestrator) {
+            std::string clipError;
+            if (!ctx->orchestrator->RequestClip(clipError)) {
+                SetStatus(ctx, std::wstring(L"Clip request failed: ") + ToWide(clipError));
+            }
+            return 0;
+        }
+        break;
     case WM_COMMAND:
         if (HIWORD(wParam) == EN_CHANGE && (LOWORD(wParam) == IDC_OUTPUT_EDIT || LOWORD(wParam) == IDC_LOG_EDIT)) {
             RefreshFolderAvailability(ctx);
@@ -4956,7 +4979,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             && (LOWORD(wParam) == IDC_WIDTH_EDIT
                 || LOWORD(wParam) == IDC_HEIGHT_EDIT
                 || LOWORD(wParam) == IDC_FPS_EDIT
-                || LOWORD(wParam) == IDC_POST_RUN_DELAY_EDIT)) {
+                || LOWORD(wParam) == IDC_POST_RUN_DELAY_EDIT
+                || LOWORD(wParam) == IDC_CLIP_DURATION_EDIT)) {
             if (ctx) {
                 AutoSaveConfigurationSettings(ctx);
             }
@@ -5480,6 +5504,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         return 0;
     }
     case WM_DESTROY:
+        UnregisterHotKey(hwnd, kClipHotkeyId);
         if (ctx && ctx->orchestrator) {
             ctx->orchestrator->StopMonitoring();
             std::string stopError;
@@ -5572,6 +5597,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int cmdShow)
         }
         auto* text = new std::wstring(ToWide(status));
         PostMessageW(context.mainWindow, WM_BEAN_STATUS, 0, reinterpret_cast<LPARAM>(text));
+        if (status.rfind("Clip created:", 0) == 0) {
+            PostMessageW(context.mainWindow, WM_BEAN_CLIPS_UI_REFRESH, 0, 0);
+        }
     });
 
     WNDCLASSW wc{};

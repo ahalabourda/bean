@@ -57,6 +57,7 @@ public:
 
     bool StartManualRecording(std::string& error);
     bool StopManualRecording(std::string& error);
+    bool RequestClip(std::string& error);
     void Tick();
 
     OrchestratorState GetState() const;
@@ -66,8 +67,25 @@ public:
 private:
     struct TrimJob {
         std::filesystem::path videoPath;
+        std::filesystem::path outputPath;
         std::chrono::system_clock::time_point recordingStartedAt{};
+        std::chrono::system_clock::time_point clipStartAt{};
         std::chrono::system_clock::time_point trimEndAt{};
+        std::uint64_t clipRequestId = 0;
+        int journalFailureCount = 0;
+        bool isClip = false;
+    };
+
+    struct ClipRequest {
+        std::uint64_t id = 0;
+        std::filesystem::path videoPath;
+        std::filesystem::path outputPath;
+        std::chrono::system_clock::time_point recordingStartedAt{};
+        std::chrono::steady_clock::time_point recordingStartedAtSteady{};
+        std::chrono::system_clock::time_point requestedAt{};
+        std::chrono::steady_clock::time_point requestedAtSteady{};
+        int durationSeconds = 30;
+        int clipIndex = 1;
     };
 
     void HandleCombatLogLine(const std::string& line);
@@ -85,11 +103,18 @@ private:
     void EnqueueTrimJob(const TrimJob& job);
     void TrimWorkerLoop();
     bool RunCheapTrim(const TrimJob& job, std::string& error) const;
+    bool AppendClipJournalRequest(const std::filesystem::path& videoPath, const ClipRequest& request, std::string& error) const;
+    bool AppendClipJournalFailure(std::uint64_t requestId, const std::string& error) const;
+    bool RemoveClipJournalRequest(std::uint64_t requestId) const;
+    void RecoverClipJournal();
+    std::filesystem::path ClipJournalPath() const;
+    std::filesystem::path BuildClipPath(const std::filesystem::path& videoPath, const ClipRequest& request) const;
 
     struct ActiveRecordingMetadata {
         RecordingStartReason triggerReason = RecordingStartReason::Manual;
         std::filesystem::path videoPath;
         std::chrono::system_clock::time_point recordingStartedAt;
+        std::chrono::steady_clock::time_point recordingStartedAtSteady;
         std::optional<std::chrono::system_clock::time_point> recordingEndedAt;
         std::optional<int> challengeMapId;
         std::optional<int> keystoneLevel;
@@ -117,6 +142,7 @@ private:
     std::optional<std::filesystem::file_time_type> observedCombatLogWriteTime_;
     std::shared_ptr<RunRepository> runRepository_;
     std::optional<ActiveRecordingMetadata> activeRecordingMetadata_;
+    std::vector<ClipRequest> pendingClipRequests_;
     std::optional<int> lastChallengeMapId_;
     std::optional<int> lastKeystoneLevel_;
     std::uint64_t recordingSessionId_ = 0;
@@ -125,7 +151,9 @@ private:
     std::mutex trimQueueMutex_;
     std::condition_variable trimQueueCv_;
     std::deque<TrimJob> trimQueue_;
+    mutable std::mutex clipJournalMutex_;
     bool trimWorkerStopRequested_ = false;
+    std::uint64_t nextClipRequestId_ = 1;
 };
 
 } // namespace bean::core

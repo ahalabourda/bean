@@ -35,6 +35,7 @@ struct AppSettings {
     int height = 1080;
     int fps = 60;
     int postRunStopDelaySeconds = 30;
+    int clipDurationSeconds = 30;
     bool chatBlockerEnabled = true;
     bool chatBlockerUseCustomImage = false;
     std::filesystem::path chatBlockerCustomImagePath;
