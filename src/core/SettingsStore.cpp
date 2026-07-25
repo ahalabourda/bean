@@ -516,6 +516,18 @@ bool SettingsStore::Load(AppSettings& settings, std::string& error) const
     settings.fps = ReadInt(content, "fps", settings.fps);
     settings.postRunStopDelaySeconds = ClampInt(ReadInt(content, "postRunStopDelaySeconds", settings.postRunStopDelaySeconds), 0, 600, 30);
     settings.clipDurationSeconds = ClampInt(ReadInt(content, "clipDurationSeconds", settings.clipDurationSeconds), 1, 3600, 30);
+    settings.clipKeybind.modifiers = static_cast<std::uint32_t>(
+        ClampInt(ReadInt(content, "clipKeybindModifiers", static_cast<int>(settings.clipKeybind.modifiers)), 0, 31, 6));
+    settings.clipKeybind.virtualKey = static_cast<std::uint32_t>(
+        ClampInt(ReadInt(content, "clipKeybindVirtualKey", static_cast<int>(settings.clipKeybind.virtualKey)), 0, 255, 0x77));
+    settings.manualStartKeybind.modifiers = static_cast<std::uint32_t>(
+        ClampInt(ReadInt(content, "manualStartKeybindModifiers", static_cast<int>(settings.manualStartKeybind.modifiers)), 0, 31, 6));
+    settings.manualStartKeybind.virtualKey = static_cast<std::uint32_t>(
+        ClampInt(ReadInt(content, "manualStartKeybindVirtualKey", static_cast<int>(settings.manualStartKeybind.virtualKey)), 0, 255, 0x78));
+    settings.manualStopKeybind.modifiers = static_cast<std::uint32_t>(
+        ClampInt(ReadInt(content, "manualStopKeybindModifiers", static_cast<int>(settings.manualStopKeybind.modifiers)), 0, 31, 6));
+    settings.manualStopKeybind.virtualKey = static_cast<std::uint32_t>(
+        ClampInt(ReadInt(content, "manualStopKeybindVirtualKey", static_cast<int>(settings.manualStopKeybind.virtualKey)), 0, 255, 0x79));
     settings.chatBlockerEnabled = ReadBool(content, "chatBlockerEnabled", settings.chatBlockerEnabled);
     settings.chatBlockerUseCustomImage = ReadBool(content, "chatBlockerUseCustomImage", settings.chatBlockerUseCustomImage);
     const auto chatBlockerCustomImagePath = ReadQuoted(content, "chatBlockerCustomImagePath");
@@ -588,6 +600,12 @@ bool SettingsStore::Save(const AppSettings& settings, std::string& error) const
         << "  \"fps\": " << settings.fps << ",\n"
         << "  \"postRunStopDelaySeconds\": " << settings.postRunStopDelaySeconds << ",\n"
         << "  \"clipDurationSeconds\": " << settings.clipDurationSeconds << ",\n"
+        << "  \"clipKeybindModifiers\": " << settings.clipKeybind.modifiers << ",\n"
+        << "  \"clipKeybindVirtualKey\": " << settings.clipKeybind.virtualKey << ",\n"
+        << "  \"manualStartKeybindModifiers\": " << settings.manualStartKeybind.modifiers << ",\n"
+        << "  \"manualStartKeybindVirtualKey\": " << settings.manualStartKeybind.virtualKey << ",\n"
+        << "  \"manualStopKeybindModifiers\": " << settings.manualStopKeybind.modifiers << ",\n"
+        << "  \"manualStopKeybindVirtualKey\": " << settings.manualStopKeybind.virtualKey << ",\n"
         << "  \"chatBlockerEnabled\": " << (settings.chatBlockerEnabled ? "true" : "false") << ",\n"
         << "  \"chatBlockerUseCustomImage\": " << (settings.chatBlockerUseCustomImage ? "true" : "false") << ",\n"
         << "  \"chatBlockerCustomImagePath\": \"" << EscapeJson(settings.chatBlockerCustomImagePath.string()) << "\",\n"

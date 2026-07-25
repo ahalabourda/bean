@@ -2885,8 +2885,8 @@ void RefreshLiveStatus(AppContext* ctx);
 
 void SetActiveTab(AppContext* ctx, AppContext::MainTab tab)
 {
-    if (!ctx || !ctx->statusTabButton || !ctx->configurationTabButton || !ctx->chatPrivacyTabButton || !ctx->recordingsTabButton || !ctx->clipsTabButton || !ctx->aboutTabButton
-        || !ctx->statusPanel || !ctx->recorderPanel || !ctx->chatPrivacyPanel || !ctx->recordingsPanel || !ctx->clipsPanel || !ctx->aboutPanel) {
+    if (!ctx || !ctx->statusTabButton || !ctx->configurationTabButton || !ctx->chatPrivacyTabButton || !ctx->recordingsTabButton || !ctx->clipsTabButton || !ctx->keybindsTabButton || !ctx->aboutTabButton
+        || !ctx->statusPanel || !ctx->recorderPanel || !ctx->chatPrivacyPanel || !ctx->recordingsPanel || !ctx->clipsPanel || !ctx->keybindsPanel || !ctx->aboutPanel) {
         return;
     }
 
@@ -2900,6 +2900,7 @@ void SetActiveTab(AppContext* ctx, AppContext::MainTab tab)
     const bool showChatPrivacy = (tab == AppContext::MainTab::ChatPrivacy);
     const bool showRecordings = (tab == AppContext::MainTab::Recordings);
     const bool showClips = (tab == AppContext::MainTab::Clips);
+    const bool showKeybinds = (tab == AppContext::MainTab::Keybinds);
     const bool showAbout = (tab == AppContext::MainTab::About);
 
     ShowWindow(ctx->statusPanel, showStatus ? SW_SHOW : SW_HIDE);
@@ -2907,6 +2908,7 @@ void SetActiveTab(AppContext* ctx, AppContext::MainTab tab)
     ShowWindow(ctx->chatPrivacyPanel, showChatPrivacy ? SW_SHOW : SW_HIDE);
     ShowWindow(ctx->recordingsPanel, showRecordings ? SW_SHOW : SW_HIDE);
     ShowWindow(ctx->clipsPanel, showClips ? SW_SHOW : SW_HIDE);
+    ShowWindow(ctx->keybindsPanel, showKeybinds ? SW_SHOW : SW_HIDE);
     ShowWindow(ctx->aboutPanel, showAbout ? SW_SHOW : SW_HIDE);
     if (!showConfiguration && ctx->configurationTooltip && IsWindow(ctx->configurationTooltip)) {
         ShowWindow(ctx->configurationTooltip, SW_HIDE);
@@ -2916,6 +2918,7 @@ void SetActiveTab(AppContext* ctx, AppContext::MainTab tab)
     EnableWindow(ctx->chatPrivacyTabButton, !showChatPrivacy);
     EnableWindow(ctx->recordingsTabButton, !showRecordings);
     EnableWindow(ctx->clipsTabButton, !showClips);
+    EnableWindow(ctx->keybindsTabButton, !showKeybinds);
     EnableWindow(ctx->aboutTabButton, !showAbout);
 
     if (showRecordings) {
@@ -3340,6 +3343,232 @@ void PullSettingsFromUi(AppContext* ctx)
     }
 }
 
+bean::core::Keybind* KeybindForIndex(AppContext* ctx, int index)
+{
+    if (!ctx || index < 0 || index >= 3) {
+        return nullptr;
+    }
+    switch (index) {
+    case 0: return &ctx->settings.clipKeybind;
+    case 1: return &ctx->settings.manualStartKeybind;
+    case 2: return &ctx->settings.manualStopKeybind;
+    default: return nullptr;
+    }
+}
+
+std::wstring VirtualKeyName(UINT virtualKey)
+{
+    if (virtualKey >= '0' && virtualKey <= '9') {
+        return std::wstring(1, static_cast<wchar_t>(virtualKey));
+    }
+    if (virtualKey >= 'A' && virtualKey <= 'Z') {
+        return std::wstring(1, static_cast<wchar_t>(virtualKey));
+    }
+    if (virtualKey >= VK_F1 && virtualKey <= VK_F24) {
+        return L"F" + std::to_wstring(virtualKey - VK_F1 + 1);
+    }
+    switch (virtualKey) {
+    case VK_SPACE: return L"Space";
+    case VK_RETURN: return L"Enter";
+    case VK_ESCAPE: return L"Esc";
+    case VK_TAB: return L"Tab";
+    case VK_BACK: return L"Backspace";
+    case VK_INSERT: return L"Insert";
+    case VK_DELETE: return L"Delete";
+    case VK_HOME: return L"Home";
+    case VK_END: return L"End";
+    case VK_PRIOR: return L"Page Up";
+    case VK_NEXT: return L"Page Down";
+    case VK_LEFT: return L"Left";
+    case VK_RIGHT: return L"Right";
+    case VK_UP: return L"Up";
+    case VK_DOWN: return L"Down";
+    case VK_NUMPAD0: case VK_NUMPAD1: case VK_NUMPAD2: case VK_NUMPAD3: case VK_NUMPAD4:
+    case VK_NUMPAD5: case VK_NUMPAD6: case VK_NUMPAD7: case VK_NUMPAD8: case VK_NUMPAD9:
+        return L"Num " + std::to_wstring(virtualKey - VK_NUMPAD0);
+    default:
+        break;
+    }
+    const UINT scanCode = MapVirtualKeyW(virtualKey, MAPVK_VK_TO_VSC);
+    wchar_t name[64] = {};
+    if (scanCode != 0 && GetKeyNameTextW(static_cast<LONG>(scanCode << 16), name, static_cast<int>(std::size(name))) > 0) {
+        return name;
+    }
+    return L"Key " + std::to_wstring(virtualKey);
+}
+
+std::wstring FormatKeybind(const bean::core::Keybind& keybind)
+{
+    if (!keybind.IsBound()) {
+        return L"Unbound";
+    }
+    std::wstring result;
+    const auto addModifier = [&result](const wchar_t* modifier) {
+        if (!result.empty()) {
+            result += L"+";
+        }
+        result += modifier;
+    };
+    if ((keybind.modifiers & MOD_CONTROL) != 0) addModifier(L"Ctrl");
+    if ((keybind.modifiers & MOD_ALT) != 0) addModifier(L"Alt");
+    if ((keybind.modifiers & MOD_SHIFT) != 0) addModifier(L"Shift");
+    if ((keybind.modifiers & MOD_WIN) != 0) addModifier(L"Win");
+    if (!result.empty()) {
+        result += L"+";
+    }
+    result += VirtualKeyName(keybind.virtualKey);
+    return result;
+}
+
+void PushKeybindsToUi(AppContext* ctx)
+{
+    if (!ctx) {
+        return;
+    }
+    for (int index = 0; index < 3; ++index) {
+        const auto* keybind = KeybindForIndex(ctx, index);
+        if (keybind && ctx->keybindValueLabels[static_cast<size_t>(index)]) {
+            SetWindowTextW(
+                ctx->keybindValueLabels[static_cast<size_t>(index)],
+                FormatKeybind(*keybind).c_str());
+        }
+    }
+}
+
+void RegisterConfiguredHotkeys(AppContext* ctx)
+{
+    if (!ctx || !ctx->mainWindow) {
+        return;
+    }
+    UnregisterHotKey(ctx->mainWindow, kClipHotkeyId);
+    UnregisterHotKey(ctx->mainWindow, kManualStartHotkeyId);
+    UnregisterHotKey(ctx->mainWindow, kManualStopHotkeyId);
+    const int hotkeyIds[] = {kClipHotkeyId, kManualStartHotkeyId, kManualStopHotkeyId};
+    for (int index = 0; index < 3; ++index) {
+        const auto* keybind = KeybindForIndex(ctx, index);
+        if (!keybind || !keybind->IsBound()) {
+            continue;
+        }
+        if (!RegisterHotKey(
+                ctx->mainWindow,
+                hotkeyIds[index],
+                static_cast<UINT>(keybind->modifiers) | MOD_NOREPEAT,
+                static_cast<UINT>(keybind->virtualKey))) {
+            SetStatus(ctx, std::wstring(L"Could not register ") + FormatKeybind(*keybind) + L"; it may already be in use.");
+        }
+    }
+}
+
+void SaveKeybindSettings(AppContext* ctx)
+{
+    if (!ctx) {
+        return;
+    }
+    std::string error;
+    if (!ctx->settingsStore.Save(ctx->settings, error)) {
+        SetStatus(ctx, std::wstring(L"Keybind save failed: ") + ToWide(error));
+        return;
+    }
+    ctx->orchestrator->ApplySettings(ctx->settings);
+    PushKeybindsToUi(ctx);
+    RegisterConfiguredHotkeys(ctx);
+}
+
+void BeginKeybindCapture(AppContext* ctx, int index)
+{
+    if (!ctx || !KeybindForIndex(ctx, index)) {
+        return;
+    }
+    UnregisterHotKey(ctx->mainWindow, kClipHotkeyId);
+    UnregisterHotKey(ctx->mainWindow, kManualStartHotkeyId);
+    UnregisterHotKey(ctx->mainWindow, kManualStopHotkeyId);
+    ctx->listeningKeybindIndex = index;
+    const auto button = ctx->keybindRebindButtons[static_cast<size_t>(index)];
+    if (button) {
+        SetWindowTextW(button, L"Press a key...");
+    }
+    SetStatus(ctx, L"Listening for the next key combination...");
+    SetFocus(ctx->mainWindow);
+}
+
+void UnbindKeybind(AppContext* ctx, int index)
+{
+    if (auto* keybind = KeybindForIndex(ctx, index)) {
+        *keybind = {};
+        if (ctx->listeningKeybindIndex == index) {
+            ctx->listeningKeybindIndex.reset();
+        }
+        SaveKeybindSettings(ctx);
+        SetStatus(ctx, L"Keybind unbound.");
+    }
+}
+
+void ResetKeybind(AppContext* ctx, int index)
+{
+    if (!ctx) {
+        return;
+    }
+    static constexpr bean::core::Keybind defaults[] = {
+        {MOD_CONTROL | MOD_SHIFT, VK_F8},
+        {MOD_CONTROL | MOD_SHIFT, VK_F9},
+        {MOD_CONTROL | MOD_SHIFT, VK_F10}
+    };
+    if (auto* keybind = KeybindForIndex(ctx, index)) {
+        *keybind = defaults[index];
+        if (ctx->listeningKeybindIndex == index) {
+            ctx->listeningKeybindIndex.reset();
+        }
+        SaveKeybindSettings(ctx);
+        SetStatus(ctx, L"Keybind reset to its default.");
+    }
+}
+
+bool CaptureKeybindKey(AppContext* ctx, WPARAM virtualKey)
+{
+    if (!ctx || !ctx->listeningKeybindIndex.has_value()) {
+        return false;
+    }
+    switch (virtualKey) {
+    case VK_CONTROL:
+    case VK_LCONTROL:
+    case VK_RCONTROL:
+    case VK_MENU:
+    case VK_LMENU:
+    case VK_RMENU:
+    case VK_SHIFT:
+    case VK_LSHIFT:
+    case VK_RSHIFT:
+    case VK_LWIN:
+    case VK_RWIN:
+        return true;
+    default:
+        break;
+    }
+    auto* keybind = KeybindForIndex(ctx, *ctx->listeningKeybindIndex);
+    if (!keybind) {
+        ctx->listeningKeybindIndex.reset();
+        return true;
+    }
+    UINT modifiers = 0;
+    if ((GetKeyState(VK_CONTROL) & 0x8000) != 0) modifiers |= MOD_CONTROL;
+    if ((GetKeyState(VK_MENU) & 0x8000) != 0) modifiers |= MOD_ALT;
+    if ((GetKeyState(VK_SHIFT) & 0x8000) != 0) modifiers |= MOD_SHIFT;
+    if ((GetKeyState(VK_LWIN) & 0x8000) != 0 || (GetKeyState(VK_RWIN) & 0x8000) != 0) modifiers |= MOD_WIN;
+    *keybind = {
+        modifiers,
+        static_cast<std::uint32_t>(virtualKey)
+    };
+    ctx->listeningKeybindIndex.reset();
+    for (const auto button : ctx->keybindRebindButtons) {
+        if (button) {
+            SetWindowTextW(button, L"Rebind");
+        }
+    }
+    SaveKeybindSettings(ctx);
+    SetStatus(ctx, L"Keybind saved.");
+    return true;
+}
+
 void AutoSaveChatBlockerSettings(AppContext* ctx)
 {
     if (!ctx || !ctx->orchestrator || !ctx->chatBlockerAutoSaveArmed) {
@@ -3559,6 +3788,7 @@ void PushSettingsToUi(AppContext* ctx)
     SetWindowTextW(ctx->fpsEdit, ToWide(std::to_string(ctx->settings.fps)).c_str());
     SetWindowTextW(ctx->postRunDelayEdit, ToWide(std::to_string(ctx->settings.postRunStopDelaySeconds)).c_str());
     SetWindowTextW(ctx->clipDurationEdit, ToWide(std::to_string(ctx->settings.clipDurationSeconds)).c_str());
+    PushKeybindsToUi(ctx);
     const std::wstring selectedCustomImageFileName = ctx->settings.chatBlockerCustomImagePath.filename().wstring();
     RefreshChatBlockerImageCombo(ctx, selectedCustomImageFileName);
     SendMessageW(ctx->chatBlockerImageBlankRadio, BM_SETCHECK, ctx->settings.chatBlockerUseCustomImage ? BST_UNCHECKED : BST_CHECKED, 0);
@@ -3661,6 +3891,9 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         break;
     case IDC_TAB_CLIPS:
         SetActiveTab(ctx, AppContext::MainTab::Clips);
+        break;
+    case IDC_TAB_KEYBINDS:
+        SetActiveTab(ctx, AppContext::MainTab::Keybinds);
         break;
     case IDC_TAB_ABOUT:
         SetActiveTab(ctx, AppContext::MainTab::About);
@@ -4231,6 +4464,33 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         ctx->orchestrator->StopManualRecording(error);
         break;
     }
+    case IDC_KEYBINDS_CREATE_CLIP_REBIND:
+        BeginKeybindCapture(ctx, 0);
+        break;
+    case IDC_KEYBINDS_MANUAL_START_REBIND:
+        BeginKeybindCapture(ctx, 1);
+        break;
+    case IDC_KEYBINDS_MANUAL_STOP_REBIND:
+        BeginKeybindCapture(ctx, 2);
+        break;
+    case IDC_KEYBINDS_CREATE_CLIP_UNBIND:
+        UnbindKeybind(ctx, 0);
+        break;
+    case IDC_KEYBINDS_MANUAL_START_UNBIND:
+        UnbindKeybind(ctx, 1);
+        break;
+    case IDC_KEYBINDS_MANUAL_STOP_UNBIND:
+        UnbindKeybind(ctx, 2);
+        break;
+    case IDC_KEYBINDS_CREATE_CLIP_RESET:
+        ResetKeybind(ctx, 0);
+        break;
+    case IDC_KEYBINDS_MANUAL_START_RESET:
+        ResetKeybind(ctx, 1);
+        break;
+    case IDC_KEYBINDS_MANUAL_STOP_RESET:
+        ResetKeybind(ctx, 2);
+        break;
     default:
         break;
     }
@@ -4274,7 +4534,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ctx->chatPrivacyTabButton = CreateWindowW(L"BUTTON", L"Chat Blocker", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 96, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_CHAT_PRIVACY), nullptr, nullptr);
         ctx->recordingsTabButton = CreateWindowW(L"BUTTON", L"Recordings", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 134, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_RECORDINGS), nullptr, nullptr);
         ctx->clipsTabButton = CreateWindowW(L"BUTTON", L"Clips", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 172, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_CLIPS), nullptr, nullptr);
-        ctx->aboutTabButton = CreateWindowW(L"BUTTON", L"About", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 210, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_ABOUT), nullptr, nullptr);
+        ctx->keybindsTabButton = CreateWindowW(L"BUTTON", L"Keybinds", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 210, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_KEYBINDS), nullptr, nullptr);
+        ctx->aboutTabButton = CreateWindowW(L"BUTTON", L"About", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 248, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_ABOUT), nullptr, nullptr);
 
         EnsureThemeResources();
         ctx->statusPanel = CreateWindowExW(WS_EX_CONTROLPARENT, L"STATIC", L"", WS_VISIBLE | WS_CHILD, panelX, panelY, panelWidth, panelHeight, hwnd, nullptr, nullptr, nullptr);
@@ -4282,12 +4543,14 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ctx->chatPrivacyPanel = CreateWindowExW(WS_EX_CONTROLPARENT, L"STATIC", L"", WS_CHILD, panelX, panelY, panelWidth, panelHeight, hwnd, nullptr, nullptr, nullptr);
         ctx->recordingsPanel = CreateWindowExW(WS_EX_CONTROLPARENT, L"STATIC", L"", WS_CHILD, panelX, panelY, panelWidth, panelHeight, hwnd, nullptr, nullptr, nullptr);
         ctx->clipsPanel = CreateWindowExW(WS_EX_CONTROLPARENT, L"STATIC", L"", WS_CHILD, panelX, panelY, panelWidth, panelHeight, hwnd, nullptr, nullptr, nullptr);
+        ctx->keybindsPanel = CreateWindowExW(WS_EX_CONTROLPARENT, L"STATIC", L"", WS_CHILD, panelX, panelY, panelWidth, panelHeight, hwnd, nullptr, nullptr, nullptr);
         ctx->aboutPanel = CreateWindowExW(WS_EX_CONTROLPARENT, L"STATIC", L"", WS_CHILD, panelX, panelY, panelWidth, panelHeight, hwnd, nullptr, nullptr, nullptr);
         SetWindowSubclass(ctx->statusPanel, PanelMessageForwarder, 1, 0);
         SetWindowSubclass(ctx->recorderPanel, PanelMessageForwarder, 2, 0);
         SetWindowSubclass(ctx->chatPrivacyPanel, PanelMessageForwarder, 3, 0);
         SetWindowSubclass(ctx->recordingsPanel, PanelMessageForwarder, 4, 0);
         SetWindowSubclass(ctx->clipsPanel, PanelMessageForwarder, 5, 0);
+        SetWindowSubclass(ctx->keybindsPanel, PanelMessageForwarder, 7, 0);
         SetWindowSubclass(ctx->aboutPanel, PanelMessageForwarder, 6, 0);
 
         CreateWindowW(L"STATIC", L"Output Folder:", WS_VISIBLE | WS_CHILD, xLabel, y, labelWidth, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_OUTPUT_LABEL), nullptr, nullptr);
@@ -4451,6 +4714,44 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             reinterpret_cast<HMENU>(IDC_CONFIGURATION_AUTOSAVE_HINT),
             nullptr,
             nullptr);
+
+        CreateWindowW(
+            L"STATIC",
+            L"These global hotkeys work while Bean is running, even when another app is focused.",
+            WS_VISIBLE | WS_CHILD,
+            20, 20, 700, rowHeight,
+            ctx->keybindsPanel,
+            reinterpret_cast<HMENU>(IDC_KEYBINDS_INFO),
+            nullptr,
+            nullptr);
+        const wchar_t* keybindLabels[] = {L"Create clip", L"Start recording", L"Stop recording"};
+        const int labelIds[] = {IDC_KEYBINDS_CREATE_CLIP_LABEL, IDC_KEYBINDS_MANUAL_START_LABEL, IDC_KEYBINDS_MANUAL_STOP_LABEL};
+        const int valueIds[] = {IDC_KEYBINDS_CREATE_CLIP_VALUE, IDC_KEYBINDS_MANUAL_START_VALUE, IDC_KEYBINDS_MANUAL_STOP_VALUE};
+        const int rebindIds[] = {IDC_KEYBINDS_CREATE_CLIP_REBIND, IDC_KEYBINDS_MANUAL_START_REBIND, IDC_KEYBINDS_MANUAL_STOP_REBIND};
+        const int unbindIds[] = {IDC_KEYBINDS_CREATE_CLIP_UNBIND, IDC_KEYBINDS_MANUAL_START_UNBIND, IDC_KEYBINDS_MANUAL_STOP_UNBIND};
+        const int resetIds[] = {IDC_KEYBINDS_CREATE_CLIP_RESET, IDC_KEYBINDS_MANUAL_START_RESET, IDC_KEYBINDS_MANUAL_STOP_RESET};
+        for (int index = 0; index < 3; ++index) {
+            const int rowY = 64 + index * 44;
+            CreateWindowW(L"STATIC", keybindLabels[index], WS_VISIBLE | WS_CHILD,
+                20, rowY, 180, rowHeight, ctx->keybindsPanel,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(labelIds[index])), nullptr, nullptr);
+            ctx->keybindValueLabels[static_cast<size_t>(index)] = CreateWindowW(
+                L"STATIC", L"Unbound", WS_VISIBLE | WS_CHILD | SS_CENTER | SS_CENTERIMAGE,
+                220, rowY, 220, rowHeight, ctx->keybindsPanel,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(valueIds[index])), nullptr, nullptr);
+            ctx->keybindRebindButtons[static_cast<size_t>(index)] = CreateWindowW(
+                L"BUTTON", L"Rebind", WS_VISIBLE | WS_CHILD | WS_TABSTOP,
+                460, rowY, 100, rowHeight + 2, ctx->keybindsPanel,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(rebindIds[index])), nullptr, nullptr);
+            ctx->keybindUnbindButtons[static_cast<size_t>(index)] = CreateWindowW(
+                L"BUTTON", L"Unbind", WS_VISIBLE | WS_CHILD | WS_TABSTOP,
+                570, rowY, 100, rowHeight + 2, ctx->keybindsPanel,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(unbindIds[index])), nullptr, nullptr);
+            CreateWindowW(
+                L"BUTTON", L"Reset", WS_VISIBLE | WS_CHILD | WS_TABSTOP,
+                680, rowY, 80, rowHeight + 2, ctx->keybindsPanel,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(resetIds[index])), nullptr, nullptr);
+        }
         y += rowSpacing;
 
         CreateWindowW(L"BUTTON", L"Start Monitoring", WS_VISIBLE | WS_CHILD, xLabel, y, 140, rowHeight + 4, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_MONITOR_START), nullptr, nullptr);
@@ -4951,19 +5252,29 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ctx->chatBlockerAutoSaveArmed = true;
         ctx->configurationAutoSaveArmed = true;
         SetTimer(hwnd, kLiveStatusTimerId, kLiveStatusIntervalMs, nullptr);
-        if (!RegisterHotKey(hwnd, kClipHotkeyId, kClipHotkeyModifiers, kClipHotkeyVirtualKey)) {
-            SetStatus(ctx, L"Clip hotkey unavailable (Ctrl+Shift+F8 is already in use).");
-        } else {
-            SetStatus(ctx, L"Ready. Press Ctrl+Shift+F8 during recording to request a clip.");
-        }
+        RegisterConfiguredHotkeys(ctx);
         return 0;
     }
     case WM_HOTKEY:
-        if (wParam == kClipHotkeyId && ctx && ctx->orchestrator) {
+        if (ctx && ctx->orchestrator && wParam == kClipHotkeyId) {
             std::string clipError;
             if (!ctx->orchestrator->RequestClip(clipError)) {
                 SetStatus(ctx, std::wstring(L"Clip request failed: ") + ToWide(clipError));
             }
+            return 0;
+        }
+        if (ctx && ctx->orchestrator && wParam == kManualStartHotkeyId) {
+            HandleCommand(hwnd, ctx, IDC_RECORD_START);
+            return 0;
+        }
+        if (ctx && ctx->orchestrator && wParam == kManualStopHotkeyId) {
+            HandleCommand(hwnd, ctx, IDC_RECORD_STOP);
+            return 0;
+        }
+        break;
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:
+        if (CaptureKeybindKey(ctx, wParam)) {
             return 0;
         }
         break;
@@ -5505,6 +5816,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
     }
     case WM_DESTROY:
         UnregisterHotKey(hwnd, kClipHotkeyId);
+        UnregisterHotKey(hwnd, kManualStartHotkeyId);
+        UnregisterHotKey(hwnd, kManualStopHotkeyId);
         if (ctx && ctx->orchestrator) {
             ctx->orchestrator->StopMonitoring();
             std::string stopError;

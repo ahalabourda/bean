@@ -445,6 +445,7 @@ bool IsStyledButtonId(int controlId)
     case IDC_TAB_CHAT_PRIVACY:
     case IDC_TAB_RECORDINGS:
     case IDC_TAB_CLIPS:
+    case IDC_TAB_KEYBINDS:
     case IDC_TAB_ABOUT:
     case IDC_OUTPUT_BROWSE:
     case IDC_LOG_BROWSE:
@@ -472,6 +473,15 @@ bool IsStyledButtonId(int controlId)
     case IDC_CLIPS_SET_END:
     case IDC_CLIPS_EXPORT:
     case IDC_CLIPS_OPEN_FOLDER:
+    case IDC_KEYBINDS_CREATE_CLIP_REBIND:
+    case IDC_KEYBINDS_MANUAL_START_REBIND:
+    case IDC_KEYBINDS_MANUAL_STOP_REBIND:
+    case IDC_KEYBINDS_CREATE_CLIP_UNBIND:
+    case IDC_KEYBINDS_MANUAL_START_UNBIND:
+    case IDC_KEYBINDS_MANUAL_STOP_UNBIND:
+    case IDC_KEYBINDS_CREATE_CLIP_RESET:
+    case IDC_KEYBINDS_MANUAL_START_RESET:
+    case IDC_KEYBINDS_MANUAL_STOP_RESET:
         return true;
     default:
         return false;
@@ -508,7 +518,7 @@ void ConfigureStyledButtons(AppContext* ctx)
     if (!ctx) {
         return;
     }
-    const std::array<int, 6> mainButtons = {IDC_TAB_STATUS, IDC_TAB_CONFIGURATION, IDC_TAB_CHAT_PRIVACY, IDC_TAB_RECORDINGS, IDC_TAB_CLIPS, IDC_TAB_ABOUT};
+    const std::array<int, 7> mainButtons = {IDC_TAB_STATUS, IDC_TAB_CONFIGURATION, IDC_TAB_CHAT_PRIVACY, IDC_TAB_RECORDINGS, IDC_TAB_CLIPS, IDC_TAB_KEYBINDS, IDC_TAB_ABOUT};
     for (const int id : mainButtons) {
         EnableOwnerDrawButton(ctx->mainWindow, id);
     }
@@ -530,6 +540,13 @@ void ConfigureStyledButtons(AppContext* ctx)
     for (const int id : clipsButtons) {
         EnableOwnerDrawButton(ctx->clipsPanel, id);
     }
+    const std::array<int, 9> keybindButtons = {
+        IDC_KEYBINDS_CREATE_CLIP_REBIND, IDC_KEYBINDS_MANUAL_START_REBIND, IDC_KEYBINDS_MANUAL_STOP_REBIND,
+        IDC_KEYBINDS_CREATE_CLIP_UNBIND, IDC_KEYBINDS_MANUAL_START_UNBIND, IDC_KEYBINDS_MANUAL_STOP_UNBIND,
+        IDC_KEYBINDS_CREATE_CLIP_RESET, IDC_KEYBINDS_MANUAL_START_RESET, IDC_KEYBINDS_MANUAL_STOP_RESET};
+    for (const int id : keybindButtons) {
+        EnableOwnerDrawButton(ctx->keybindsPanel, id);
+    }
     const std::array<int, 4> aboutButtons = {
         IDC_ABOUT_WEBSITE_BUTTON, IDC_ABOUT_EMAIL_BUTTON, IDC_ABOUT_DISCORD_BUTTON, IDC_ABOUT_CHECK_UPDATES_BUTTON};
     for (const int id : aboutButtons) {
@@ -547,7 +564,7 @@ void DrawStyledButton(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
     const bool isPressed = (drawInfo->itemState & ODS_SELECTED) != 0;
     const bool isHovered = !isDisabled && (drawInfo->hwndItem == gHoveredStyledButton);
     const bool isTab = drawInfo->CtlID == IDC_TAB_STATUS || drawInfo->CtlID == IDC_TAB_CONFIGURATION || drawInfo->CtlID == IDC_TAB_CHAT_PRIVACY
-        || drawInfo->CtlID == IDC_TAB_RECORDINGS || drawInfo->CtlID == IDC_TAB_CLIPS || drawInfo->CtlID == IDC_TAB_ABOUT;
+        || drawInfo->CtlID == IDC_TAB_RECORDINGS || drawInfo->CtlID == IDC_TAB_CLIPS || drawInfo->CtlID == IDC_TAB_KEYBINDS || drawInfo->CtlID == IDC_TAB_ABOUT;
     const bool isLinkDisplay = drawInfo->CtlID == IDC_YOUTUBE_ACCOUNT_LINK;
     const bool isStatusTab = drawInfo->CtlID == IDC_TAB_STATUS;
     const bool isConfigurationTab = drawInfo->CtlID == IDC_TAB_CONFIGURATION;
@@ -558,6 +575,7 @@ void DrawStyledButton(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
             || (drawInfo->CtlID == IDC_TAB_CHAT_PRIVACY && ctx->activeTab == AppContext::MainTab::ChatPrivacy)
             || (drawInfo->CtlID == IDC_TAB_RECORDINGS && ctx->activeTab == AppContext::MainTab::Recordings)
             || (drawInfo->CtlID == IDC_TAB_CLIPS && ctx->activeTab == AppContext::MainTab::Clips)
+            || (drawInfo->CtlID == IDC_TAB_KEYBINDS && ctx->activeTab == AppContext::MainTab::Keybinds)
             || (drawInfo->CtlID == IDC_TAB_ABOUT && ctx->activeTab == AppContext::MainTab::About));
     COLORREF fill = isLinkDisplay ? kColorInputBg : RGB(47, 60, 89);
     COLORREF border = isLinkDisplay ? kColorInputBorder : RGB(91, 114, 167);

@@ -9,6 +9,7 @@
 #include <shobjidl.h>
 
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -43,8 +44,8 @@ inline constexpr wchar_t kYouTubeOAuthCredentialsMissingMessage[] =
 inline constexpr UINT_PTR kLiveStatusTimerId = 1;
 inline constexpr UINT_PTR kClipsExportStatusTimerId = 2;
 inline constexpr int kClipHotkeyId = 1;
-inline constexpr UINT kClipHotkeyModifiers = MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT;
-inline constexpr UINT kClipHotkeyVirtualKey = VK_F8;
+inline constexpr int kManualStartHotkeyId = 2;
+inline constexpr int kManualStopHotkeyId = 3;
 inline constexpr UINT kLiveStatusIntervalMs = 500;
 inline constexpr auto kChatPreviewCaptureInterval = std::chrono::milliseconds(1000);
 inline constexpr auto kChatPreviewInvalidateInterval = std::chrono::milliseconds(1000);
@@ -150,6 +151,22 @@ enum ControlId {
     IDC_CLIP_DURATION_LABEL,
     IDC_CLIP_DURATION_EDIT,
     IDC_CONFIGURATION_AUTOSAVE_HINT,
+    IDC_KEYBINDS_INFO,
+    IDC_KEYBINDS_CREATE_CLIP_LABEL,
+    IDC_KEYBINDS_MANUAL_START_LABEL,
+    IDC_KEYBINDS_MANUAL_STOP_LABEL,
+    IDC_KEYBINDS_CREATE_CLIP_VALUE,
+    IDC_KEYBINDS_MANUAL_START_VALUE,
+    IDC_KEYBINDS_MANUAL_STOP_VALUE,
+    IDC_KEYBINDS_CREATE_CLIP_REBIND,
+    IDC_KEYBINDS_MANUAL_START_REBIND,
+    IDC_KEYBINDS_MANUAL_STOP_REBIND,
+    IDC_KEYBINDS_CREATE_CLIP_UNBIND,
+    IDC_KEYBINDS_MANUAL_START_UNBIND,
+    IDC_KEYBINDS_MANUAL_STOP_UNBIND,
+    IDC_KEYBINDS_CREATE_CLIP_RESET,
+    IDC_KEYBINDS_MANUAL_START_RESET,
+    IDC_KEYBINDS_MANUAL_STOP_RESET,
     IDC_MONITOR_START,
     IDC_MONITOR_STOP,
     IDC_RECORD_START,
@@ -185,6 +202,7 @@ enum ControlId {
     IDC_TAB_CHAT_PRIVACY,
     IDC_TAB_RECORDINGS,
     IDC_TAB_CLIPS,
+    IDC_TAB_KEYBINDS,
     IDC_TAB_ABOUT,
     IDC_CHAT_BLOCKER_ENABLED_CHECK,
     IDC_CHAT_BLOCKER_IMAGE_BLANK_RADIO,
@@ -310,12 +328,18 @@ struct AppContext {
     HWND chatPrivacyTabButton = nullptr;
     HWND aboutTabButton = nullptr;
     HWND clipsTabButton = nullptr;
+    HWND keybindsTabButton = nullptr;
     HWND statusPanel = nullptr;
     HWND recorderPanel = nullptr;
     HWND recordingsPanel = nullptr;
     HWND chatPrivacyPanel = nullptr;
     HWND aboutPanel = nullptr;
     HWND clipsPanel = nullptr;
+    HWND keybindsPanel = nullptr;
+    std::array<HWND, 3> keybindValueLabels{};
+    std::array<HWND, 3> keybindRebindButtons{};
+    std::array<HWND, 3> keybindUnbindButtons{};
+    std::optional<int> listeningKeybindIndex;
     HWND chatBlockerWidthEdit = nullptr;
     HWND chatBlockerHeightEdit = nullptr;
     HWND chatBlockerAnchorCombo = nullptr;
@@ -471,6 +495,7 @@ struct AppContext {
         ChatPrivacy,
         Recordings,
         Clips,
+        Keybinds,
         About
     };
     MainTab activeTab = MainTab::Status;

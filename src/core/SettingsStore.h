@@ -3,11 +3,22 @@
 #include "obs/IRecorderEngine.h"
 
 #include <filesystem>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <utility>
 
 namespace bean::core {
+
+struct Keybind {
+    std::uint32_t modifiers = 0;
+    std::uint32_t virtualKey = 0;
+
+    bool IsBound() const
+    {
+        return virtualKey != 0;
+    }
+};
 
 struct AppSettings {
     enum class ChatBlockerAnchor {
@@ -36,6 +47,9 @@ struct AppSettings {
     int fps = 60;
     int postRunStopDelaySeconds = 30;
     int clipDurationSeconds = 30;
+    Keybind clipKeybind{6, 0x77};        // Ctrl+Shift+F8
+    Keybind manualStartKeybind{6, 0x78}; // Ctrl+Shift+F9
+    Keybind manualStopKeybind{6, 0x79};  // Ctrl+Shift+F10
     bool chatBlockerEnabled = true;
     bool chatBlockerUseCustomImage = false;
     std::filesystem::path chatBlockerCustomImagePath;
