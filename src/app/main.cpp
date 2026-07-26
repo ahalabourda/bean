@@ -4380,7 +4380,7 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         break;
     }
     case IDC_ABOUT_EMAIL_BUTTON: {
-        const auto result = reinterpret_cast<intptr_t>(ShellExecuteW(hwnd, L"open", L"mailto:goatrope@gmail.com", nullptr, nullptr, SW_SHOWNORMAL));
+        const auto result = reinterpret_cast<intptr_t>(ShellExecuteW(hwnd, L"open", L"mailto:goatrope@gmail.com?subject=BEAN%20Inquiry", nullptr, nullptr, SW_SHOWNORMAL));
         if (result <= 32) {
             SetStatus(ctx, L"Failed to open default email app.");
         }
