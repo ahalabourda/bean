@@ -67,6 +67,25 @@ std::wstring FileUrl(const std::filesystem::path& path)
 
 } // namespace
 
+const wchar_t* ClipPreviewEngine::VideoHostWindowClass()
+{
+    static constexpr wchar_t kClassName[] = L"BeanClipVideoHost";
+    static bool registered = false;
+    if (!registered) {
+        WNDCLASSW windowClass{};
+        // Intentionally no CS_HREDRAW/CS_VREDRAW — those force full client
+        // repaints on every size change and increase flicker.
+        windowClass.lpfnWndProc = DefWindowProcW;
+        windowClass.hInstance = GetModuleHandleW(nullptr);
+        windowClass.lpszClassName = kClassName;
+        windowClass.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512)); // IDC_ARROW
+        windowClass.hbrBackground = CreateSolidBrush(kColorInputBg);
+        RegisterClassW(&windowClass);
+        registered = true;
+    }
+    return kClassName;
+}
+
 class ClipPreviewEngine::NotifyCallback final : public EngineNotify {
 public:
     explicit NotifyCallback(ClipPreviewEngine* owner)
@@ -85,9 +104,9 @@ HRESULT EngineNotify::EventNotify(DWORD eventCode, DWORD_PTR, DWORD)
     return S_OK;
 }
 
-ClipPreviewEngine::ClipPreviewEngine(HWND eventWindow, HWND playbackWindow)
+ClipPreviewEngine::ClipPreviewEngine(HWND eventWindow, HWND containerWindow)
     : eventWindow_(eventWindow)
-    , playbackWindow_(playbackWindow)
+    , containerWindow_(containerWindow)
 {
 }
 
@@ -95,6 +114,7 @@ ClipPreviewEngine::~ClipPreviewEngine()
 {
     Close();
     ReleaseEngine();
+    DestroyPlaybackWindow();
     if (initialized_) {
         MFShutdown();
         initialized_ = false;
@@ -123,9 +143,31 @@ HRESULT ClipPreviewEngine::Initialize()
 
 HRESULT ClipPreviewEngine::CreateEngine()
 {
+    if (!containerWindow_) {
+        return E_INVALIDARG;
+    }
+    DestroyPlaybackWindow();
+    playbackWindow_ = CreateWindowExW(
+        0,
+        VideoHostWindowClass(),
+        L"",
+        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+        0,
+        0,
+        1,
+        1,
+        containerWindow_,
+        nullptr,
+        GetModuleHandleW(nullptr),
+        nullptr);
+    if (!playbackWindow_) {
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+
     IMFAttributes* attributes = nullptr;
     HRESULT hr = MFCreateAttributes(&attributes, 3);
     if (FAILED(hr)) {
+        DestroyPlaybackWindow();
         return hr;
     }
 
@@ -150,18 +192,28 @@ HRESULT ClipPreviewEngine::CreateEngine()
     attributes->Release();
     if (FAILED(hr)) {
         ReleaseEngine();
+        DestroyPlaybackWindow();
         return hr;
     }
 
     hr = engine_->QueryInterface(IID_PPV_ARGS(&engineEx_));
     if (FAILED(hr)) {
         ReleaseEngine();
+        DestroyPlaybackWindow();
         return hr;
     }
     engine_->SetPreload(MF_MEDIA_ENGINE_PRELOAD_AUTOMATIC);
     engine_->SetAutoPlay(FALSE);
     engineEx_->EnableTimeUpdateTimer(TRUE);
     return S_OK;
+}
+
+void ClipPreviewEngine::DestroyPlaybackWindow()
+{
+    if (playbackWindow_) {
+        DestroyWindow(playbackWindow_);
+        playbackWindow_ = nullptr;
+    }
 }
 
 void ClipPreviewEngine::ReleaseEngine()
@@ -229,6 +281,8 @@ void ClipPreviewEngine::NotifyEvent(DWORD eventCode)
 void ClipPreviewEngine::Close()
 {
     ready_ = false;
+    cachedVideoWidth_ = 0;
+    cachedVideoHeight_ = 0;
     if (engine_) {
         engine_->Pause();
         engine_->SetSource(nullptr);
@@ -266,6 +320,74 @@ HRESULT ClipPreviewEngine::SetVolumePercent(int percent)
     }
     const double volume = static_cast<double>((std::clamp)(percent, 0, 100)) / 100.0;
     return engine_->SetVolume(volume);
+}
+
+HRESULT ClipPreviewEngine::UpdatePlaybackWindow()
+{
+    if (!containerWindow_ || !playbackWindow_) {
+        return E_UNEXPECTED;
+    }
+
+    RECT container{};
+    if (!GetClientRect(containerWindow_, &container)) {
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+    const int containerWidth = container.right - container.left;
+    const int containerHeight = container.bottom - container.top;
+    if (containerWidth <= 0 || containerHeight <= 0) {
+        return S_OK;
+    }
+
+    int videoWidth = 0;
+    int videoHeight = 0;
+    const auto nativeSize = NativeVideoSize();
+    if (nativeSize.first > 0 && nativeSize.second > 0) {
+        videoWidth = nativeSize.first;
+        videoHeight = nativeSize.second;
+        cachedVideoWidth_ = videoWidth;
+        cachedVideoHeight_ = videoHeight;
+    } else {
+        videoWidth = cachedVideoWidth_;
+        videoHeight = cachedVideoHeight_;
+    }
+
+    int destX = 0;
+    int destY = 0;
+    int destWidth = containerWidth;
+    int destHeight = containerHeight;
+    if (videoWidth > 0 && videoHeight > 0) {
+        const double scale = (std::min)(
+            static_cast<double>(containerWidth) / static_cast<double>(videoWidth),
+            static_cast<double>(containerHeight) / static_cast<double>(videoHeight));
+        destWidth = (std::max)(1, static_cast<int>(videoWidth * scale + 0.5));
+        destHeight = (std::max)(1, static_cast<int>(videoHeight * scale + 0.5));
+        destX = (containerWidth - destWidth) / 2;
+        destY = (containerHeight - destHeight) / 2;
+    }
+
+    SetWindowPos(
+        playbackWindow_,
+        nullptr,
+        destX,
+        destY,
+        destWidth,
+        destHeight,
+        SWP_NOZORDER | SWP_NOACTIVATE);
+
+    if (!engineEx_) {
+        InvalidateRect(containerWindow_, nullptr, FALSE);
+        return S_OK;
+    }
+
+    RECT destination{0, 0, destWidth, destHeight};
+    const MFARGB borderColor{
+        GetBValue(kColorInputBg),
+        GetGValue(kColorInputBg),
+        GetRValue(kColorInputBg),
+        255};
+    const HRESULT hr = engineEx_->UpdateVideoStream(nullptr, &destination, &borderColor);
+    InvalidateRect(containerWindow_, nullptr, FALSE);
+    return hr;
 }
 
 bool ClipPreviewEngine::IsReady() const

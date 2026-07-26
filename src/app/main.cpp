@@ -638,6 +638,9 @@ void ApplyClipVideoWindowBounds(AppContext* ctx)
     if (!ctx || !ctx->clipsVideoSurface) {
         return;
     }
+    if (ctx->clipsPreviewEngine && ctx->clipsPreviewEngine->IsReady()) {
+        ctx->clipsPreviewEngine->UpdatePlaybackWindow();
+    }
     InvalidateRect(ctx->clipsVideoSurface, nullptr, FALSE);
 }
 
@@ -1012,10 +1015,10 @@ bool LoadClipFromSelection(AppContext* ctx, bool reportStatus = true)
         return false;
     }
 
-    ApplyClipVideoWindowBounds(ctx);
     const auto nativeSize = ctx->clipsPreviewEngine->NativeVideoSize();
     ctx->clipsVideoSourceWidth = nativeSize.first;
     ctx->clipsVideoSourceHeight = nativeSize.second;
+    ApplyClipVideoWindowBounds(ctx);
     ctx->clipsDurationMs = ctx->clipsPreviewEngine->DurationMilliseconds();
     if (ctx->clipsDurationMs <= 0) {
         // Some graph combinations fail duration probe until playback advances;
@@ -5039,9 +5042,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             nullptr);
         CreateWindowW(L"BUTTON", L"Refresh", WS_VISIBLE | WS_CHILD | WS_TABSTOP, 664, 19, 96, rowHeight + 4, ctx->clipsPanel, reinterpret_cast<HMENU>(IDC_CLIPS_REFRESH), nullptr, nullptr);
         ctx->clipsVideoSurface = CreateWindowW(
-            L"STATIC",
+            ClipPreviewEngine::VideoHostWindowClass(),
             L"",
-            WS_VISIBLE | WS_CHILD | WS_BORDER,
+            WS_VISIBLE | WS_CHILD | WS_BORDER | WS_CLIPCHILDREN,
             20,
             56,
             740,
@@ -5603,9 +5606,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
     case WM_SIZE:
         if (ctx && wParam != SIZE_MINIMIZED) {
             LayoutMainUi(ctx, LOWORD(lParam), HIWORD(lParam));
-            if (!ctx->clipsResizeInProgress) {
-                ApplyClipVideoWindowBounds(ctx);
-            }
+            ApplyClipVideoWindowBounds(ctx);
         }
         return 0;
     case WM_ERASEBKGND: {
