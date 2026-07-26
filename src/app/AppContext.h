@@ -14,9 +14,12 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -303,6 +306,13 @@ enum ControlId {
 };
 
 struct AppContext {
+    // Thread ownership (f9):
+    // - UI thread owns HWND fields, settings edits, and list/combo state.
+    // - Background workers started via LaunchAppWorker may only touch atomics
+    //   and must PostMessage results; JoinAppWorkers runs in WM_DESTROY.
+    // - Orchestrator / combat-log / trim workers are owned by bean_core and
+    //   never hold raw AppContext pointers.
+
     bean::core::SettingsStore settingsStore;
     std::shared_ptr<bean::core::RunRepository> runRepository;
     bean::core::AppSettings settings;
@@ -532,4 +542,12 @@ struct AppContext {
     };
     MainTab activeTab = MainTab::Status;
     std::vector<MicrophoneOption> microphoneOptions;
+
+    // Detached work is forbidden: LaunchAppWorker stores joinable threads here
+    // and JoinAppWorkers runs from WM_DESTROY before the HWND is destroyed.
+    struct BackgroundWorkers {
+        std::mutex mutex;
+        std::vector<std::thread> threads;
+    };
+    BackgroundWorkers backgroundWorkers;
 };

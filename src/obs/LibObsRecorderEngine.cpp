@@ -1,4 +1,5 @@
 #include "obs/LibObsRecorderEngine.h"
+#include "core/RecordingPath.h"
 
 #include "util/Strings.h"
 
@@ -964,9 +965,8 @@ bool LibObsRecorderEngine::StartRecording(const std::string& fileStem, std::stri
         return false;
     }
 
-    const bool useMp4 = (config_.containerFormat == "mp4");
-    const auto extension = useMp4 ? ".mp4" : ".mkv";
-    const auto outputPath = config_.outputDirectory / (fileStem + extension);
+    const auto outputPath = bean::core::BuildRecordingPath(
+        config_.outputDirectory, fileStem, config_.containerFormat);
     if (!StartOutputWithEncoders(outputPath, audioSourceDebug, micSourceDebug, blockerDebug, error)) {
         return false;
     }

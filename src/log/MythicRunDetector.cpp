@@ -1,4 +1,5 @@
 #include "log/MythicRunDetector.h"
+#include "log/CombatLogFields.h"
 
 #include <algorithm>
 #include <charconv>
@@ -13,16 +14,19 @@ namespace {
 
 constexpr size_t kExpectedMythicPartySize = 5;
 
-bool Contains(const std::string& text, const std::string& needle)
-{
-    return text.find(needle) != std::string::npos;
-}
+struct ParsedCombatLogLine {
+    std::string_view eventName;
+    std::vector<std::string_view> fields;
+    // Owns the payload string that `fields` views into.
+    std::string payload;
+};
 
 std::string ExtractEventPayload(const std::string& line)
 {
     const auto firstSpace = line.find("  ");
     if (firstSpace == std::string::npos || firstSpace + 2 >= line.size()) {
-        return {};
+        // Timestamp-less fixtures / journal lines: treat the whole line as payload.
+        return line;
     }
     return line.substr(firstSpace + 2);
 }
@@ -58,6 +62,21 @@ std::vector<std::string_view> SplitCsvTopLevel(std::string_view input)
     }
     out.push_back(input.substr(start));
     return out;
+}
+
+std::optional<ParsedCombatLogLine> ParseCombatLogLine(const std::string& line)
+{
+    ParsedCombatLogLine parsed;
+    parsed.payload = ExtractEventPayload(line);
+    if (parsed.payload.empty()) {
+        return std::nullopt;
+    }
+    parsed.fields = SplitCsvTopLevel(parsed.payload);
+    if (parsed.fields.empty()) {
+        return std::nullopt;
+    }
+    parsed.eventName = parsed.fields[0];
+    return parsed;
 }
 
 std::optional<int> ParseInt(std::string_view token)
@@ -160,6 +179,75 @@ void ParseNameRealm(std::string_view nameRealmToken,
     }
 }
 
+void PopulateChallengeDetails(const ParsedCombatLogLine& parsed, MythicEvent& event)
+{
+    namespace Start = ChallengeModeStartFields;
+    namespace End = ChallengeModeEndFields;
+
+    if (parsed.eventName == "CHALLENGE_MODE_START") {
+        if (parsed.fields.size() < Start::MinCount) {
+            return;
+        }
+        const auto dungeonName = UnquoteToken(parsed.fields[Start::DungeonName]);
+        if (!dungeonName.empty()) {
+            event.mapName = dungeonName;
+        }
+        if (const auto challengeMapId = ParseInt(parsed.fields[Start::ChallengeMapId]);
+            challengeMapId.has_value() && *challengeMapId > 0) {
+            event.challengeMapId = *challengeMapId;
+        }
+        if (const auto level = ParseInt(parsed.fields[Start::KeystoneLevel]);
+            level.has_value() && *level > 0 && *level <= 40) {
+            event.keystoneLevel = *level;
+        }
+        return;
+    }
+
+    if (parsed.eventName == "CHALLENGE_MODE_END") {
+        if (parsed.fields.size() < End::MinCount) {
+            return;
+        }
+        if (const auto mapId = ParseInt(parsed.fields[End::ChallengeMapId]);
+            mapId.has_value() && *mapId > 0) {
+            event.challengeMapId = *mapId;
+        }
+        if (const auto level = ParseInt(parsed.fields[End::KeystoneLevel]);
+            level.has_value() && *level > 0 && *level <= 40) {
+            event.keystoneLevel = *level;
+        }
+    }
+}
+
+bool IsChallengeModeEndTimed(const ParsedCombatLogLine& parsed)
+{
+    namespace End = ChallengeModeEndFields;
+    if (parsed.eventName != "CHALLENGE_MODE_END" || parsed.fields.size() < End::MinCount) {
+        return false;
+    }
+
+    const auto mapId = ParseInt(parsed.fields[End::ChallengeMapId]).value_or(0);
+    const auto successFlag = ParseInt(parsed.fields[End::Success]).value_or(0);
+    const auto keystoneLevel = ParseInt(parsed.fields[End::KeystoneLevel]).value_or(0);
+    const auto totalTimeMs = ParseDouble(parsed.fields[End::TotalTimeMs]).value_or(0.0);
+    const auto onTimeDeltaSeconds = ParseDouble(parsed.fields[End::OnTimeDeltaSeconds]).value_or(0.0);
+    const auto timerLimitSeconds = ParseDouble(parsed.fields[End::TimerLimitSeconds]).value_or(0.0);
+
+    const bool allZeroEndPayload = mapId == 0
+        && successFlag == 0
+        && keystoneLevel == 0
+        && totalTimeMs == 0.0
+        && onTimeDeltaSeconds == 0.0
+        && timerLimitSeconds == 0.0;
+    if (allZeroEndPayload) {
+        return false;
+    }
+
+    if (successFlag <= 0) {
+        return false;
+    }
+    return onTimeDeltaSeconds >= 0.0;
+}
+
 } // namespace
 
 std::optional<SpecInfo> ResolveSpecInfo(int specId)
@@ -209,60 +297,6 @@ std::optional<SpecInfo> ResolveSpecInfo(int specId)
     }
 }
 
-namespace {
-
-void PopulateChallengeDetails(const std::string& line, MythicEvent& event)
-{
-    const auto payload = ExtractEventPayload(line);
-    if (payload.empty()) {
-        return;
-    }
-
-    auto fields = SplitCsvTopLevel(payload);
-    if (fields.size() < 2) {
-        return;
-    }
-    if (fields[0].find("CHALLENGE_MODE_") == std::string_view::npos) {
-        return;
-    }
-
-    // Current format (12.1+):
-    // CHALLENGE_MODE_START,"Dungeon Name",<challengeModeId>,<challengeMapId>,<keystoneLevel>,[...]
-    if (fields[0] == "CHALLENGE_MODE_START") {
-        if (fields.size() < 5) {
-            return;
-        }
-        const auto dungeonName = UnquoteToken(fields[1]);
-        if (!dungeonName.empty()) {
-            event.mapName = dungeonName;
-        }
-        if (const auto challengeMapId = ParseInt(fields[3]); challengeMapId.has_value() && *challengeMapId > 0) {
-            event.challengeMapId = *challengeMapId;
-        }
-        if (const auto level = ParseInt(fields[4]); level.has_value() && *level > 0 && *level <= 40) {
-            event.keystoneLevel = *level;
-        }
-        return;
-    }
-
-    // Current format (12.1+):
-    // CHALLENGE_MODE_END,<challengeMapId>,<success>,<keystoneLevel>,<totalMs>,<deltaSeconds>,<timerSeconds>
-    if (fields[0] == "CHALLENGE_MODE_END") {
-        if (fields.size() < 7) {
-            return;
-        }
-        if (const auto mapId = ParseInt(fields[1]); mapId.has_value() && *mapId > 0) {
-            event.challengeMapId = *mapId;
-        }
-        if (const auto level = ParseInt(fields[3]); level.has_value() && *level > 0 && *level <= 40) {
-            event.keystoneLevel = *level;
-        }
-        return;
-    }
-}
-
-} // namespace
-
 bool MythicRunDetector::HasResolvedMythicParty() const
 {
     size_t resolvedCount = 0;
@@ -281,31 +315,26 @@ bool MythicRunDetector::HasResolvedMythicParty() const
     return false;
 }
 
-void MythicRunDetector::UpdateParticipantFromCombatantInfo(const std::string& line)
+void MythicRunDetector::UpdateParticipantFromCombatantInfo(const std::vector<std::string_view>& fields)
 {
-    const auto payload = ExtractEventPayload(line);
-    if (payload.empty()) {
+    namespace Info = CombatantInfoFields;
+    if (fields.size() <= Info::SpecIdPrimary) {
+        return;
+    }
+    if (fields[Info::Event] != "COMBATANT_INFO") {
+        return;
+    }
+    if (!IsPlayerGuid(fields[Info::Guid])) {
         return;
     }
 
-    const auto fields = SplitCsvTopLevel(payload);
-    if (fields.size() <= 25) {
-        return;
-    }
-    if (fields[0] != "COMBATANT_INFO") {
-        return;
-    }
-    if (!IsPlayerGuid(fields[1])) {
-        return;
-    }
-
-    const auto guid = std::string(fields[1]);
+    const auto guid = std::string(fields[Info::Guid]);
     auto& participant = participantsByGuid_[guid];
     participant.guid = guid;
 
-    std::optional<int> specId = ParseInt(fields[25]);
-    if ((!specId.has_value() || *specId <= 0) && fields.size() > 26) {
-        specId = ParseInt(fields[26]);
+    std::optional<int> specId = ParseInt(fields[Info::SpecIdPrimary]);
+    if ((!specId.has_value() || *specId <= 0) && fields.size() > Info::SpecIdFallback) {
+        specId = ParseInt(fields[Info::SpecIdFallback]);
     }
     if (specId.has_value() && *specId > 0) {
         participant.specId = *specId;
@@ -316,13 +345,9 @@ void MythicRunDetector::UpdateParticipantFromCombatantInfo(const std::string& li
     }
 }
 
-void MythicRunDetector::UpdateParticipantFromCombatEvent(const std::string& line)
+void MythicRunDetector::UpdateParticipantFromCombatEvent(const std::vector<std::string_view>& fields)
 {
-    const auto payload = ExtractEventPayload(line);
-    if (payload.empty()) {
-        return;
-    }
-    const auto fields = SplitCsvTopLevel(payload);
+    namespace Actor = CombatEventActorFields;
     if (fields.empty()) {
         return;
     }
@@ -340,12 +365,10 @@ void MythicRunDetector::UpdateParticipantFromCombatEvent(const std::string& line
         ParseNameRealm(fields[nameIndex], participant.name, participant.realm);
     };
 
-    // Standard combat log payload layout includes source and destination GUID/name.
-    captureAt(1, 2);
-    captureAt(5, 6);
-    // Some log formats include hideCaster after event, shifting source/destination by +1.
-    captureAt(2, 3);
-    captureAt(6, 7);
+    captureAt(Actor::SourceGuid, Actor::SourceName);
+    captureAt(Actor::DestGuid, Actor::DestName);
+    captureAt(Actor::SourceGuidWithHideCaster, Actor::SourceNameWithHideCaster);
+    captureAt(Actor::DestGuidWithHideCaster, Actor::DestNameWithHideCaster);
 }
 
 std::vector<MythicParticipant> MythicRunDetector::GetParticipants() const
@@ -367,80 +390,40 @@ std::vector<MythicParticipant> MythicRunDetector::GetParticipants() const
     return participants;
 }
 
-bool IsChallengeModeEndTimed(const std::string& line)
-{
-    const auto payload = ExtractEventPayload(line);
-    if (payload.empty()) {
-        return false;
-    }
-
-    const auto fields = SplitCsvTopLevel(payload);
-    if (fields.empty() || fields[0] != "CHALLENGE_MODE_END") {
-        return false;
-    }
-    // Expected layout:
-    // CHALLENGE_MODE_END,<mapId>,<success>,<keystone>,<totalMs>,<deltaSeconds>,<timerSeconds>
-    if (fields.size() < 7) {
-        return false;
-    }
-
-    const auto mapId = ParseInt(fields[1]).value_or(0);
-    const auto successFlag = ParseInt(fields[2]).value_or(0);
-    const auto keystoneLevel = ParseInt(fields[3]).value_or(0);
-    const auto totalTimeMs = ParseDouble(fields[4]).value_or(0.0);
-    const auto onTimeDeltaSeconds = ParseDouble(fields[5]).value_or(0.0);
-    const auto timerLimitSeconds = ParseDouble(fields[6]).value_or(0.0);
-
-    const bool allZeroEndPayload = mapId == 0
-        && successFlag == 0
-        && keystoneLevel == 0
-        && totalTimeMs == 0.0
-        && onTimeDeltaSeconds == 0.0
-        && timerLimitSeconds == 0.0;
-    if (allZeroEndPayload) {
-        return false;
-    }
-
-    if (successFlag <= 0) {
-        return false;
-    }
-    return onTimeDeltaSeconds >= 0.0;
-}
-
 std::optional<MythicEvent> MythicRunDetector::ProcessLine(const std::string& line)
 {
-    const bool startSignal = Contains(line, "CHALLENGE_MODE_START");
+    const auto parsed = ParseCombatLogLine(line);
+    if (!parsed.has_value()) {
+        return std::nullopt;
+    }
 
-    if (startSignal) {
+    // Match on the event-name field only. Substring scans of the full line
+    // falsely triggered on addon chatter that mentioned these tokens.
+    if (parsed->eventName == "CHALLENGE_MODE_START") {
         isInRun_ = true;
         participantsByGuid_.clear();
         participantCollectionComplete_ = false;
         MythicEvent event{MythicEventType::RunStarted, line};
-        PopulateChallengeDetails(line, event);
+        PopulateChallengeDetails(*parsed, event);
         return event;
     }
 
-    const bool endSignal = Contains(line, "CHALLENGE_MODE_END");
-
-    if (endSignal && isInRun_) {
+    if (parsed->eventName == "CHALLENGE_MODE_END" && isInRun_) {
         isInRun_ = false;
         participantCollectionComplete_ = false;
-        const MythicEventType endType = IsChallengeModeEndTimed(line)
+        const MythicEventType endType = IsChallengeModeEndTimed(*parsed)
             ? MythicEventType::RunEndedSuccess
             : MythicEventType::RunEndedFailure;
         MythicEvent event{endType, line};
-        PopulateChallengeDetails(line, event);
+        PopulateChallengeDetails(*parsed, event);
         return event;
     }
 
-    const bool failureSignal =
-        Contains(line, "CHALLENGE_MODE_RESET");
-
-    if (failureSignal && isInRun_) {
+    if (parsed->eventName == "CHALLENGE_MODE_RESET" && isInRun_) {
         isInRun_ = false;
         participantCollectionComplete_ = false;
         MythicEvent event{MythicEventType::RunEndedFailure, line};
-        PopulateChallengeDetails(line, event);
+        PopulateChallengeDetails(*parsed, event);
         return event;
     }
 
@@ -449,8 +432,11 @@ std::optional<MythicEvent> MythicRunDetector::ProcessLine(const std::string& lin
     }
 
     if (!participantCollectionComplete_) {
-        UpdateParticipantFromCombatantInfo(line);
-        UpdateParticipantFromCombatEvent(line);
+        if (parsed->eventName == "COMBATANT_INFO") {
+            UpdateParticipantFromCombatantInfo(parsed->fields);
+        } else {
+            UpdateParticipantFromCombatEvent(parsed->fields);
+        }
         participantCollectionComplete_ = HasResolvedMythicParty();
     }
 

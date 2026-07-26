@@ -201,6 +201,30 @@ bool RunParticipantsHasColumn(sqlite3* db, const char* columnName, std::string& 
     return found;
 }
 
+bool GetSqliteUserVersion(sqlite3* db, int& version, std::string& error)
+{
+    auto& api = GetSqliteApi();
+    sqlite3_stmt* stmt = nullptr;
+    if (api.prepare_v2(db, "PRAGMA user_version;", -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+        error = "Unable to read database user_version.";
+        return false;
+    }
+    version = 0;
+    if (api.step(stmt) == SQLITE_ROW) {
+        version = api.column_int(stmt, 0);
+    }
+    api.finalize(stmt);
+    return true;
+}
+
+bool SetSqliteUserVersion(sqlite3* db, int version, std::string& error)
+{
+    return ExecuteSql(db, ("PRAGMA user_version = " + std::to_string(version) + ";").c_str(), error);
+}
+
+// Current schema revision. Bump when adding numbered migrations below.
+constexpr int kRunsDbUserVersion = 2;
+
 bool MigrateRunParticipantsSchema(sqlite3* db, std::string& error)
 {
     bool hasSpecName = false;
@@ -332,11 +356,30 @@ bool RunRepository::EnsureInitialized(std::string& error)
         ");"
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_run_participants_run_guid ON run_participants(run_id, unit_guid);";
     const bool ok = ExecuteSql(db, schemaSql, error);
-    if (ok && !MigrateRunParticipantsSchema(db, error)) {
+    if (!ok) {
         api.close(db);
         return false;
     }
-    if (ok) {
+
+    int userVersion = 0;
+    if (!GetSqliteUserVersion(db, userVersion, error)) {
+        api.close(db);
+        return false;
+    }
+    // Version 0/1: legacy DBs may still have denormalized spec_name/class_name
+    // columns. Version 2 is the current participant schema.
+    if (userVersion < 2) {
+        if (!MigrateRunParticipantsSchema(db, error)) {
+            api.close(db);
+            return false;
+        }
+        if (!SetSqliteUserVersion(db, kRunsDbUserVersion, error)) {
+            api.close(db);
+            return false;
+        }
+    }
+
+    {
         const char* manualDungeonBackfillSql =
             "UPDATE runs "
             "SET dungeon_name = 'Manual Recording' "
@@ -346,10 +389,6 @@ bool RunRepository::EnsureInitialized(std::string& error)
             api.close(db);
             return false;
         }
-    }
-    if (!ok) {
-        api.close(db);
-        return false;
     }
 
     ExecuteSql(db, "PRAGMA foreign_keys = ON;", error);

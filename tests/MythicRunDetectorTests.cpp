@@ -96,6 +96,15 @@ void TestIgnoreEndWhenNotInRun()
     Expect(!e.has_value(), "End event should be ignored if run not started.");
 }
 
+void TestAddonChatterDoesNotStartRun()
+{
+    bean::log::MythicRunDetector detector;
+    // Event name is EMBEDDED_TEXT; the CHALLENGE_MODE_START token only appears in a field.
+    auto e = detector.ProcessLine(
+        "6/20/2026 00:00:00.000-7  EMBEDDED_ITEM,\"Someone said CHALLENGE_MODE_START in chat\"");
+    Expect(!e.has_value(), "Substring CHALLENGE_MODE_START in a non-event field must not start a run.");
+}
+
 void TestRetailChallengeStartParsesMapAndLevel()
 {
     bean::log::MythicRunDetector detector;
@@ -190,6 +199,7 @@ int main()
     TestStartAndFailure();
     TestDuplicateStartForcesRestart();
     TestIgnoreEndWhenNotInRun();
+    TestAddonChatterDoesNotStartRun();
     TestEndEventOvertimeMapsToFailure();
     TestEndEventAllZeroPayloadMapsToFailure();
     TestRetailChallengeStartParsesMapAndLevel();

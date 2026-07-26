@@ -1,4 +1,7 @@
 #include "core/RecordingOrchestrator.h"
+#include "core/RecordingPath.h"
+#include "core/ClipExportService.h"
+#include "core/RunMetadataWriter.h"
 
 #include "core/WowData.h"
 
@@ -10,18 +13,13 @@
 #include <iomanip>
 #include <fstream>
 #include <iterator>
-#include <regex>
 #include <sstream>
-#include <unordered_set>
 
 namespace bean::core {
 namespace {
 
 constexpr auto kPostStartIdleTimeoutSuppress = std::chrono::seconds(180);
 constexpr auto kCombatLogIdleTimeout = std::chrono::seconds(720);
-constexpr auto kMinCheapTrimSeconds = std::chrono::seconds(5);
-constexpr int kMinClipDurationSeconds = 1;
-constexpr int kMaxClipDurationSeconds = 3600;
 
 std::string TimestampNow()
 {
@@ -68,180 +66,6 @@ std::string FormatDurationClock(std::chrono::seconds duration)
        << ":" << std::setw(2) << minutes
        << ":" << std::setw(2) << seconds;
     return os.str();
-}
-
-std::wstring QuoteArg(const std::filesystem::path& path)
-{
-    return L"\"" + path.wstring() + L"\"";
-}
-
-std::string FormatWinExitCode(DWORD exitCode)
-{
-    std::ostringstream os;
-    os << exitCode << " (0x" << std::uppercase << std::hex << exitCode << std::nouppercase << std::dec << ")";
-    return os.str();
-}
-
-std::int64_t ToEpochMilliseconds(const std::chrono::system_clock::time_point& value)
-{
-    return std::chrono::duration_cast<std::chrono::milliseconds>(value.time_since_epoch()).count();
-}
-
-std::chrono::system_clock::time_point FromEpochMilliseconds(std::int64_t value)
-{
-    return std::chrono::system_clock::time_point(std::chrono::milliseconds(value));
-}
-
-std::vector<std::filesystem::path> ResolveFfmpegExecutableCandidates()
-{
-    std::vector<std::filesystem::path> candidates;
-    const auto existsExe = [](const std::filesystem::path& candidate) -> std::optional<std::filesystem::path> {
-        std::error_code ec;
-        if (!candidate.empty() && std::filesystem::exists(candidate, ec) && !ec) {
-            return candidate;
-        }
-        return std::nullopt;
-    };
-
-    wchar_t modulePath[MAX_PATH] = {};
-    const DWORD moduleLen = GetModuleFileNameW(nullptr, modulePath, static_cast<DWORD>(std::size(modulePath)));
-    if (moduleLen > 0) {
-        const auto localCandidate = std::filesystem::path(modulePath).parent_path() / "ffmpeg.exe";
-        if (const auto resolved = existsExe(localCandidate); resolved.has_value()) {
-            candidates.push_back(resolved->lexically_normal());
-        }
-    }
-
-    return candidates;
-}
-
-bool RunProcessAndWait(const std::wstring& commandLine, DWORD& exitCode)
-{
-    STARTUPINFOW startupInfo{};
-    startupInfo.cb = sizeof(startupInfo);
-    PROCESS_INFORMATION processInfo{};
-    std::wstring mutableCommandLine = commandLine;
-    if (!CreateProcessW(
-            nullptr,
-            mutableCommandLine.data(),
-            nullptr,
-            nullptr,
-            FALSE,
-            CREATE_NO_WINDOW,
-            nullptr,
-            nullptr,
-            &startupInfo,
-            &processInfo)) {
-        return false;
-    }
-
-    WaitForSingleObject(processInfo.hProcess, INFINITE);
-    bool gotCode = (GetExitCodeProcess(processInfo.hProcess, &exitCode) != 0);
-    CloseHandle(processInfo.hThread);
-    CloseHandle(processInfo.hProcess);
-    return gotCode;
-}
-
-bool RunProcessAndCapture(
-    const std::wstring& commandLine,
-    const std::filesystem::path& capturePath,
-    DWORD& exitCode)
-{
-    SECURITY_ATTRIBUTES securityAttributes{};
-    securityAttributes.nLength = sizeof(securityAttributes);
-    securityAttributes.bInheritHandle = TRUE;
-    HANDLE captureFile = CreateFileW(
-        capturePath.wstring().c_str(),
-        GENERIC_WRITE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE,
-        &securityAttributes,
-        CREATE_ALWAYS,
-        FILE_ATTRIBUTE_NORMAL,
-        nullptr);
-    if (captureFile == INVALID_HANDLE_VALUE) {
-        return false;
-    }
-
-    STARTUPINFOW startupInfo{};
-    startupInfo.cb = sizeof(startupInfo);
-    startupInfo.dwFlags = STARTF_USESTDHANDLES;
-    startupInfo.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-    startupInfo.hStdOutput = captureFile;
-    startupInfo.hStdError = captureFile;
-    PROCESS_INFORMATION processInfo{};
-    std::wstring mutableCommandLine = commandLine;
-    const BOOL created = CreateProcessW(
-        nullptr,
-        mutableCommandLine.data(),
-        nullptr,
-        nullptr,
-        TRUE,
-        CREATE_NO_WINDOW,
-        nullptr,
-        nullptr,
-        &startupInfo,
-        &processInfo);
-    CloseHandle(captureFile);
-    if (!created) {
-        return false;
-    }
-
-    WaitForSingleObject(processInfo.hProcess, INFINITE);
-    const bool gotCode = GetExitCodeProcess(processInfo.hProcess, &exitCode) != 0;
-    CloseHandle(processInfo.hThread);
-    CloseHandle(processInfo.hProcess);
-    return gotCode;
-}
-
-bool ProbeKeyframeTimes(
-    const std::filesystem::path& ffmpegPath,
-    const std::filesystem::path& videoPath,
-    std::vector<double>& keyframes,
-    std::string& error)
-{
-    keyframes.clear();
-    error.clear();
-    const auto capturePath = videoPath.parent_path() /
-        (videoPath.stem().string() + ".keyframes.tmp.txt");
-    std::error_code cleanupEc;
-    std::filesystem::remove(capturePath, cleanupEc);
-
-    const std::wstring commandLine = QuoteArg(ffmpegPath)
-        + L" -hide_banner -loglevel info -skip_frame nokey -i " + QuoteArg(videoPath)
-        + L" -an -vf showinfo -f null NUL";
-    DWORD exitCode = 1;
-    if (!RunProcessAndCapture(commandLine, capturePath, exitCode)) {
-        error = "Unable to launch FFmpeg keyframe probe.";
-        return false;
-    }
-
-    std::ifstream stream(capturePath);
-    if (!stream.is_open()) {
-        error = "Unable to read FFmpeg keyframe probe output.";
-        return false;
-    }
-    const std::regex ptsPattern(R"(pts_time:([0-9]+(?:\.[0-9]+)?))");
-    std::string line;
-    while (std::getline(stream, line)) {
-        if (line.find("iskey:1") == std::string::npos) {
-            continue;
-        }
-        std::smatch match;
-        if (std::regex_search(line, match, ptsPattern)) {
-            keyframes.push_back(std::stod(match[1].str()));
-        }
-    }
-    stream.close();
-    std::filesystem::remove(capturePath, cleanupEc);
-    if (keyframes.empty()) {
-        error = "FFmpeg did not report any keyframes.";
-        return false;
-    }
-    if (exitCode != 0) {
-        error = "FFmpeg keyframe probe failed with exit code " + FormatWinExitCode(exitCode) + ".";
-        return false;
-    }
-    return true;
 }
 
 std::string BuildWatcherDebugStatus(const log::CombatLogWatcher::DebugSnapshot& snapshot)
@@ -325,19 +149,35 @@ RecordingOrchestrator::~RecordingOrchestrator()
     StopMonitoring();
     std::string error;
     StopRecordingInternal(RecordingStopReason::Shutdown, error);
-    StopTrimWorker();
+    clipExport_.Stop();
 }
 
 void RecordingOrchestrator::SetStatusCallback(StatusCallback callback)
 {
-    std::scoped_lock lock(statusCallbackMutex_);
-    statusCallback_ = std::move(callback);
+    {
+        std::scoped_lock lock(statusCallbackMutex_);
+        statusCallback_ = callback;
+    }
+    clipExport_.SetStatusCallback(callback);
+    runMetadataWriter_.SetStatusCallback(std::move(callback));
 }
 
 void RecordingOrchestrator::SetRunRepository(std::shared_ptr<RunRepository> repository)
 {
     std::scoped_lock lock(mutex_);
-    runRepository_ = std::move(repository);
+    runRepository_ = repository;
+    runMetadataWriter_.SetRepository(std::move(repository));
+    SyncClipExportSettingsLocked();
+}
+
+void RecordingOrchestrator::SyncClipExportSettingsLocked()
+{
+    clipExport_.SetClipDurationSeconds(settings_.clipDurationSeconds);
+    if (runRepository_) {
+        clipExport_.SetJournalDirectory(runRepository_->GetDatabasePath().parent_path());
+    } else if (!settings_.outputDirectory.empty()) {
+        clipExport_.SetJournalDirectory(settings_.outputDirectory);
+    }
 }
 
 void RecordingOrchestrator::ApplySettings(const AppSettings& settings)
@@ -349,6 +189,7 @@ void RecordingOrchestrator::ApplySettings(const AppSettings& settings)
         && settings.captureMicrophone
         && settings_.microphoneNoiseSuppression != settings.microphoneNoiseSuppression;
     settings_ = settings;
+    SyncClipExportSettingsLocked();
     if (updateMicNoiseSuppressionLive) {
         std::string error;
         if (!engine_->SetMicrophoneNoiseSuppressionEnabled(settings_.microphoneNoiseSuppression, error)) {
@@ -389,7 +230,8 @@ bool RecordingOrchestrator::StartMonitoring(std::string& error)
         return false;
     }
 
-    RecoverClipJournal();
+    SyncClipExportSettingsLocked();
+    clipExport_.RecoverPendingWork();
 
     // Start the consumer before the producer so no line is dropped.
     StartCombatLogWorker();
@@ -459,26 +301,11 @@ bool RecordingOrchestrator::RequestClip(std::string& error)
         return false;
     }
 
-    ClipRequest request;
-    request.videoPath = activeRecordingMetadata_->videoPath;
-    request.recordingStartedAt = activeRecordingMetadata_->recordingStartedAt;
-    request.recordingStartedAtSteady = activeRecordingMetadata_->recordingStartedAtSteady;
-    request.requestedAt = std::chrono::system_clock::now();
-    request.requestedAtSteady = std::chrono::steady_clock::now();
-    request.id = (static_cast<std::uint64_t>(ToEpochMilliseconds(request.requestedAt)) << 10)
-        ^ (nextClipRequestId_++ & 0x3FFu);
-    request.durationSeconds = (std::clamp)(settings_.clipDurationSeconds, kMinClipDurationSeconds, kMaxClipDurationSeconds);
-    request.clipIndex = static_cast<int>(pendingClipRequests_.size()) + 1;
-    request.outputPath = BuildClipPath(request.videoPath, request);
-    if (!AppendClipJournalRequest(request.videoPath, request, error)) {
-        PushStatus("Clip request journal write failed: " + error);
-        return false;
-    }
-    pendingClipRequests_.push_back(request);
-    PushStatus(
-        "Clip requested (" + std::to_string(request.durationSeconds)
-        + "s); it will be exported when the recording finishes.");
-    return true;
+    return clipExport_.RequestClip(
+        activeRecordingMetadata_->videoPath,
+        activeRecordingMetadata_->recordingStartedAt,
+        activeRecordingMetadata_->recordingStartedAtSteady,
+        error);
 }
 
 void RecordingOrchestrator::Tick()
@@ -804,7 +631,7 @@ bool RecordingOrchestrator::StartRecordingInternal(
     auto recordingConfig = ToRecordingConfig(settings_);
     const auto fileStem = BuildFileStem(reason);
     const int selectedHeight = settings_.recordingResolutionHeight;
-    const bool useMp4 = settings_.videoContainer == "mp4";
+    const auto videoContainer = settings_.videoContainer;
     const auto outputDirectory = settings_.outputDirectory;
     const auto challengeMapId = lastChallengeMapId_;
     const auto keystoneLevel = lastKeystoneLevel_;
@@ -848,8 +675,7 @@ bool RecordingOrchestrator::StartRecordingInternal(
     state_ = OrchestratorState::Recording;
     ActiveRecordingMetadata metadata;
     metadata.triggerReason = reason;
-    const auto extension = useMp4 ? ".mp4" : ".mkv";
-    metadata.videoPath = outputDirectory / (fileStem + extension);
+    metadata.videoPath = BuildRecordingPath(outputDirectory, fileStem, videoContainer);
     metadata.recordingStartedAt = std::chrono::system_clock::now();
     metadata.recordingStartedAtSteady = std::chrono::steady_clock::now();
     metadata.challengeMapId = challengeMapId;
@@ -891,510 +717,16 @@ bool RecordingOrchestrator::StopRecordingInternal(
     lastCombatLogFileWriteAtWallClock_.reset();
     observedCombatLogFile_.reset();
     observedCombatLogWriteTime_.reset();
-    if (activeRecordingMetadata_.has_value() &&
-        logicalEndAt.has_value() &&
-        activeRecordingMetadata_->recordingStartedAt + kMinCheapTrimSeconds < *logicalEndAt &&
-        *logicalEndAt < std::chrono::system_clock::now()) {
-        TrimJob job;
-        job.videoPath = activeRecordingMetadata_->videoPath;
-        job.recordingStartedAt = activeRecordingMetadata_->recordingStartedAt;
-        job.trimEndAt = *logicalEndAt;
-        EnqueueTrimJob(job);
-    }
-    if (activeRecordingMetadata_.has_value() && !pendingClipRequests_.empty()) {
-        const auto recording = *activeRecordingMetadata_;
-        const auto now = std::chrono::system_clock::now();
-        for (const auto& request : pendingClipRequests_) {
-            const auto requestedAt = (std::min)(request.requestedAt, now);
-            const auto requestedElapsed = request.requestedAtSteady - recording.recordingStartedAtSteady;
-            const auto clipStartAt = requestedElapsed < std::chrono::seconds(request.durationSeconds)
-                ? recording.recordingStartedAt
-                : (std::max)(recording.recordingStartedAt, requestedAt - std::chrono::seconds(request.durationSeconds));
-            TrimJob job;
-            job.videoPath = recording.videoPath;
-            job.outputPath = request.outputPath;
-            job.recordingStartedAt = recording.recordingStartedAt;
-            job.clipStartAt = clipStartAt;
-            job.trimEndAt = requestedAt;
-            job.clipRequestId = request.id;
-            job.isClip = true;
-            EnqueueTrimJob(job);
-        }
-        pendingClipRequests_.clear();
+    if (activeRecordingMetadata_.has_value()) {
+        clipExport_.OnRecordingStopped(
+            activeRecordingMetadata_->videoPath,
+            activeRecordingMetadata_->recordingStartedAt,
+            activeRecordingMetadata_->recordingStartedAtSteady,
+            logicalEndAt);
     }
     PersistRunRecord(reason);
     PushStatus("Recording stopped (" + std::string(ToString(reason)) + ").");
     return true;
-}
-
-void RecordingOrchestrator::EnsureTrimWorkerRunning()
-{
-    if (trimWorker_.joinable()) {
-        return;
-    }
-    trimWorkerStopRequested_ = false;
-    trimWorker_ = std::thread([this]() { TrimWorkerLoop(); });
-}
-
-void RecordingOrchestrator::StopTrimWorker()
-{
-    {
-        std::scoped_lock lock(trimQueueMutex_);
-        trimWorkerStopRequested_ = true;
-    }
-    trimQueueCv_.notify_all();
-    if (trimWorker_.joinable()) {
-        trimWorker_.join();
-    }
-}
-
-void RecordingOrchestrator::EnqueueTrimJob(const TrimJob& job)
-{
-    const auto trimDuration = std::chrono::duration_cast<std::chrono::seconds>(job.trimEndAt - job.recordingStartedAt);
-    {
-        std::scoped_lock lock(trimQueueMutex_);
-        trimQueue_.push_back(job);
-        EnsureTrimWorkerRunning();
-    }
-    PushStatus("Trim queued for '" + job.videoPath.filename().string() +
-        "': logical end " + FormatWallClock(job.trimEndAt) +
-        ", keep duration " + FormatDurationClock(trimDuration) + ".");
-    trimQueueCv_.notify_one();
-}
-
-std::filesystem::path RecordingOrchestrator::ClipJournalPath() const
-{
-    if (runRepository_) {
-        return runRepository_->GetDatabasePath().parent_path() / "bean-clip-journal.log";
-    }
-    return settings_.outputDirectory / "bean-clip-journal.log";
-}
-
-bool RecordingOrchestrator::AppendClipJournalRequest(
-    const std::filesystem::path& videoPath,
-    const ClipRequest& request,
-    std::string& error) const
-{
-    std::scoped_lock journalLock(clipJournalMutex_);
-    error.clear();
-    std::error_code ec;
-    std::filesystem::create_directories(videoPath.parent_path() / "Clips", ec);
-    if (ec) {
-        error = "Unable to create Clips folder: " + ec.message();
-        return false;
-    }
-    ec.clear();
-    std::filesystem::create_directories(ClipJournalPath().parent_path(), ec);
-    if (ec) {
-        error = "Unable to create clip journal folder: " + ec.message();
-        return false;
-    }
-    std::ofstream stream(ClipJournalPath(), std::ios::app);
-    if (!stream.is_open()) {
-        error = "Unable to open clip journal.";
-        return false;
-    }
-    stream << "REQ " << request.id
-           << ' ' << ToEpochMilliseconds(request.recordingStartedAt)
-           << ' ' << ToEpochMilliseconds(request.requestedAt)
-           << ' ' << request.durationSeconds
-           << ' ' << request.clipIndex
-           << ' ' << std::quoted(videoPath.string())
-           << ' ' << std::quoted(request.outputPath.string()) << '\n';
-    stream.flush();
-    if (!stream.good()) {
-        error = "Failed while writing clip journal.";
-        return false;
-    }
-    return true;
-}
-
-bool RecordingOrchestrator::AppendClipJournalFailure(
-    std::uint64_t requestId,
-    const std::string& error) const
-{
-    std::scoped_lock journalLock(clipJournalMutex_);
-    std::ofstream stream(ClipJournalPath(), std::ios::app);
-    if (!stream.is_open()) {
-        return false;
-    }
-    stream << "FAIL " << requestId;
-    if (!error.empty()) {
-        stream << ' ' << std::quoted(error);
-    }
-    stream << '\n';
-    stream.flush();
-    return stream.good();
-}
-
-bool RecordingOrchestrator::RemoveClipJournalRequest(std::uint64_t requestId) const
-{
-    std::scoped_lock journalLock(clipJournalMutex_);
-    const auto journalPath = ClipJournalPath();
-    std::ifstream input(journalPath);
-    if (!input.is_open()) {
-        return true;
-    }
-
-    const auto temporaryPath = journalPath.parent_path() / (journalPath.filename().string() + ".tmp");
-    std::ofstream output(temporaryPath, std::ios::trunc);
-    if (!output.is_open()) {
-        return false;
-    }
-
-    std::string line;
-    while (std::getline(input, line)) {
-        std::istringstream lineStream(line);
-        std::string type;
-        std::uint64_t lineRequestId = 0;
-        lineStream >> type >> lineRequestId;
-        if ((type == "REQ" || type == "FAIL" || type == "DONE") && lineRequestId == requestId) {
-            continue;
-        }
-        output << line << '\n';
-    }
-    output.flush();
-    if (!output.good()) {
-        std::filesystem::remove(temporaryPath);
-        return false;
-    }
-    output.close();
-    input.close();
-
-    std::error_code ec;
-    const auto backupPath = journalPath.parent_path() / (journalPath.filename().string() + ".bak");
-    std::filesystem::remove(backupPath, ec);
-    ec.clear();
-    std::filesystem::rename(journalPath, backupPath, ec);
-    if (ec) {
-        std::filesystem::remove(temporaryPath);
-        return false;
-    }
-    ec.clear();
-    std::filesystem::rename(temporaryPath, journalPath, ec);
-    if (ec) {
-        std::error_code restoreEc;
-        std::filesystem::rename(backupPath, journalPath, restoreEc);
-        std::filesystem::remove(temporaryPath);
-        return false;
-    }
-    std::filesystem::remove(backupPath, ec);
-    return true;
-}
-
-std::filesystem::path RecordingOrchestrator::BuildClipPath(
-    const std::filesystem::path& videoPath,
-    const ClipRequest& request) const
-{
-    std::ostringstream name;
-    name << videoPath.stem().string()
-         << "-clip";
-    if (request.clipIndex > 1) {
-        name << "-" << request.clipIndex;
-    }
-    name << videoPath.extension().string();
-    return videoPath.parent_path() / "Clips" / name.str();
-}
-
-void RecordingOrchestrator::RecoverClipJournal()
-{
-    if (engine_->IsRecording()) {
-        return;
-    }
-    std::ifstream stream(ClipJournalPath());
-    if (!stream.is_open()) {
-        return;
-    }
-
-    std::unordered_set<std::uint64_t> completed;
-    std::unordered_map<std::uint64_t, int> failureCounts;
-    std::vector<ClipRequest> requests;
-    std::string line;
-    while (std::getline(stream, line)) {
-        std::istringstream input(line);
-        std::string type;
-        input >> type;
-        if (type == "DONE") {
-            std::uint64_t id = 0;
-            if (input >> id) {
-                completed.insert(id);
-            }
-            continue;
-        }
-        if (type == "FAIL") {
-            std::uint64_t id = 0;
-            if (input >> id) {
-                ++failureCounts[id];
-            }
-            continue;
-        }
-        if (type != "REQ") {
-            continue;
-        }
-        ClipRequest request;
-        std::int64_t recordingStartMs = 0;
-        std::int64_t requestedMs = 0;
-        std::string pathText;
-        if (!(input >> request.id >> recordingStartMs >> requestedMs >> request.durationSeconds)) {
-            continue;
-        }
-        input >> std::ws;
-        if (input.peek() == '"') {
-            // Compatibility with journals written before clip numbering was added.
-            if (!(input >> std::quoted(pathText))) {
-                continue;
-            }
-        } else if (!(input >> request.clipIndex >> std::quoted(pathText))) {
-            continue;
-        }
-        request.recordingStartedAt = FromEpochMilliseconds(recordingStartMs);
-        request.requestedAt = FromEpochMilliseconds(requestedMs);
-        request.videoPath = pathText;
-        request.durationSeconds = (std::clamp)(request.durationSeconds, kMinClipDurationSeconds, kMaxClipDurationSeconds);
-        std::string outputText;
-        if (input >> std::quoted(outputText)) {
-            request.outputPath = outputText;
-        }
-        requests.push_back(std::move(request));
-    }
-
-    for (const auto& request : requests) {
-        if (completed.contains(request.id)) {
-            RemoveClipJournalRequest(request.id);
-            continue;
-        }
-        const int failureCount = failureCounts[request.id];
-        if (failureCount >= 3) {
-            RemoveClipJournalRequest(request.id);
-            PushStatus("Giving up on clip request " + std::to_string(request.id) + " after three failed attempts.");
-            continue;
-        }
-        std::error_code ec;
-        if (!std::filesystem::exists(request.videoPath, ec) || ec) {
-            continue;
-        }
-        const auto outputPath = request.outputPath.empty()
-            ? BuildClipPath(request.videoPath, request)
-            : request.outputPath;
-        if (std::filesystem::exists(outputPath, ec) && !ec) {
-            RemoveClipJournalRequest(request.id);
-            continue;
-        }
-        TrimJob job;
-        job.videoPath = request.videoPath;
-        job.outputPath = outputPath;
-        job.recordingStartedAt = request.recordingStartedAt;
-        job.clipStartAt = (std::max)(
-            request.recordingStartedAt,
-            request.requestedAt - std::chrono::seconds(request.durationSeconds));
-        job.trimEndAt = request.requestedAt;
-        job.clipRequestId = request.id;
-        job.journalFailureCount = failureCount;
-        job.isClip = true;
-        EnqueueTrimJob(job);
-        PushStatus("Recovered pending clip request " + std::to_string(request.id) + " from the clip journal.");
-    }
-}
-
-void RecordingOrchestrator::TrimWorkerLoop()
-{
-    for (;;) {
-        TrimJob job;
-        {
-            std::unique_lock lock(trimQueueMutex_);
-            trimQueueCv_.wait(lock, [this]() { return trimWorkerStopRequested_ || !trimQueue_.empty(); });
-            if (trimWorkerStopRequested_ && trimQueue_.empty()) {
-                return;
-            }
-            job = trimQueue_.front();
-            trimQueue_.pop_front();
-        }
-        const auto trimStart = job.isClip ? job.clipStartAt : job.recordingStartedAt;
-        const auto trimDuration = std::chrono::duration_cast<std::chrono::seconds>(job.trimEndAt - trimStart);
-        PushStatus((job.isClip ? "Clip export started for '" : "Trim started for '") + job.videoPath.filename().string() +
-            "' -> logical end " + FormatWallClock(job.trimEndAt) +
-            " (keep " + FormatDurationClock(trimDuration) + ").");
-        std::string trimError;
-        bool trimSucceeded = false;
-        for (int attempt = 0; attempt < (job.isClip ? 10 : 1); ++attempt) {
-            if (RunCheapTrim(job, trimError)) {
-                trimSucceeded = true;
-                break;
-            }
-            if (job.isClip && attempt < 9) {
-                Sleep(500);
-            }
-        }
-        if (trimSucceeded) {
-            PushStatus((job.isClip ? "Clip export finished for '" : "Trim finished for '") + job.videoPath.filename().string() +
-                "' (kept " + FormatDurationClock(trimDuration) + ").");
-            if (job.isClip) {
-                if (!RemoveClipJournalRequest(job.clipRequestId)) {
-                    PushStatus("Warning: could not remove completed clip request "
-                        + std::to_string(job.clipRequestId) + " from the journal.");
-                }
-                PushStatus("Clip created: '" + job.outputPath.filename().string() + "'.");
-            }
-        } else {
-            PushStatus("Trim failed for '" + job.videoPath.filename().string() + "': " + trimError);
-            if (job.isClip) {
-                if (job.journalFailureCount >= 2) {
-                    if (RemoveClipJournalRequest(job.clipRequestId)) {
-                        PushStatus("Giving up on clip request " + std::to_string(job.clipRequestId)
-                            + " after three failed attempts.");
-                    } else {
-                        PushStatus("Warning: could not remove abandoned clip request "
-                            + std::to_string(job.clipRequestId) + " from the journal.");
-                    }
-                } else if (!AppendClipJournalFailure(job.clipRequestId, trimError)) {
-                    PushStatus("Warning: could not record clip failure for request "
-                        + std::to_string(job.clipRequestId) + ".");
-                } else {
-                    PushStatus("Clip export failed for request " + std::to_string(job.clipRequestId)
-                        + "; it will be retried on the next launch.");
-                }
-            }
-        }
-    }
-}
-
-bool RecordingOrchestrator::RunCheapTrim(const TrimJob& job, std::string& error) const
-{
-    error.clear();
-    std::error_code ec;
-    if (!std::filesystem::exists(job.videoPath, ec) || ec) {
-        error = "Source video missing.";
-        return false;
-    }
-
-    const auto trimStart = job.isClip ? job.clipStartAt : job.recordingStartedAt;
-    const auto durationSeconds = std::chrono::duration_cast<std::chrono::seconds>(job.trimEndAt - trimStart);
-    if (durationSeconds < (job.isClip ? std::chrono::seconds(kMinClipDurationSeconds) : kMinCheapTrimSeconds)) {
-        error = "Trim duration too short.";
-        return false;
-    }
-
-    const auto ffmpegCandidates = ResolveFfmpegExecutableCandidates();
-    if (ffmpegCandidates.empty()) {
-        error = "Bundled ffmpeg.exe is missing beside the Bean executable.";
-        return false;
-    }
-    std::vector<std::string> candidateErrors;
-    candidateErrors.reserve(ffmpegCandidates.size());
-    for (const auto& ffmpegPath : ffmpegCandidates) {
-        const auto outputPath = job.isClip ? job.outputPath : job.videoPath;
-        const auto tempPath = outputPath.parent_path() /
-            (outputPath.stem().string() + (job.isClip ? ".cliptmp" : ".trimtmp") + outputPath.extension().string());
-        const auto backupPath = job.videoPath.parent_path() /
-            (job.videoPath.stem().string() + ".pretrim" + job.videoPath.extension().string());
-
-        std::error_code cleanupEc;
-        std::filesystem::remove(tempPath, cleanupEc);
-        cleanupEc.clear();
-        std::filesystem::remove(backupPath, cleanupEc);
-
-        double exportStartOffsetSeconds = static_cast<double>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                trimStart - job.recordingStartedAt).count()) / 1000.0;
-        double exportDurationSeconds = static_cast<double>(durationSeconds.count());
-        if (job.isClip) {
-            std::vector<double> keyframes;
-            std::string probeError;
-            if (ProbeKeyframeTimes(ffmpegPath, job.videoPath, keyframes, probeError)) {
-                const double requestedEndOffsetSeconds = static_cast<double>(
-                    std::chrono::duration_cast<std::chrono::milliseconds>(
-                        job.trimEndAt - job.recordingStartedAt).count()) / 1000.0;
-                const auto endAtOrAfter = std::lower_bound(
-                    keyframes.begin(), keyframes.end(), requestedEndOffsetSeconds);
-                const double selectedEndOffsetSeconds = endAtOrAfter != keyframes.end()
-                    ? *endAtOrAfter
-                    : keyframes.back();
-                const double targetStartOffsetSeconds =
-                    selectedEndOffsetSeconds - exportDurationSeconds;
-                const auto startAfterTarget = std::upper_bound(
-                    keyframes.begin(), keyframes.end(), targetStartOffsetSeconds);
-                const double selectedStartOffsetSeconds = startAfterTarget == keyframes.begin()
-                    ? keyframes.front()
-                    : *std::prev(startAfterTarget);
-                if (selectedStartOffsetSeconds < selectedEndOffsetSeconds) {
-                    exportStartOffsetSeconds = selectedStartOffsetSeconds;
-                    exportDurationSeconds = selectedEndOffsetSeconds - selectedStartOffsetSeconds;
-                }
-            }
-        }
-
-        std::wstring commandLine = QuoteArg(ffmpegPath);
-        if (job.isClip) {
-            commandLine += L" -ss " + std::to_wstring(exportStartOffsetSeconds);
-        }
-        commandLine += L" -y -v error -i " + QuoteArg(job.videoPath)
-            + L" -t " + std::to_wstring(exportDurationSeconds)
-            + L" -map 0 -c copy " + QuoteArg(tempPath);
-
-        DWORD exitCode = 1;
-        if (!RunProcessAndWait(commandLine, exitCode)) {
-            candidateErrors.push_back(ffmpegPath.string() + ": failed to launch process");
-            continue;
-        }
-        if (exitCode != 0) {
-            std::string candidateError = ffmpegPath.string() + ": exited with " + FormatWinExitCode(exitCode);
-            if (exitCode == 3221225781u) { // STATUS_DLL_NOT_FOUND
-                candidateError += " (missing runtime DLL dependency)";
-            }
-            candidateErrors.push_back(std::move(candidateError));
-            continue;
-        }
-        if (!std::filesystem::exists(tempPath, ec) || ec) {
-            candidateErrors.push_back(ffmpegPath.string() + ": did not produce output file");
-            continue;
-        }
-
-        if (job.isClip) {
-            std::filesystem::remove(outputPath, cleanupEc);
-            std::error_code renameEc;
-            std::filesystem::rename(tempPath, outputPath, renameEc);
-            if (renameEc) {
-                candidateErrors.push_back(ffmpegPath.string() + ": unable to create clip output");
-                continue;
-            }
-            return true;
-        }
-
-        std::error_code renameEc;
-        std::filesystem::rename(job.videoPath, backupPath, renameEc);
-        if (renameEc) {
-            std::filesystem::remove(tempPath, cleanupEc);
-            candidateErrors.push_back(ffmpegPath.string() + ": unable to stage original video for replacement");
-            continue;
-        }
-
-        renameEc.clear();
-        std::filesystem::rename(tempPath, job.videoPath, renameEc);
-        if (renameEc) {
-            std::error_code restoreEc;
-            std::filesystem::rename(backupPath, job.videoPath, restoreEc);
-            std::filesystem::remove(tempPath, cleanupEc);
-            candidateErrors.push_back(ffmpegPath.string() + ": unable to replace original video with trimmed output");
-            continue;
-        }
-
-        std::filesystem::remove(backupPath, cleanupEc);
-        return true;
-    }
-
-    std::ostringstream os;
-    os << "All ffmpeg candidates failed";
-    if (!candidateErrors.empty()) {
-        os << ": ";
-        for (size_t i = 0; i < candidateErrors.size(); ++i) {
-            if (i > 0) {
-                os << " | ";
-            }
-            os << candidateErrors[i];
-        }
-    }
-    error = os.str();
-    return false;
 }
 
 std::string RecordingOrchestrator::BuildFileStem(RecordingStartReason reason) const
@@ -1443,66 +775,20 @@ void RecordingOrchestrator::PersistRunRecord(RecordingStopReason stopReason)
     if (!activeRecordingMetadata_.has_value()) {
         return;
     }
-    if (!runRepository_) {
-        PushStatus("Run repository is unavailable; metadata not persisted.");
-        activeRecordingMetadata_.reset();
-        return;
-    }
 
-    auto& metadata = *activeRecordingMetadata_;
-    metadata.recordingEndedAt = std::chrono::system_clock::now();
-    if ((stopReason == RecordingStopReason::MythicSuccess || stopReason == RecordingStopReason::MythicFailure)
-        && !metadata.mythicRunEndedAt.has_value()) {
-        metadata.mythicRunEndedAt = metadata.recordingEndedAt;
-    }
-
-    std::string result = "unknown";
-    if (stopReason == RecordingStopReason::MythicSuccess) {
-        result = "success";
-    } else if (stopReason == RecordingStopReason::MythicFailure) {
-        result = "failure";
-    }
-
-    RunRecord record;
-    record.videoPath = metadata.videoPath;
-    record.videoFileName = metadata.videoPath.filename().string();
-    record.triggerReason = ToString(metadata.triggerReason);
-    record.stopReason = ToString(stopReason);
-    record.result = result;
-    record.recordingStartedAt = metadata.recordingStartedAt;
-    record.recordingEndedAt = *metadata.recordingEndedAt;
-    record.mythicRunStartedAt = metadata.mythicRunStartedAt;
-    record.mythicRunEndedAt = metadata.mythicRunEndedAt;
-    record.challengeMapId = metadata.challengeMapId;
-    record.keystoneLevel = metadata.keystoneLevel;
-    for (const auto& participant : metadata.participants) {
-        RunRecord::Participant runParticipant;
-        runParticipant.guid = participant.guid;
-        runParticipant.name = participant.name;
-        runParticipant.realm = participant.realm;
-        runParticipant.region = participant.region;
-        runParticipant.specId = participant.specId;
-        runParticipant.specName = participant.specName;
-        runParticipant.className = participant.className;
-        record.participants.push_back(std::move(runParticipant));
-    }
-    if (metadata.challengeMapId.has_value()) {
-        const auto dungeonName = DungeonNameForChallengeMap(*metadata.challengeMapId);
-        if (!dungeonName.empty()) {
-            record.dungeonName = dungeonName;
-        }
-    }
-    if (!record.dungeonName.has_value() && metadata.observedDungeonName.has_value()) {
-        record.dungeonName = *metadata.observedDungeonName;
-    }
-    if (!record.dungeonName.has_value() && metadata.triggerReason == RecordingStartReason::Manual) {
-        record.dungeonName = "Manual Recording";
-    }
-    std::string dbError;
-    if (!runRepository_->UpsertRun(record, dbError)) {
-        PushStatus("Failed to persist run metadata: " + dbError);
-    }
+    FinishedRecordingSnapshot snapshot;
+    snapshot.triggerReason = activeRecordingMetadata_->triggerReason;
+    snapshot.videoPath = activeRecordingMetadata_->videoPath;
+    snapshot.recordingStartedAt = activeRecordingMetadata_->recordingStartedAt;
+    snapshot.recordingEndedAt = std::chrono::system_clock::now();
+    snapshot.mythicRunStartedAt = activeRecordingMetadata_->mythicRunStartedAt;
+    snapshot.mythicRunEndedAt = activeRecordingMetadata_->mythicRunEndedAt;
+    snapshot.challengeMapId = activeRecordingMetadata_->challengeMapId;
+    snapshot.keystoneLevel = activeRecordingMetadata_->keystoneLevel;
+    snapshot.observedDungeonName = activeRecordingMetadata_->observedDungeonName;
+    snapshot.participants = activeRecordingMetadata_->participants;
     activeRecordingMetadata_.reset();
+    runMetadataWriter_.Persist(std::move(snapshot), stopReason);
 }
 
 } // namespace bean::core

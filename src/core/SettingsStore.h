@@ -38,6 +38,8 @@ inline constexpr bool kDefaultChatBlockerUseCustomImage = false;
 inline constexpr int kDefaultChatBlockerWidth = 500;
 inline constexpr int kDefaultChatBlockerHeight = 300;
 
+inline constexpr int kSettingsSchemaVersion = 1;
+
 struct AppSettings {
     enum class ChatBlockerAnchor {
         BottomLeft,

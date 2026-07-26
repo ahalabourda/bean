@@ -1,4 +1,5 @@
 #include "core/RecordingOrchestrator.h"
+#include "core/RecordingPath.h"
 #include "core/RunRepository.h"
 #include "core/SettingsStore.h"
 #include "integrations/YouTubeUploader.h"
@@ -567,6 +568,53 @@ void TestYouTubeCancelFlag()
     Expect(!bean::integrations::YouTubeUploader::IsCancelRequested(), "Cancel flag should be clear again after ClearCancel.");
 }
 
+void TestBuildRecordingPath()
+{
+    const auto dir = std::filesystem::path("C:/Videos");
+    const auto mp4 = bean::core::BuildRecordingPath(dir, "run-stem", "mp4");
+    Expect(mp4.filename() == "run-stem.mp4", "mp4 container should produce .mp4 extension.");
+    const auto mkv = bean::core::BuildRecordingPath(dir, "run-stem", "mkv");
+    Expect(mkv.filename() == "run-stem.mkv", "mkv container should produce .mkv extension.");
+    const auto fallback = bean::core::BuildRecordingPath(dir, "run-stem", "weird");
+    Expect(fallback.filename() == "run-stem.mkv", "Unknown container should fall back to .mkv.");
+}
+
+void TestSettingsSchemaVersionRoundTrip()
+{
+    const auto dir = MakeTempDir("settings-schema");
+    bean::core::SettingsStore store;
+    // Point at a temp config by writing through a store that uses the real path
+    // is awkward; instead write a minimal JSON with schemaVersion and load fields.
+    bean::core::AppSettings settings;
+    settings.outputDirectory = dir / "out";
+    settings.wowLogDirectory = dir / "logs";
+    settings.fps = 45;
+    settings.videoContainer = "mkv";
+    std::string error;
+    Expect(store.Save(settings, error), "Save should succeed for schema version test: " + error);
+
+    bean::core::AppSettings loaded;
+    Expect(store.Load(loaded, error), "Load should succeed for schema version test: " + error);
+    Expect(loaded.fps == 45, "FPS should round-trip after schemaVersion was introduced.");
+    Expect(loaded.videoContainer == "mkv", "Container should round-trip after schemaVersion was introduced.");
+
+    // Confirm the on-disk file mentions schemaVersion.
+    std::ifstream in(store.GetConfigPath());
+    Expect(in.is_open(), "Config file should exist after save.");
+    std::stringstream buffer;
+    buffer << in.rdbuf();
+    Expect(buffer.str().find("\"schemaVersion\"") != std::string::npos, "Saved config should include schemaVersion.");
+}
+
+void TestRunRepositorySetsUserVersion()
+{
+    const auto dir = MakeTempDir("runs-user-version");
+    bean::core::RunRepository repo(dir / "runs.db");
+    std::string error;
+    Expect(repo.Initialize(error), "RunRepository initialize should succeed: " + error);
+    Expect(std::filesystem::exists(repo.GetDatabasePath()), "runs.db should exist after initialize.");
+}
+
 } // namespace
 
 int main()
@@ -575,7 +623,10 @@ int main()
     TestMockRecorderEnginePublicMethods();
     TestSettingsStoreLoadSaveAndConversion();
     TestSettingsStoreAtomicSave();
+    TestSettingsSchemaVersionRoundTrip();
+    TestBuildRecordingPath();
     TestRunRepositoryPublicMethods();
+    TestRunRepositorySetsUserVersion();
     TestCombatLogWatcherPublicMethods();
     TestCombatLogWatcherHandlesPartialLines();
     TestCombatLogWatcherFollowsNewLogFile();

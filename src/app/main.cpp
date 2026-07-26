@@ -2,6 +2,7 @@
 #include "app/AppDraw.h"
 #include "app/AppIconsTaskbar.h"
 #include "app/AppLayout.h"
+#include "app/AppLiveStatus.h"
 #include "app/AppRecordingHelpers.h"
 #include "app/AppStatusLog.h"
 #include "app/AppUtilities.h"
@@ -1767,7 +1768,7 @@ void BeginFfmpegProbe(AppContext* ctx)
     }
 
     const HWND targetWindow = ctx->mainWindow;
-    std::thread([targetWindow]() {
+    LaunchAppWorker(ctx, [targetWindow]() {
         auto* result = new FfmpegProbeResult();
         // Resolve without the context: this thread must not touch AppContext.
         result->executablePath = ResolveFfmpegExecutablePath(nullptr);
@@ -1776,7 +1777,7 @@ void BeginFfmpegProbe(AppContext* ctx)
         if (!PostMessageW(targetWindow, WM_BEAN_FFMPEG_PROBE_COMPLETE, 0, reinterpret_cast<LPARAM>(result))) {
             delete result;
         }
-    }).detach();
+    });
 }
 
 bool DetectAdvancedCombatLoggingForUi(const AppContext* ctx)
@@ -2187,7 +2188,7 @@ void ResolveLinkedYouTubeIdentityAsync(AppContext* ctx, bool postErrorToStatus)
     bean::integrations::YouTubeCredentials creds;
     creds.clientId = ctx->settings.youtubeClientId;
     creds.refreshToken = ctx->settings.youtubeRefreshToken;
-    std::thread([ctx, creds, postErrorToStatus]() {
+    LaunchAppWorker(ctx, [ctx, creds, postErrorToStatus]() {
         const auto identity = bean::integrations::YouTubeUploader::GetLinkedChannelIdentity(creds);
         auto* payload = new YouTubeIdentityResolvedPayload();
         payload->success = identity.success;
@@ -2195,7 +2196,7 @@ void ResolveLinkedYouTubeIdentityAsync(AppContext* ctx, bool postErrorToStatus)
         payload->channelTitle = identity.channelTitle;
         payload->error = postErrorToStatus ? identity.error : std::string{};
         PostMessageW(ctx->mainWindow, WM_BEAN_YOUTUBE_IDENTITY_RESOLVED, 0, reinterpret_cast<LPARAM>(payload));
-    }).detach();
+    });
 }
 
 void SetRecordingsUploadUi(AppContext* ctx, int percent, const std::wstring& text)
@@ -2811,7 +2812,7 @@ void RefreshAboutUpdateButtonState(AppContext* ctx)
     SetWindowTextW(updateButton, L"Checking...");
     UpdateTransparentStaticText(updateText, L"Checking for updates...");
 
-    std::thread([ctx, requestId]() {
+    LaunchAppWorker(ctx, [ctx, requestId]() {
         auto* payload = new UpdateAvailabilityPayload();
         payload->requestId = requestId;
         payload->availability = bean::app::GetUpdateAvailability(payload->statusMessage);
@@ -2820,7 +2821,7 @@ void RefreshAboutUpdateButtonState(AppContext* ctx)
             return;
         }
         PostMessageW(ctx->mainWindow, WM_BEAN_UPDATE_AVAILABILITY_READY, 0, reinterpret_cast<LPARAM>(payload));
-    }).detach();
+    });
 }
 
 void RefreshStatusCommandButtons(AppContext* ctx);
@@ -3998,7 +3999,7 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         SetStatus(ctx, std::wstring(L"Exporting clip to ") + outputPath.filename().wstring() + L"...");
         const std::filesystem::path inputPath = ctx->clipsLoadedPath;
         const std::filesystem::path ffmpegExe = *ffmpegPath;
-        std::thread([ctx, ffmpegExe, inputPath, outputPath, startSeconds, endSeconds]() {
+        LaunchAppWorker(ctx, [ctx, ffmpegExe, inputPath, outputPath, startSeconds, endSeconds]() {
             const int durationSeconds = endSeconds - startSeconds;
             std::wstringstream arguments;
             arguments << L"-y -hide_banner -v error"
@@ -4049,7 +4050,7 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
             }
             ctx->clipsExportInProgress.store(false);
             PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_UI_REFRESH, 0, 0);
-        }).detach();
+        });
         break;
     }
     case IDC_CLIPS_OPEN_FOLDER: {
@@ -4137,7 +4138,7 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         ctx->youtubeBusy.store(true);
         RefreshYouTubeUiState(ctx);
         SetStatus(ctx, L"Opening browser for YouTube authorization...");
-        std::thread([ctx, hwnd, authServerUrl]() {
+        LaunchAppWorker(ctx, [ctx, hwnd, authServerUrl]() {
             const auto auth = bean::integrations::YouTubeUploader::AuthorizeDesktop(hwnd, authServerUrl);
             auto* payload = new YouTubeAuthCompletionPayload();
             payload->success = auth.success;
@@ -4147,7 +4148,7 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
             payload->channelTitle = auth.channelTitle;
             payload->error = auth.error;
             PostMessageW(ctx->mainWindow, WM_BEAN_YOUTUBE_AUTH_COMPLETE, 0, reinterpret_cast<LPARAM>(payload));
-        }).detach();
+        });
         break;
     }
     case IDC_YOUTUBE_UNLINK_BUTTON: {
@@ -4223,7 +4224,7 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         RefreshYouTubeUiState(ctx);
         SetRecordingsUploadUi(ctx, 0, std::wstring(L"Uploading: ") + path.filename().wstring());
         SetStatus(ctx, std::wstring(L"Uploading to YouTube: ") + path.filename().wstring());
-        std::thread([ctx, path, title, privacy, creds]() {
+        LaunchAppWorker(ctx, [ctx, path, title, privacy, creds]() {
             bean::integrations::YouTubeUploadRequest req;
             req.videoPath = path;
             req.title = title;
@@ -4275,7 +4276,7 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
             PostStatus(ctx, message);
             ctx->youtubeBusy.store(false);
             RequestYouTubeUiRefresh(ctx);
-        }).detach();
+        });
         break;
     }
     case IDC_ABOUT_WEBSITE_BUTTON: {
@@ -5781,6 +5782,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             std::string stopError;
             ctx->orchestrator->StopManualRecording(stopError);
         }
+        JoinAppWorkers(ctx);
         CloseClipMedia(ctx);
         ShutdownTaskbarOverlay(ctx);
         if (ctx && ctx->configurationTooltip && IsWindow(ctx->configurationTooltip)) {

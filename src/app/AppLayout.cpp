@@ -1,4 +1,5 @@
 #include "app/AppLayout.h"
+#include "app/AppPrerequisites.h"
 
 #include <commctrl.h>
 
@@ -118,45 +119,39 @@ void LayoutStatusPanel(AppContext* ctx, int panelWidth, int panelHeight)
     MoveControl(ctx->statusPanel, IDC_LENGTH_VALUE, xLabel + 400, y, 110, rowHeight);
     y += 36;
 
-    MoveControl(ctx->statusPanel, IDC_WOW_WINDOW_LABEL, xLabel, y, 100, rowHeight);
-    MoveControl(ctx->statusPanel, IDC_WOW_WINDOW_ICON, xLabel + 102, y + 3, 20, rowHeight);
     const int wowTextX = xLabel + 126;
     const int wowTextWidth = (std::max)(250, panelWidth - wowTextX - 20);
-    MoveControl(ctx->statusPanel, IDC_WOW_WINDOW_TEXT, wowTextX, y, wowTextWidth, rowHeight);
-    y += 40;
-
-    MoveControl(ctx->statusPanel, IDC_OBS_INSTALL_LABEL, xLabel, y, 100, rowHeight);
-    MoveControl(ctx->statusPanel, IDC_OBS_INSTALL_ICON, xLabel + 102, y + 3, 20, rowHeight);
-    MoveControl(ctx->statusPanel, IDC_OBS_INSTALL_TEXT, wowTextX, y, wowTextWidth, rowHeight);
-    y += 40;
-
-    MoveControl(ctx->statusPanel, IDC_FFMPEG_LABEL, xLabel, y, 100, rowHeight);
-    MoveControl(ctx->statusPanel, IDC_FFMPEG_ICON, xLabel + 102, y + 3, 20, rowHeight);
-    MoveControl(ctx->statusPanel, IDC_FFMPEG_TEXT, wowTextX, y, wowTextWidth, rowHeight);
-    y += 40;
-
-    if (ctx->warcraftRecorderDetected) {
-        MoveControl(ctx->statusPanel, IDC_WARCRAFT_RECORDER_LABEL, xLabel, y, 126, rowHeight);
-        MoveControl(ctx->statusPanel, IDC_WARCRAFT_RECORDER_ICON, xLabel + 128, y + 3, 20, rowHeight);
-        MoveControl(ctx->statusPanel, IDC_WARCRAFT_RECORDER_TEXT, wowTextX + 26, y, (std::max)(220, wowTextWidth - 26), rowHeight);
+    for (const auto& row : kPrerequisiteRows) {
+        if (row.visibleOnlyWhenUnhealthy && !ctx->warcraftRecorderDetected) {
+            continue;
+        }
+        const int labelWidth = row.iconId == IDC_WARCRAFT_RECORDER_ICON ? 126
+            : (row.iconId == IDC_ADVANCED_LOGGING_ICON ? 160 : 100);
+        const int iconX = xLabel + labelWidth + 2;
+        const int textX = row.iconId == IDC_WARCRAFT_RECORDER_ICON ? (wowTextX + 26)
+            : (row.iconId == IDC_ADVANCED_LOGGING_ICON ? (wowTextX + 60) : wowTextX);
+        int textWidth = row.iconId == IDC_WARCRAFT_RECORDER_ICON
+            ? (std::max)(220, wowTextWidth - 26)
+            : wowTextWidth;
+        if (row.iconId == IDC_ADVANCED_LOGGING_ICON) {
+            textWidth = 90;
+        }
+        MoveControl(ctx->statusPanel, row.labelId, xLabel, y, labelWidth, rowHeight);
+        MoveControl(ctx->statusPanel, row.iconId, iconX, y + 3, 20, rowHeight);
+        MoveControl(ctx->statusPanel, row.textId, textX, y, textWidth, rowHeight);
+        if (row.iconId == IDC_ADVANCED_LOGGING_ICON) {
+            const int advancedHelpIconSize = 16;
+            const int advancedHelpGap = 6;
+            MoveControl(
+                ctx->statusPanel,
+                IDC_ADVANCED_LOGGING_HELP,
+                textX + textWidth + advancedHelpGap,
+                y + 4,
+                advancedHelpIconSize,
+                advancedHelpIconSize);
+        }
         y += 40;
     }
-
-    MoveControl(ctx->statusPanel, IDC_ADVANCED_LOGGING_LABEL, xLabel, y, 160, rowHeight);
-    MoveControl(ctx->statusPanel, IDC_ADVANCED_LOGGING_ICON, xLabel + 162, y + 3, 20, rowHeight);
-    const int advancedTextX = wowTextX + 60;
-    const int advancedHelpIconSize = 16;
-    const int advancedHelpGap = 6;
-    const int advancedTextWidth = 90;
-    MoveControl(ctx->statusPanel, IDC_ADVANCED_LOGGING_TEXT, advancedTextX, y, advancedTextWidth, rowHeight);
-    MoveControl(
-        ctx->statusPanel,
-        IDC_ADVANCED_LOGGING_HELP,
-        advancedTextX + advancedTextWidth + advancedHelpGap,
-        y + 4,
-        advancedHelpIconSize,
-        advancedHelpIconSize);
-    y += 40;
 
     MoveControl(ctx->statusPanel, IDC_STATUS_LABEL, xLabel, y, 60, rowHeight);
     const int statusX = xLabel + 72;

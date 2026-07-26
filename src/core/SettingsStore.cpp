@@ -130,6 +130,45 @@ std::string NormalizeEncoderPreset(std::string preset)
     return "high";
 }
 
+namespace SettingsKeys {
+constexpr char kSchemaVersion[] = "schemaVersion";
+constexpr char kOutputDirectory[] = "outputDirectory";
+constexpr char kWowLogDirectory[] = "wowLogDirectory";
+constexpr char kEncoderPreset[] = "encoderPreset";
+constexpr char kVideoEncoder[] = "videoEncoder";
+constexpr char kVideoContainer[] = "videoContainer";
+constexpr char kAudioCaptureScope[] = "audioCaptureScope";
+constexpr char kCaptureWowProcessAudioOnly[] = "captureWowProcessAudioOnly";
+constexpr char kCaptureMicrophone[] = "captureMicrophone";
+constexpr char kMicrophoneNoiseSuppression[] = "microphoneNoiseSuppression";
+constexpr char kMicrophoneDeviceId[] = "microphoneDeviceId";
+constexpr char kWindowWidth[] = "windowWidth";
+constexpr char kWindowHeight[] = "windowHeight";
+constexpr char kRecordingResolutionHeight[] = "recordingResolutionHeight";
+constexpr char kFps[] = "fps";
+constexpr char kPostRunStopDelaySeconds[] = "postRunStopDelaySeconds";
+constexpr char kClipDurationSeconds[] = "clipDurationSeconds";
+constexpr char kClipKeybindModifiers[] = "clipKeybindModifiers";
+constexpr char kClipKeybindVirtualKey[] = "clipKeybindVirtualKey";
+constexpr char kManualStartKeybindModifiers[] = "manualStartKeybindModifiers";
+constexpr char kManualStartKeybindVirtualKey[] = "manualStartKeybindVirtualKey";
+constexpr char kManualStopKeybindModifiers[] = "manualStopKeybindModifiers";
+constexpr char kManualStopKeybindVirtualKey[] = "manualStopKeybindVirtualKey";
+constexpr char kChatBlockerEnabled[] = "chatBlockerEnabled";
+constexpr char kChatBlockerUseCustomImage[] = "chatBlockerUseCustomImage";
+constexpr char kChatBlockerCustomImagePath[] = "chatBlockerCustomImagePath";
+constexpr char kChatBlockerCustomImageSourceWidth[] = "chatBlockerCustomImageSourceWidth";
+constexpr char kChatBlockerCustomImageSourceHeight[] = "chatBlockerCustomImageSourceHeight";
+constexpr char kChatBlockerCustomImageSizesByFileName[] = "chatBlockerCustomImageSizesByFileName";
+constexpr char kChatBlockerWidth[] = "chatBlockerWidth";
+constexpr char kChatBlockerHeight[] = "chatBlockerHeight";
+constexpr char kChatBlockerAnchor[] = "chatBlockerAnchor";
+constexpr char kYoutubeClientId[] = "youtubeClientId";
+constexpr char kYoutubeRefreshToken[] = "youtubeRefreshToken";
+constexpr char kYoutubeChannelId[] = "youtubeChannelId";
+constexpr char kYoutubeChannelTitle[] = "youtubeChannelTitle";
+}
+
 // Thin aliases so the many call sites below stay readable.
 std::string ReadQuoted(const std::string& content, const std::string& key)
 {
@@ -369,88 +408,93 @@ bool SettingsStore::LoadLocked(AppSettings& settings, std::string& error) const
     buffer << stream.rdbuf();
     const std::string content = buffer.str();
 
-    const auto output = ReadQuoted(content, "outputDirectory");
+    // schemaVersion is informational today: missing keys mean version 0 (legacy).
+    // Future migrations branch on the loaded version before applying field reads.
+    const int loadedSchemaVersion = ReadInt(content, SettingsKeys::kSchemaVersion, 0);
+    (void)loadedSchemaVersion;
+
+    const auto output = ReadQuoted(content, SettingsKeys::kOutputDirectory);
     if (!output.empty()) {
         settings.outputDirectory = output;
     }
-    const auto wowDir = ReadQuoted(content, "wowLogDirectory");
+    const auto wowDir = ReadQuoted(content, SettingsKeys::kWowLogDirectory);
     if (!wowDir.empty()) {
         settings.wowLogDirectory = wowDir;
     }
-    const auto preset = ReadQuoted(content, "encoderPreset");
+    const auto preset = ReadQuoted(content, SettingsKeys::kEncoderPreset);
     settings.encoderPreset = NormalizeEncoderPreset(preset);
-    const auto encoder = ReadQuoted(content, "videoEncoder");
+    const auto encoder = ReadQuoted(content, SettingsKeys::kVideoEncoder);
     if (encoder == "gpu_auto" || encoder == "qsv" || encoder == "nvenc" || encoder == "amf" || encoder == "x264") {
         settings.videoEncoder = encoder;
     }
-    const auto container = ReadQuoted(content, "videoContainer");
+    const auto container = ReadQuoted(content, SettingsKeys::kVideoContainer);
     if (container == "mp4" || container == "mkv") {
         settings.videoContainer = container;
     }
-    const auto audioCaptureScope = ReadQuoted(content, "audioCaptureScope");
+    const auto audioCaptureScope = ReadQuoted(content, SettingsKeys::kAudioCaptureScope);
     if (!audioCaptureScope.empty()) {
         settings.audioCaptureScope = ParseAudioCaptureScope(audioCaptureScope);
     } else {
         // Backward compatibility for older configs that only supported WoW-only/all-desktop.
-        const bool wowOnly = ReadBool(content, "captureWowProcessAudioOnly", settings.audioCaptureScope == AppSettings::AudioCaptureScope::WowOnly);
+        const bool wowOnly = ReadBool(content, SettingsKeys::kCaptureWowProcessAudioOnly, settings.audioCaptureScope == AppSettings::AudioCaptureScope::WowOnly);
         settings.audioCaptureScope = wowOnly ? AppSettings::AudioCaptureScope::WowOnly : AppSettings::AudioCaptureScope::AllDesktop;
     }
-    settings.captureMicrophone = ReadBool(content, "captureMicrophone", settings.captureMicrophone);
-    settings.microphoneNoiseSuppression = ReadBool(content, "microphoneNoiseSuppression", settings.microphoneNoiseSuppression);
-    const auto microphoneDeviceId = ReadQuoted(content, "microphoneDeviceId");
+    settings.captureMicrophone = ReadBool(content, SettingsKeys::kCaptureMicrophone, settings.captureMicrophone);
+    settings.microphoneNoiseSuppression = ReadBool(content, SettingsKeys::kMicrophoneNoiseSuppression, settings.microphoneNoiseSuppression);
+    const auto microphoneDeviceId = ReadQuoted(content, SettingsKeys::kMicrophoneDeviceId);
     if (!microphoneDeviceId.empty()) {
         settings.microphoneDeviceId = microphoneDeviceId;
     }
 
-    settings.windowWidth = ClampInt(ReadInt(content, "windowWidth", settings.windowWidth), 930, 16384, kDefaultWindowWidth);
-    settings.windowHeight = ClampInt(ReadInt(content, "windowHeight", settings.windowHeight), 560, 16384, kDefaultWindowHeight);
+    settings.windowWidth = ClampInt(ReadInt(content, SettingsKeys::kWindowWidth, settings.windowWidth), 930, 16384, kDefaultWindowWidth);
+    settings.windowHeight = ClampInt(ReadInt(content, SettingsKeys::kWindowHeight, settings.windowHeight), 560, 16384, kDefaultWindowHeight);
     settings.recordingResolutionHeight = ReadInt(
         content,
-        "recordingResolutionHeight",
+        SettingsKeys::kRecordingResolutionHeight,
         settings.recordingResolutionHeight);
     if (settings.recordingResolutionHeight < 0 || settings.recordingResolutionHeight > 16384) {
         settings.recordingResolutionHeight = kDefaultRecordingResolutionHeight;
     }
-    settings.fps = ReadInt(content, "fps", settings.fps);
-    settings.postRunStopDelaySeconds = ClampInt(ReadInt(content, "postRunStopDelaySeconds", settings.postRunStopDelaySeconds), 0, 600, 30);
-    settings.clipDurationSeconds = ClampInt(ReadInt(content, "clipDurationSeconds", settings.clipDurationSeconds), 1, 3600, 30);
+    settings.fps = ReadInt(content, SettingsKeys::kFps, settings.fps);
+    settings.postRunStopDelaySeconds = ClampInt(ReadInt(content, SettingsKeys::kPostRunStopDelaySeconds, settings.postRunStopDelaySeconds), 0, 600, 30);
+    settings.clipDurationSeconds = ClampInt(ReadInt(content, SettingsKeys::kClipDurationSeconds, settings.clipDurationSeconds), 1, 3600, 30);
     settings.clipKeybind.modifiers = static_cast<std::uint32_t>(
-        ClampInt(ReadInt(content, "clipKeybindModifiers", static_cast<int>(settings.clipKeybind.modifiers)), 0, 31, 6));
+        ClampInt(ReadInt(content, SettingsKeys::kClipKeybindModifiers, static_cast<int>(settings.clipKeybind.modifiers)), 0, 31, 6));
     settings.clipKeybind.virtualKey = static_cast<std::uint32_t>(
-        ClampInt(ReadInt(content, "clipKeybindVirtualKey", static_cast<int>(settings.clipKeybind.virtualKey)), 0, 255, 0x77));
+        ClampInt(ReadInt(content, SettingsKeys::kClipKeybindVirtualKey, static_cast<int>(settings.clipKeybind.virtualKey)), 0, 255, 0x77));
     settings.manualStartKeybind.modifiers = static_cast<std::uint32_t>(
-        ClampInt(ReadInt(content, "manualStartKeybindModifiers", static_cast<int>(settings.manualStartKeybind.modifiers)), 0, 31, 6));
+        ClampInt(ReadInt(content, SettingsKeys::kManualStartKeybindModifiers, static_cast<int>(settings.manualStartKeybind.modifiers)), 0, 31, 6));
     settings.manualStartKeybind.virtualKey = static_cast<std::uint32_t>(
-        ClampInt(ReadInt(content, "manualStartKeybindVirtualKey", static_cast<int>(settings.manualStartKeybind.virtualKey)), 0, 255, 0x78));
+        ClampInt(ReadInt(content, SettingsKeys::kManualStartKeybindVirtualKey, static_cast<int>(settings.manualStartKeybind.virtualKey)), 0, 255, 0x78));
     settings.manualStopKeybind.modifiers = static_cast<std::uint32_t>(
-        ClampInt(ReadInt(content, "manualStopKeybindModifiers", static_cast<int>(settings.manualStopKeybind.modifiers)), 0, 31, 6));
+        ClampInt(ReadInt(content, SettingsKeys::kManualStopKeybindModifiers, static_cast<int>(settings.manualStopKeybind.modifiers)), 0, 31, 6));
     settings.manualStopKeybind.virtualKey = static_cast<std::uint32_t>(
-        ClampInt(ReadInt(content, "manualStopKeybindVirtualKey", static_cast<int>(settings.manualStopKeybind.virtualKey)), 0, 255, 0x79));
-    settings.chatBlockerEnabled = ReadBool(content, "chatBlockerEnabled", settings.chatBlockerEnabled);
-    settings.chatBlockerUseCustomImage = ReadBool(content, "chatBlockerUseCustomImage", settings.chatBlockerUseCustomImage);
-    const auto chatBlockerCustomImagePath = ReadQuoted(content, "chatBlockerCustomImagePath");
+        ClampInt(ReadInt(content, SettingsKeys::kManualStopKeybindVirtualKey, static_cast<int>(settings.manualStopKeybind.virtualKey)), 0, 255, 0x79));
+    settings.chatBlockerEnabled = ReadBool(content, SettingsKeys::kChatBlockerEnabled, settings.chatBlockerEnabled);
+    settings.chatBlockerUseCustomImage = ReadBool(content, SettingsKeys::kChatBlockerUseCustomImage, settings.chatBlockerUseCustomImage);
+    const auto chatBlockerCustomImagePath = ReadQuoted(content, SettingsKeys::kChatBlockerCustomImagePath);
     if (!chatBlockerCustomImagePath.empty()) {
         settings.chatBlockerCustomImagePath = chatBlockerCustomImagePath;
     }
     settings.chatBlockerCustomImageSourceWidth =
-        ClampInt(ReadInt(content, "chatBlockerCustomImageSourceWidth", settings.chatBlockerCustomImageSourceWidth), 0, 16384, 0);
+        ClampInt(ReadInt(content, SettingsKeys::kChatBlockerCustomImageSourceWidth, settings.chatBlockerCustomImageSourceWidth), 0, 16384, 0);
     settings.chatBlockerCustomImageSourceHeight =
-        ClampInt(ReadInt(content, "chatBlockerCustomImageSourceHeight", settings.chatBlockerCustomImageSourceHeight), 0, 16384, 0);
+        ClampInt(ReadInt(content, SettingsKeys::kChatBlockerCustomImageSourceHeight, settings.chatBlockerCustomImageSourceHeight), 0, 16384, 0);
     settings.chatBlockerCustomImageSizesByFileName =
-        ParseChatBlockerImageSizesMap(ReadQuoted(content, "chatBlockerCustomImageSizesByFileName"));
-    settings.chatBlockerWidth = ClampInt(ReadInt(content, "chatBlockerWidth", settings.chatBlockerWidth), 0, 8192, 0);
-    settings.chatBlockerHeight = ClampInt(ReadInt(content, "chatBlockerHeight", settings.chatBlockerHeight), 0, 8192, 0);
-    settings.chatBlockerAnchor = ParseChatBlockerAnchor(ReadQuoted(content, "chatBlockerAnchor"));
-    settings.youtubeClientId = ReadQuoted(content, "youtubeClientId");
-    const auto rawRefreshToken = ReadQuoted(content, "youtubeRefreshToken");
+        ParseChatBlockerImageSizesMap(ReadQuoted(content, SettingsKeys::kChatBlockerCustomImageSizesByFileName));
+    settings.chatBlockerWidth = ClampInt(ReadInt(content, SettingsKeys::kChatBlockerWidth, settings.chatBlockerWidth), 0, 8192, 0);
+    settings.chatBlockerHeight = ClampInt(ReadInt(content, SettingsKeys::kChatBlockerHeight, settings.chatBlockerHeight), 0, 8192, 0);
+    settings.chatBlockerAnchor = ParseChatBlockerAnchor(ReadQuoted(content, SettingsKeys::kChatBlockerAnchor));
+    settings.youtubeClientId = ReadQuoted(content, SettingsKeys::kYoutubeClientId);
+    const auto rawRefreshToken = ReadQuoted(content, SettingsKeys::kYoutubeRefreshToken);
     const auto storedRefreshToken = UnprotectRefreshToken(rawRefreshToken);
     if (!storedRefreshToken.has_value()) {
         error = "Unable to decrypt the stored YouTube refresh token.";
         return false;
     }
     settings.youtubeRefreshToken = *storedRefreshToken;
-    settings.youtubeChannelId = ReadQuoted(content, "youtubeChannelId");
-    settings.youtubeChannelTitle = ReadQuoted(content, "youtubeChannelTitle");
+    settings.youtubeChannelId = ReadQuoted(content, SettingsKeys::kYoutubeChannelId);
+    settings.youtubeChannelTitle = ReadQuoted(content, SettingsKeys::kYoutubeChannelTitle);
     if (!rawRefreshToken.empty() && rawRefreshToken.rfind("dpapi:", 0) != 0) {
         std::string migrationError;
         // SaveLocked, not Save: the mutex is already held by our caller.
@@ -497,40 +541,41 @@ bool SettingsStore::SaveLocked(const AppSettings& settings, std::string& error) 
 
     stream
         << "{\n"
-        << "  \"outputDirectory\": \"" << EscapeJson(settings.outputDirectory.string()) << "\",\n"
-        << "  \"wowLogDirectory\": \"" << EscapeJson(settings.wowLogDirectory.string()) << "\",\n"
-        << "  \"videoEncoder\": \"" << EscapeJson(settings.videoEncoder) << "\",\n"
-        << "  \"encoderPreset\": \"" << EscapeJson(settings.encoderPreset) << "\",\n"
-        << "  \"videoContainer\": \"" << EscapeJson(settings.videoContainer) << "\",\n"
-        << "  \"audioCaptureScope\": \"" << AudioCaptureScopeToString(settings.audioCaptureScope) << "\",\n"
-        << "  \"captureMicrophone\": " << (settings.captureMicrophone ? "true" : "false") << ",\n"
-        << "  \"microphoneNoiseSuppression\": " << (settings.microphoneNoiseSuppression ? "true" : "false") << ",\n"
-        << "  \"microphoneDeviceId\": \"" << EscapeJson(settings.microphoneDeviceId) << "\",\n"
-        << "  \"windowWidth\": " << settings.windowWidth << ",\n"
-        << "  \"windowHeight\": " << settings.windowHeight << ",\n"
-        << "  \"recordingResolutionHeight\": " << settings.recordingResolutionHeight << ",\n"
-        << "  \"fps\": " << settings.fps << ",\n"
-        << "  \"postRunStopDelaySeconds\": " << settings.postRunStopDelaySeconds << ",\n"
-        << "  \"clipDurationSeconds\": " << settings.clipDurationSeconds << ",\n"
-        << "  \"clipKeybindModifiers\": " << settings.clipKeybind.modifiers << ",\n"
-        << "  \"clipKeybindVirtualKey\": " << settings.clipKeybind.virtualKey << ",\n"
-        << "  \"manualStartKeybindModifiers\": " << settings.manualStartKeybind.modifiers << ",\n"
-        << "  \"manualStartKeybindVirtualKey\": " << settings.manualStartKeybind.virtualKey << ",\n"
-        << "  \"manualStopKeybindModifiers\": " << settings.manualStopKeybind.modifiers << ",\n"
-        << "  \"manualStopKeybindVirtualKey\": " << settings.manualStopKeybind.virtualKey << ",\n"
-        << "  \"chatBlockerEnabled\": " << (settings.chatBlockerEnabled ? "true" : "false") << ",\n"
-        << "  \"chatBlockerUseCustomImage\": " << (settings.chatBlockerUseCustomImage ? "true" : "false") << ",\n"
-        << "  \"chatBlockerCustomImagePath\": \"" << EscapeJson(settings.chatBlockerCustomImagePath.string()) << "\",\n"
-        << "  \"chatBlockerCustomImageSourceWidth\": " << settings.chatBlockerCustomImageSourceWidth << ",\n"
-        << "  \"chatBlockerCustomImageSourceHeight\": " << settings.chatBlockerCustomImageSourceHeight << ",\n"
-        << "  \"chatBlockerCustomImageSizesByFileName\": \"" << EscapeJson(SerializeChatBlockerImageSizesMap(settings.chatBlockerCustomImageSizesByFileName)) << "\",\n"
-        << "  \"chatBlockerWidth\": " << settings.chatBlockerWidth << ",\n"
-        << "  \"chatBlockerHeight\": " << settings.chatBlockerHeight << ",\n"
-        << "  \"chatBlockerAnchor\": \"" << ChatBlockerAnchorToString(settings.chatBlockerAnchor) << "\",\n"
-        << "  \"youtubeClientId\": \"" << EscapeJson(settings.youtubeClientId) << "\",\n"
-        << "  \"youtubeRefreshToken\": \"" << EscapeJson(*protectedRefreshToken) << "\",\n"
-        << "  \"youtubeChannelId\": \"" << EscapeJson(settings.youtubeChannelId) << "\",\n"
-        << "  \"youtubeChannelTitle\": \"" << EscapeJson(settings.youtubeChannelTitle) << "\"\n"
+        << "  \"" << SettingsKeys::kSchemaVersion << "\": " << kSettingsSchemaVersion << ",\n"
+        << "  \"" << SettingsKeys::kOutputDirectory << "\": \"" << EscapeJson(settings.outputDirectory.string()) << "\",\n"
+        << "  \"" << SettingsKeys::kWowLogDirectory << "\": \"" << EscapeJson(settings.wowLogDirectory.string()) << "\",\n"
+        << "  \"" << SettingsKeys::kVideoEncoder << "\": \"" << EscapeJson(settings.videoEncoder) << "\",\n"
+        << "  \"" << SettingsKeys::kEncoderPreset << "\": \"" << EscapeJson(settings.encoderPreset) << "\",\n"
+        << "  \"" << SettingsKeys::kVideoContainer << "\": \"" << EscapeJson(settings.videoContainer) << "\",\n"
+        << "  \"" << SettingsKeys::kAudioCaptureScope << "\": \"" << AudioCaptureScopeToString(settings.audioCaptureScope) << "\",\n"
+        << "  \"" << SettingsKeys::kCaptureMicrophone << "\": " << (settings.captureMicrophone ? "true" : "false") << ",\n"
+        << "  \"" << SettingsKeys::kMicrophoneNoiseSuppression << "\": " << (settings.microphoneNoiseSuppression ? "true" : "false") << ",\n"
+        << "  \"" << SettingsKeys::kMicrophoneDeviceId << "\": \"" << EscapeJson(settings.microphoneDeviceId) << "\",\n"
+        << "  \"" << SettingsKeys::kWindowWidth << "\": " << settings.windowWidth << ",\n"
+        << "  \"" << SettingsKeys::kWindowHeight << "\": " << settings.windowHeight << ",\n"
+        << "  \"" << SettingsKeys::kRecordingResolutionHeight << "\": " << settings.recordingResolutionHeight << ",\n"
+        << "  \"" << SettingsKeys::kFps << "\": " << settings.fps << ",\n"
+        << "  \"" << SettingsKeys::kPostRunStopDelaySeconds << "\": " << settings.postRunStopDelaySeconds << ",\n"
+        << "  \"" << SettingsKeys::kClipDurationSeconds << "\": " << settings.clipDurationSeconds << ",\n"
+        << "  \"" << SettingsKeys::kClipKeybindModifiers << "\": " << settings.clipKeybind.modifiers << ",\n"
+        << "  \"" << SettingsKeys::kClipKeybindVirtualKey << "\": " << settings.clipKeybind.virtualKey << ",\n"
+        << "  \"" << SettingsKeys::kManualStartKeybindModifiers << "\": " << settings.manualStartKeybind.modifiers << ",\n"
+        << "  \"" << SettingsKeys::kManualStartKeybindVirtualKey << "\": " << settings.manualStartKeybind.virtualKey << ",\n"
+        << "  \"" << SettingsKeys::kManualStopKeybindModifiers << "\": " << settings.manualStopKeybind.modifiers << ",\n"
+        << "  \"" << SettingsKeys::kManualStopKeybindVirtualKey << "\": " << settings.manualStopKeybind.virtualKey << ",\n"
+        << "  \"" << SettingsKeys::kChatBlockerEnabled << "\": " << (settings.chatBlockerEnabled ? "true" : "false") << ",\n"
+        << "  \"" << SettingsKeys::kChatBlockerUseCustomImage << "\": " << (settings.chatBlockerUseCustomImage ? "true" : "false") << ",\n"
+        << "  \"" << SettingsKeys::kChatBlockerCustomImagePath << "\": \"" << EscapeJson(settings.chatBlockerCustomImagePath.string()) << "\",\n"
+        << "  \"" << SettingsKeys::kChatBlockerCustomImageSourceWidth << "\": " << settings.chatBlockerCustomImageSourceWidth << ",\n"
+        << "  \"" << SettingsKeys::kChatBlockerCustomImageSourceHeight << "\": " << settings.chatBlockerCustomImageSourceHeight << ",\n"
+        << "  \"" << SettingsKeys::kChatBlockerCustomImageSizesByFileName << "\": \"" << EscapeJson(SerializeChatBlockerImageSizesMap(settings.chatBlockerCustomImageSizesByFileName)) << "\",\n"
+        << "  \"" << SettingsKeys::kChatBlockerWidth << "\": " << settings.chatBlockerWidth << ",\n"
+        << "  \"" << SettingsKeys::kChatBlockerHeight << "\": " << settings.chatBlockerHeight << ",\n"
+        << "  \"" << SettingsKeys::kChatBlockerAnchor << "\": \"" << ChatBlockerAnchorToString(settings.chatBlockerAnchor) << "\",\n"
+        << "  \"" << SettingsKeys::kYoutubeClientId << "\": \"" << EscapeJson(settings.youtubeClientId) << "\",\n"
+        << "  \"" << SettingsKeys::kYoutubeRefreshToken << "\": \"" << EscapeJson(*protectedRefreshToken) << "\",\n"
+        << "  \"" << SettingsKeys::kYoutubeChannelId << "\": \"" << EscapeJson(settings.youtubeChannelId) << "\",\n"
+        << "  \"" << SettingsKeys::kYoutubeChannelTitle << "\": \"" << EscapeJson(settings.youtubeChannelTitle) << "\"\n"
         << "}\n";
 
     stream.flush();

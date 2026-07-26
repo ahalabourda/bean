@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -46,8 +47,8 @@ public:
 
 private:
     bool HasResolvedMythicParty() const;
-    void UpdateParticipantFromCombatantInfo(const std::string& line);
-    void UpdateParticipantFromCombatEvent(const std::string& line);
+    void UpdateParticipantFromCombatantInfo(const std::vector<std::string_view>& fields);
+    void UpdateParticipantFromCombatEvent(const std::vector<std::string_view>& fields);
 
     bool isInRun_ = false;
     std::unordered_map<std::string, MythicParticipant> participantsByGuid_;

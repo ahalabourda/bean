@@ -1,5 +1,6 @@
 #include "app/AppDraw.h"
 
+#include "app/AppPrerequisites.h"
 #include "app/AppUtilities.h"
 #include "obs/IRecorderEngine.h"
 
@@ -701,16 +702,11 @@ void DrawStatusLight(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
         || drawInfo->CtlID == IDC_WARCRAFT_RECORDER_ICON
         || drawInfo->CtlID == IDC_ADVANCED_LOGGING_ICON) {
         bool isValid = false;
-        if (drawInfo->CtlID == IDC_WOW_WINDOW_ICON) {
-            isValid = ctx->wowWindowDetected;
-        } else if (drawInfo->CtlID == IDC_OBS_INSTALL_ICON) {
-            isValid = ctx->obsInstallDetected;
-        } else if (drawInfo->CtlID == IDC_FFMPEG_ICON) {
-            isValid = ctx->ffmpegDetected;
-        } else if (drawInfo->CtlID == IDC_WARCRAFT_RECORDER_ICON) {
-            isValid = !ctx->warcraftRecorderDetected;
-        } else {
-            isValid = ctx->advancedCombatLoggingEnabled;
+        for (const auto& row : kPrerequisiteRows) {
+            if (row.iconId == drawInfo->CtlID) {
+                isValid = PrerequisiteRowIsHealthy(ctx, row);
+                break;
+            }
         }
         const int centerX = (rc.left + rc.right) / 2;
         const int centerY = (rc.top + rc.bottom) / 2;

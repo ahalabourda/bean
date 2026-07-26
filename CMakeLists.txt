@@ -19,8 +19,11 @@ configure_file(
 )
 
 add_library(bean_core
+    src/core/ClipExportService.cpp
     src/core/GameEnvironment.cpp
     src/core/RecordingOrchestrator.cpp
+    src/core/RecordingPath.cpp
+    src/core/RunMetadataWriter.cpp
     src/core/RunRepository.cpp
     src/core/SettingsStore.cpp
     src/core/WowData.cpp
@@ -51,6 +54,8 @@ add_executable(bean_app WIN32
     src/app/AppDraw.cpp
     src/app/AppIconsTaskbar.cpp
     src/app/AppLayout.cpp
+    src/app/AppLiveStatus.cpp
+    src/app/AppPrerequisites.cpp
     src/app/BeanUpdater.cpp
     src/app/AppRecordingHelpers.cpp
     src/app/AppStatusLog.cpp
