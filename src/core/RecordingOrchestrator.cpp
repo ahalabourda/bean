@@ -204,8 +204,12 @@ void RecordingOrchestrator::ApplySettings(const AppSettings& settings)
 
 bool RecordingOrchestrator::StartMonitoring(std::string& error)
 {
-    std::scoped_lock lock(mutex_);
     error.clear();
+    if (IsMonitoring()) {
+        return true;
+    }
+
+    std::scoped_lock lock(mutex_);
 
     settings_.outputDirectory = settings_.outputDirectory.empty()
         ? std::filesystem::temp_directory_path() / "Battle Encounter Archival Nexus Recordings"

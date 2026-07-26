@@ -127,6 +127,85 @@ void EnableOwnerDrawButton(HWND parent, int controlId)
     SetWindowSubclass(button, StyledButtonHoverSubclassProc, 1, 0);
 }
 
+COLORREF LerpColor(COLORREF a, COLORREF b, float t)
+{
+    t = (std::clamp)(t, 0.0f, 1.0f);
+    const auto lerpChannel = [t](int from, int to) {
+        return from + static_cast<int>((to - from) * t + 0.5f);
+    };
+    return RGB(
+        lerpChannel(GetRValue(a), GetRValue(b)),
+        lerpChannel(GetGValue(a), GetGValue(b)),
+        lerpChannel(GetBValue(a), GetBValue(b)));
+}
+
+// Clears the square behind rounded buttons using the same vertical gradient as the
+// parent (window or panel), so corner pixels match the surrounding background.
+void FillStyledButtonParentBackground(HDC hdc, HWND button, const RECT& buttonRc, HWND mainWindow)
+{
+    if (!hdc || !button) {
+        return;
+    }
+
+    HWND parent = GetParent(button);
+    RECT parentRc{};
+    if (!parent || !GetClientRect(parent, &parentRc)) {
+        if (gTheme.panelSolidBrush) {
+            FillRect(hdc, &buttonRc, gTheme.panelSolidBrush);
+        }
+        return;
+    }
+
+    const int parentHeight = parentRc.bottom - parentRc.top;
+    if (parentHeight <= 0) {
+        if (gTheme.panelSolidBrush) {
+            FillRect(hdc, &buttonRc, gTheme.panelSolidBrush);
+        }
+        return;
+    }
+
+    POINT topLeft{buttonRc.left, buttonRc.top};
+    MapWindowPoints(button, parent, &topLeft, 1);
+
+    const bool isMainWindow = (mainWindow != nullptr && parent == mainWindow);
+    const COLORREF topColor = isMainWindow ? kColorWindowTop : kColorPanelTop;
+    const COLORREF bottomColor = isMainWindow ? kColorWindowBottom : kColorPanelBottom;
+
+    const int savedDc = SaveDC(hdc);
+    IntersectClipRect(hdc, buttonRc.left, buttonRc.top, buttonRc.right, buttonRc.bottom);
+
+    const LONG gradientTop = buttonRc.top - topLeft.y;
+    const LONG gradientBottom = gradientTop + parentHeight;
+    TRIVERTEX vertices[2] = {
+        {buttonRc.left,
+         gradientTop,
+         static_cast<COLOR16>(GetRValue(topColor) << 8),
+         static_cast<COLOR16>(GetGValue(topColor) << 8),
+         static_cast<COLOR16>(GetBValue(topColor) << 8),
+         0xFF00},
+        {buttonRc.right,
+         gradientBottom,
+         static_cast<COLOR16>(GetRValue(bottomColor) << 8),
+         static_cast<COLOR16>(GetGValue(bottomColor) << 8),
+         static_cast<COLOR16>(GetBValue(bottomColor) << 8),
+         0xFF00},
+    };
+    GRADIENT_RECT gradientRect{0, 1};
+    const BOOL filled = GradientFill(hdc, vertices, 2, &gradientRect, 1, GRADIENT_FILL_RECT_V);
+    if (!filled) {
+        const float t = static_cast<float>(topLeft.y + (buttonRc.bottom - buttonRc.top) / 2) / static_cast<float>(parentHeight);
+        HBRUSH brush = CreateSolidBrush(LerpColor(topColor, bottomColor, t));
+        if (brush) {
+            FillRect(hdc, &buttonRc, brush);
+            DeleteObject(brush);
+        } else if (gTheme.panelSolidBrush) {
+            FillRect(hdc, &buttonRc, gTheme.panelSolidBrush);
+        }
+    }
+
+    RestoreDC(hdc, savedDc);
+}
+
 const wchar_t* GetHelpTooltipTextForControl(const AppContext* ctx, HWND control)
 {
     if (!ctx || !control) {
@@ -315,6 +394,9 @@ void EnsureThemeResources()
     if (!gTheme.mutedHintFont) {
         gTheme.mutedHintFont = CreateFontW(-15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FF_DONTCARE, L"Segoe UI");
     }
+    if (!gTheme.mutedItalicHintFont) {
+        gTheme.mutedItalicHintFont = CreateFontW(-15, 0, 0, 0, FW_NORMAL, TRUE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FF_DONTCARE, L"Segoe UI");
+    }
     if (!gTheme.statusIndicatorFont) {
         gTheme.statusIndicatorFont = CreateFontW(-17, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FF_DONTCARE, L"Segoe UI");
     }
@@ -372,6 +454,7 @@ void DestroyThemeResources()
 {
     if (gTheme.uiFont) { DeleteObject(gTheme.uiFont); gTheme.uiFont = nullptr; }
     if (gTheme.mutedHintFont) { DeleteObject(gTheme.mutedHintFont); gTheme.mutedHintFont = nullptr; }
+    if (gTheme.mutedItalicHintFont) { DeleteObject(gTheme.mutedItalicHintFont); gTheme.mutedItalicHintFont = nullptr; }
     if (gTheme.statusIndicatorFont) { DeleteObject(gTheme.statusIndicatorFont); gTheme.statusIndicatorFont = nullptr; }
     if (gTheme.recordingsFont) { DeleteObject(gTheme.recordingsFont); gTheme.recordingsFont = nullptr; }
     if (gTheme.headingFont) { DeleteObject(gTheme.headingFont); gTheme.headingFont = nullptr; }
@@ -481,11 +564,11 @@ bool IsStyledButtonId(int controlId)
     case IDC_TAB_ABOUT:
     case IDC_OUTPUT_BROWSE:
     case IDC_LOG_BROWSE:
-    case IDC_MONITOR_START:
-    case IDC_MONITOR_STOP:
     case IDC_RECORD_START:
     case IDC_RECORD_STOP:
     case IDC_STATUS_OPEN_LOG_FOLDER:
+    case IDC_CHAT_BLOCKER_IMAGE_IMPORT_BUTTON:
+    case IDC_CHAT_BLOCKER_IMAGE_OPEN_FOLDER_BUTTON:
     case IDC_RECORDINGS_REFRESH:
     case IDC_RECORDINGS_OPEN_FOLDER:
     case IDC_RECORDINGS_OPEN_DB_FOLDER:
@@ -555,13 +638,18 @@ void ConfigureStyledButtons(AppContext* ctx)
     for (const int id : mainButtons) {
         EnableOwnerDrawButton(ctx->mainWindow, id);
     }
-    const std::array<int, 5> statusButtons = {IDC_MONITOR_START, IDC_MONITOR_STOP, IDC_RECORD_START, IDC_RECORD_STOP, IDC_STATUS_OPEN_LOG_FOLDER};
+    const std::array<int, 3> statusButtons = {IDC_RECORD_START, IDC_RECORD_STOP, IDC_STATUS_OPEN_LOG_FOLDER};
     for (const int id : statusButtons) {
         EnableOwnerDrawButton(ctx->statusPanel, id);
     }
     const std::array<int, 2> recorderButtons = {IDC_OUTPUT_BROWSE, IDC_LOG_BROWSE};
     for (const int id : recorderButtons) {
         EnableOwnerDrawButton(ctx->recorderPanel, id);
+    }
+    const std::array<int, 2> chatPrivacyButtons = {
+        IDC_CHAT_BLOCKER_IMAGE_IMPORT_BUTTON, IDC_CHAT_BLOCKER_IMAGE_OPEN_FOLDER_BUTTON};
+    for (const int id : chatPrivacyButtons) {
+        EnableOwnerDrawButton(ctx->chatPrivacyPanel, id);
     }
     const std::array<int, 9> recordingsButtons = {
         IDC_RECORDINGS_REFRESH, IDC_RECORDINGS_OPEN_FOLDER, IDC_RECORDINGS_OPEN_DB_FOLDER, IDC_YOUTUBE_LINK_BUTTON, IDC_YOUTUBE_UNLINK_BUTTON,
@@ -631,9 +719,7 @@ void DrawStyledButton(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
     else if (isTab) { fill = RGB(32, 38, 56); border = RGB(76, 94, 136); }
 
     SetBkMode(drawInfo->hDC, TRANSPARENT);
-    if (gTheme.panelSolidBrush) {
-        FillRect(drawInfo->hDC, &rc, gTheme.panelSolidBrush);
-    }
+    FillStyledButtonParentBackground(drawInfo->hDC, drawInfo->hwndItem, rc, ctx ? ctx->mainWindow : nullptr);
     const int cornerRadius = isTab ? 12 : (isLinkDisplay ? 6 : 9);
     HPEN borderPen = CreatePen(PS_SOLID, isActiveTab ? 2 : 1, border);
     HBRUSH fillBrush = CreateSolidBrush(fill);

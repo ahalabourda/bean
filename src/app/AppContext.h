@@ -26,6 +26,7 @@
 inline constexpr wchar_t kWindowClassName[] = L"BeanMainWindow";
 inline constexpr wchar_t kWindowTitleBase[] = L"Battle Encounter Archival Nexus - WoW Recorder";
 inline constexpr wchar_t kAboutTitleText[] = L"Battle Encounter Archival Nexus";
+inline constexpr wchar_t kAboutFlavorText[] = L"\"Roll that beautiful bean footage...\"";
 inline constexpr wchar_t kIconFile16[] = L"bean-16.ico";
 inline constexpr wchar_t kIconFile32[] = L"bean-32.ico";
 inline constexpr wchar_t kIconFile48[] = L"bean-48.ico";
@@ -61,6 +62,7 @@ inline constexpr auto kChatPreviewCaptureInterval = std::chrono::milliseconds(10
 inline constexpr auto kChatPreviewInvalidateInterval = std::chrono::milliseconds(1000);
 inline constexpr auto kWowWindowPollInterval = std::chrono::seconds(2);
 inline constexpr auto kObsInstallPollInterval = std::chrono::seconds(2);
+inline constexpr auto kMonitoringRetryInterval = std::chrono::seconds(5);
 inline constexpr auto kWarcraftRecorderPollInterval = std::chrono::seconds(30);
 inline constexpr size_t kStatusMaxLines = 300;
 inline constexpr COLORREF kColorWindowTop = RGB(11, 14, 23);
@@ -92,6 +94,7 @@ inline constexpr int kSpecIconVerticalOffsetPx = 1;
 struct VisualTheme {
     HFONT uiFont = nullptr;
     HFONT mutedHintFont = nullptr;
+    HFONT mutedItalicHintFont = nullptr;
     HFONT statusIndicatorFont = nullptr;
     HFONT recordingsFont = nullptr;
     HFONT headingFont = nullptr;
@@ -126,7 +129,7 @@ enum class TaskbarOverlayState {
 
 // Set when mythic auto-start fails so the taskbar overlay shows Warning without
 // requiring the Status tab to be open. Cleared on a successful recording start
-// or when monitoring stops.
+// or when monitoring is not active.
 inline constexpr char kAutoRecordFailedStatusPrefix[] = "AUTO-RECORD FAILED";
 
 struct AppIconSet {
@@ -193,8 +196,6 @@ enum ControlId {
     IDC_KEYBINDS_CREATE_CLIP_RESET,
     IDC_KEYBINDS_MANUAL_START_RESET,
     IDC_KEYBINDS_MANUAL_STOP_RESET,
-    IDC_MONITOR_START,
-    IDC_MONITOR_STOP,
     IDC_RECORD_START,
     IDC_RECORD_STOP,
     IDC_LIVE_LABEL,
@@ -285,6 +286,7 @@ enum ControlId {
     IDC_ABOUT_UPDATE_LABEL,
     IDC_ABOUT_UPDATE_TEXT,
     IDC_ABOUT_CHECK_UPDATES_BUTTON,
+    IDC_ABOUT_FLAVOR_TEXT,
     IDC_CLIPS_SOURCE_LABEL,
     IDC_CLIPS_SOURCE_COMBO,
     IDC_CLIPS_REFRESH,
@@ -430,6 +432,9 @@ struct AppContext {
     bool isMonitoring = false;
     bool isRecording = false;
     bool autoRecordFailed = false;
+    // Once set, RefreshLiveStatus keeps StartMonitoring alive with no user toggle.
+    bool alwaysOnMonitoring = false;
+    std::optional<std::chrono::steady_clock::time_point> monitoringLastStartAttemptAt;
     bool wowWindowDetected = false;
     bool obsInstallDetected = false;
     bool ffmpegDetected = false;

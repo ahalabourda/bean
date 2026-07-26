@@ -3023,7 +3023,19 @@ void RefreshLiveStatus(AppContext* ctx)
 
     const auto now = std::chrono::steady_clock::now();
     const bool wasRecording = ctx->isRecording;
-    const bool monitoring = ctx->orchestrator->IsMonitoring();
+    bool monitoring = ctx->orchestrator->IsMonitoring();
+    if (ctx->alwaysOnMonitoring
+        && !monitoring
+        && (!ctx->monitoringLastStartAttemptAt.has_value()
+            || (now - *ctx->monitoringLastStartAttemptAt) >= kMonitoringRetryInterval)) {
+        ctx->monitoringLastStartAttemptAt = now;
+        ctx->orchestrator->ApplySettings(ctx->settings);
+        std::string monitoringError;
+        ctx->orchestrator->StartMonitoring(monitoringError);
+        monitoring = ctx->orchestrator->IsMonitoring();
+    } else if (monitoring) {
+        ctx->monitoringLastStartAttemptAt.reset();
+    }
     const bool recording = (ctx->orchestrator->GetState() == bean::core::OrchestratorState::Recording);
     const auto recordingSessionId = ctx->orchestrator->GetRecordingSessionId();
 
@@ -3277,17 +3289,9 @@ void RefreshStatusCommandButtons(AppContext* ctx)
         return;
     }
 
-    HWND monitorStart = GetDlgItem(ctx->statusPanel, IDC_MONITOR_START);
-    HWND monitorStop = GetDlgItem(ctx->statusPanel, IDC_MONITOR_STOP);
     HWND recordStart = GetDlgItem(ctx->statusPanel, IDC_RECORD_START);
     HWND recordStop = GetDlgItem(ctx->statusPanel, IDC_RECORD_STOP);
 
-    if (monitorStart) {
-        EnableWindow(monitorStart, ctx->isMonitoring ? FALSE : TRUE);
-    }
-    if (monitorStop) {
-        EnableWindow(monitorStop, ctx->isMonitoring ? TRUE : FALSE);
-    }
     if (recordStart) {
         EnableWindow(recordStart, ctx->isRecording ? FALSE : TRUE);
     }
@@ -4414,16 +4418,6 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         }
         break;
     }
-    case IDC_MONITOR_START: {
-        PullSettingsFromUi(ctx);
-        ctx->orchestrator->ApplySettings(ctx->settings);
-        std::string error;
-        ctx->orchestrator->StartMonitoring(error);
-        break;
-    }
-    case IDC_MONITOR_STOP:
-        ctx->orchestrator->StopMonitoring();
-        break;
     case IDC_RECORD_START: {
         PullSettingsFromUi(ctx);
         std::string prepareError;
@@ -4749,10 +4743,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         }
         y += rowSpacing;
 
-        CreateWindowW(L"BUTTON", L"Start Monitoring", WS_VISIBLE | WS_CHILD, xLabel, y, 140, rowHeight + 4, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_MONITOR_START), nullptr, nullptr);
-        CreateWindowW(L"BUTTON", L"Stop Monitoring", WS_VISIBLE | WS_CHILD, xLabel + 150, y, 140, rowHeight + 4, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_MONITOR_STOP), nullptr, nullptr);
-        CreateWindowW(L"BUTTON", L"Start Recording", WS_VISIBLE | WS_CHILD, xLabel + 320, y, 140, rowHeight + 4, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_RECORD_START), nullptr, nullptr);
-        CreateWindowW(L"BUTTON", L"Stop Recording", WS_VISIBLE | WS_CHILD, xLabel + 470, y, 120, rowHeight + 4, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_RECORD_STOP), nullptr, nullptr);
+        CreateWindowW(L"BUTTON", L"Start Recording", WS_VISIBLE | WS_CHILD, xLabel, y, 140, rowHeight + 4, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_RECORD_START), nullptr, nullptr);
+        CreateWindowW(L"BUTTON", L"Stop Recording", WS_VISIBLE | WS_CHILD, xLabel + 150, y, 140, rowHeight + 4, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_RECORD_STOP), nullptr, nullptr);
         y += 44;
 
         CreateWindowW(L"STATIC", L"Live Status:", WS_VISIBLE | WS_CHILD, xLabel, y, 90, rowHeight, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_LIVE_LABEL), nullptr, nullptr);
@@ -4909,7 +4901,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             344,
             52,
             78,
-            rowHeight + 2,
+            rowHeight + 4,
             ctx->chatPrivacyPanel,
             reinterpret_cast<HMENU>(IDC_CHAT_BLOCKER_IMAGE_IMPORT_BUTTON),
             nullptr,
@@ -4921,7 +4913,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             428,
             52,
             108,
-            rowHeight + 2,
+            rowHeight + 4,
             ctx->chatPrivacyPanel,
             reinterpret_cast<HMENU>(IDC_CHAT_BLOCKER_IMAGE_OPEN_FOLDER_BUTTON),
             nullptr,
@@ -5205,6 +5197,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         CreateWindowW(L"STATIC", L"Updates:", WS_VISIBLE | WS_CHILD, 20, 210, 120, rowHeight, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_UPDATE_LABEL), nullptr, nullptr);
         CreateWindowW(L"STATIC", L"Checking for updates...", WS_VISIBLE | WS_CHILD, 150, 210, 360, rowHeight, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_UPDATE_TEXT), nullptr, nullptr);
         CreateWindowW(L"BUTTON", L"Check for updates", WS_VISIBLE | WS_CHILD | WS_TABSTOP, 540, 208, 150, rowHeight + 4, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_CHECK_UPDATES_BUTTON), nullptr, nullptr);
+        CreateWindowW(L"STATIC", kAboutFlavorText, WS_VISIBLE | WS_CHILD | SS_CENTER, 20, 290, 740, rowHeight, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_FLAVOR_TEXT), nullptr, nullptr);
 
         ConfigureStyledButtons(ctx);
         ApplyUiFonts(hwnd);
@@ -5227,6 +5220,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 SendMessageW(titleLabel, WM_SETFONT, reinterpret_cast<WPARAM>(gTheme.headingFont), TRUE);
             }
         }
+        HWND aboutFlavorText = GetDlgItem(ctx->aboutPanel, IDC_ABOUT_FLAVOR_TEXT);
+        if (aboutFlavorText && gTheme.mutedItalicHintFont) {
+            SendMessageW(aboutFlavorText, WM_SETFONT, reinterpret_cast<WPARAM>(gTheme.mutedItalicHintFont), TRUE);
+        }
         SendMessageW(ctx->recordingsUploadProgress, PBM_SETBARCOLOR, 0, static_cast<LPARAM>(kColorListSelection));
         SendMessageW(ctx->recordingsUploadProgress, PBM_SETBKCOLOR, 0, static_cast<LPARAM>(kColorInputBg));
 
@@ -5246,6 +5243,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ctx->orchestrator->ApplySettings(ctx->settings);
         std::string autoStartError;
         ctx->orchestrator->StartMonitoring(autoStartError);
+        ctx->alwaysOnMonitoring = true;
+        RefreshLiveStatus(ctx);
         RECT clientRect{};
         GetClientRect(hwnd, &clientRect);
         LayoutMainUi(ctx, clientRect.right - clientRect.left, clientRect.bottom - clientRect.top);
@@ -5570,7 +5569,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         SetTextColor(dc, kColorTextPrimary);
         if (control != ctx->outputStatus && control != ctx->wowLogStatus) {
             const int id = GetDlgCtrlID(control);
-            if (id == IDC_RECORDINGS_LABEL || id == IDC_RECORDINGS_UPLOAD_STATUS || id == IDC_ABOUT_BUILD_TEXT || id == IDC_YOUTUBE_UNLINK_CONFIRM_LABEL || id == IDC_CHAT_PREVIEW_STATUS || id == IDC_CONFIGURATION_AUTOSAVE_HINT || id == IDC_KEYBINDS_AUTOSAVE_HINT) {
+            if (id == IDC_RECORDINGS_LABEL || id == IDC_RECORDINGS_UPLOAD_STATUS || id == IDC_ABOUT_BUILD_TEXT || id == IDC_ABOUT_FLAVOR_TEXT || id == IDC_YOUTUBE_UNLINK_CONFIRM_LABEL || id == IDC_CHAT_PREVIEW_STATUS || id == IDC_CONFIGURATION_AUTOSAVE_HINT || id == IDC_KEYBINDS_AUTOSAVE_HINT) {
                 SetTextColor(dc, kColorTextMuted);
             }
         }
@@ -5601,6 +5600,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             SetBkColor(dc, kColorPanelBottom);
             SetTextColor(dc, (control && !IsWindowEnabled(control)) ? kColorTextMuted : kColorTextPrimary);
             return reinterpret_cast<LRESULT>(gTheme.panelSolidBrush ? gTheme.panelSolidBrush : reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        }
+        // Owner-draw styled buttons paint their own background from the parent
+        // gradient; avoid a solid buttonBrush flash behind the rounded rect.
+        if (IsStyledButtonId(id)) {
+            SetBkMode(dc, TRANSPARENT);
+            return reinterpret_cast<LRESULT>(GetStockObject(NULL_BRUSH));
         }
 
         SetTextColor(dc, kColorButtonText);
@@ -5871,6 +5876,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         UnregisterHotKey(hwnd, kManualStartHotkeyId);
         UnregisterHotKey(hwnd, kManualStopHotkeyId);
         if (ctx && ctx->orchestrator) {
+            ctx->alwaysOnMonitoring = false;
             ctx->orchestrator->StopMonitoring();
             std::string stopError;
             ctx->orchestrator->StopManualRecording(stopError);
@@ -6011,7 +6017,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int cmdShow)
     SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(context.idleIcon.smallIcon));
     SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(context.idleIcon.largeIcon));
     InitializeTaskbarOverlay(&context);
-    ApplyTaskbarOverlayState(&context, true);
 
     if (!loadError.empty()) {
         SetStatus(&context, std::wstring(L"Load settings warning: ") + ToWide(loadError));
@@ -6028,6 +6033,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int cmdShow)
 
     ShowWindow(hwnd, cmdShow);
     UpdateWindow(hwnd);
+    // Taskbar overlay icons are ignored until the window has a taskbar button.
+    ApplyTaskbarOverlayState(&context, true);
 
     MSG msg{};
     while (GetMessageW(&msg, nullptr, 0, 0)) {

@@ -103,11 +103,9 @@ void LayoutStatusPanel(AppContext* ctx, int panelWidth, int panelHeight)
     const int xLabel = 20;
     int y = 20;
 
-    const int commandButtonWidth = (std::max)(110, (panelWidth - 2 * xLabel - 24) / 4);
-    MoveControl(ctx->statusPanel, IDC_MONITOR_START, xLabel, y, commandButtonWidth, rowHeight + 4);
-    MoveControl(ctx->statusPanel, IDC_MONITOR_STOP, xLabel + commandButtonWidth + 8, y, commandButtonWidth, rowHeight + 4);
-    MoveControl(ctx->statusPanel, IDC_RECORD_START, xLabel + (commandButtonWidth + 8) * 2, y, commandButtonWidth, rowHeight + 4);
-    MoveControl(ctx->statusPanel, IDC_RECORD_STOP, xLabel + (commandButtonWidth + 8) * 3, y, commandButtonWidth, rowHeight + 4);
+    const int commandButtonWidth = (std::max)(110, (panelWidth - 2 * xLabel - 8) / 2);
+    MoveControl(ctx->statusPanel, IDC_RECORD_START, xLabel, y, commandButtonWidth, rowHeight + 4);
+    MoveControl(ctx->statusPanel, IDC_RECORD_STOP, xLabel + commandButtonWidth + 8, y, commandButtonWidth, rowHeight + 4);
     y += 46;
 
     MoveControl(ctx->statusPanel, IDC_LIVE_LABEL, xLabel, y, 90, rowHeight);
@@ -254,8 +252,8 @@ void LayoutChatPrivacyPanel(AppContext* ctx, int panelWidth, int panelHeight)
 
     MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_BLANK_RADIO, left + 104, y, 104, rowHeight);
     MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_CUSTOM_RADIO, left + 214, y, 104, rowHeight);
-    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_IMPORT_BUTTON, left + 324, y, 78, rowHeight + 2);
-    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_OPEN_FOLDER_BUTTON, left + 408, y, 108, rowHeight + 2);
+    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_IMPORT_BUTTON, left + 324, y, 78, rowHeight + 4);
+    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_OPEN_FOLDER_BUTTON, left + 408, y, 108, rowHeight + 4);
     y += 36;
 
     MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_LIBRARY_LABEL, left, y, 96, rowHeight);
@@ -281,7 +279,7 @@ void LayoutChatPrivacyPanel(AppContext* ctx, int panelWidth, int panelHeight)
     MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_PREVIEW_STATUS, left, y + previewHeight + 8, right - left, rowHeight);
 }
 
-void LayoutAboutPanel(AppContext* ctx, int panelWidth, int)
+void LayoutAboutPanel(AppContext* ctx, int panelWidth, int panelHeight)
 {
     if (!ctx || !ctx->aboutPanel) {
         return;
@@ -290,6 +288,8 @@ void LayoutAboutPanel(AppContext* ctx, int panelWidth, int)
     const int left = 20;
     const int rightButtonX = panelWidth - 170;
     const int valueWidth = (std::max)(180, rightButtonX - 150 - 14);
+    const int updatesRowBottom = 210 + rowHeight;
+    const int flavorY = updatesRowBottom + (std::max)(0, panelHeight - updatesRowBottom - rowHeight) / 2;
 
     MoveControl(ctx->aboutPanel, IDC_ABOUT_TITLE_LABEL, left, 24, panelWidth - 40, 34);
     MoveControl(ctx->aboutPanel, IDC_ABOUT_BUILD_TEXT, left, 58, panelWidth - 40, rowHeight);
@@ -308,6 +308,7 @@ void LayoutAboutPanel(AppContext* ctx, int panelWidth, int)
     MoveControl(ctx->aboutPanel, IDC_ABOUT_UPDATE_LABEL, left, 210, 120, rowHeight);
     MoveControl(ctx->aboutPanel, IDC_ABOUT_UPDATE_TEXT, 150, 210, valueWidth, rowHeight);
     MoveControl(ctx->aboutPanel, IDC_ABOUT_CHECK_UPDATES_BUTTON, rightButtonX, 208, 150, rowHeight + 4);
+    MoveControl(ctx->aboutPanel, IDC_ABOUT_FLAVOR_TEXT, left, flavorY, panelWidth - 40, rowHeight);
 }
 
 void LayoutClipsPanel(AppContext* ctx, int panelWidth, int panelHeight)
