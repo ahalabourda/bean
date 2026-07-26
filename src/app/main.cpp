@@ -23,6 +23,7 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <commdlg.h>
+#include <dwmapi.h>
 #include <mfmediaengine.h>
 #include <tlhelp32.h>
 #include <mmdeviceapi.h>
@@ -53,15 +54,43 @@
 #include <unordered_map>
 #include <vector>
 
+#pragma comment(lib, "Dwmapi.lib")
 #pragma comment(lib, "Msimg32.lib")
 #pragma comment(lib, "Ole32.lib")
 #pragma comment(lib, "UxTheme.lib")
 #pragma comment(lib, "Windowscodecs.lib")
 #pragma comment(lib, "Gdiplus.lib")
 
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
+#ifndef DWMWA_BORDER_COLOR
+#define DWMWA_BORDER_COLOR 34
+#endif
+#ifndef DWMWA_CAPTION_COLOR
+#define DWMWA_CAPTION_COLOR 35
+#endif
+#ifndef DWMWA_TEXT_COLOR
+#define DWMWA_TEXT_COLOR 36
+#endif
+
 namespace {
 
 constexpr char kYouTubeAuthServerUrl[] = "https://andrew.gg/bean/youtube-auth/";
+
+void ApplyDarkTitleBar(HWND hwnd)
+{
+    // Win10 20H1+: dark system chrome. Win11+: exact caption/text/border colors.
+    const BOOL useDarkMode = TRUE;
+    DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &useDarkMode, sizeof(useDarkMode));
+
+    const COLORREF captionColor = kColorWindowTop;
+    const COLORREF textColor = kColorTextPrimary;
+    const COLORREF borderColor = kColorWindowTop;
+    DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &captionColor, sizeof(captionColor));
+    DwmSetWindowAttribute(hwnd, DWMWA_TEXT_COLOR, &textColor, sizeof(textColor));
+    DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &borderColor, sizeof(borderColor));
+}
 
 std::wstring VersionText()
 {
@@ -4459,6 +4488,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ctx = appCtx;
         // Main-window controls are configured during WM_CREATE, so store it immediately.
         ctx->mainWindow = hwnd;
+        ApplyDarkTitleBar(hwnd);
 
         constexpr int navWidth = 120;
         constexpr int navX = 12;
