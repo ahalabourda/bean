@@ -168,6 +168,20 @@ add_executable(bean_core_public_api_tests
 )
 target_link_libraries(bean_core_public_api_tests PRIVATE bean_core)
 
+add_executable(bean_core_logic_tests
+    tests/CoreLogicTests.cpp
+)
+target_link_libraries(bean_core_logic_tests PRIVATE bean_core)
+
+add_executable(bean_app_helpers_tests
+    tests/AppHelpersTests.cpp
+    src/app/AppRecordingHelpers.cpp
+)
+target_link_libraries(bean_app_helpers_tests PRIVATE bean_core)
+target_include_directories(bean_app_helpers_tests PRIVATE src)
+
 enable_testing()
 add_test(NAME mythic_detector_tests COMMAND bean_tests)
 add_test(NAME core_public_api_tests COMMAND bean_core_public_api_tests)
+add_test(NAME core_logic_tests COMMAND bean_core_logic_tests)
+add_test(NAME app_helpers_tests COMMAND bean_app_helpers_tests)

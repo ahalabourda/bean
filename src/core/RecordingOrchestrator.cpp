@@ -19,7 +19,7 @@ namespace bean::core {
 namespace {
 
 constexpr auto kPostStartIdleTimeoutSuppress = std::chrono::seconds(180);
-constexpr auto kCombatLogIdleTimeout = std::chrono::seconds(720);
+constexpr auto kCombatLogIdleTimeout = std::chrono::seconds(300);
 
 std::string TimestampNow()
 {

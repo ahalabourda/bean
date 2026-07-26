@@ -190,6 +190,74 @@ void TestParticipantCollectionShortCircuitsAfterFiveResolved()
     Expect(stillFive.size() == 5, "Participant parsing should short-circuit after five resolved players.");
 }
 
+void TestResetEndsActiveRun()
+{
+    bean::log::MythicRunDetector detector;
+    Expect(detector.ProcessLine("6/20/2026 00:00:00.000-7  CHALLENGE_MODE_START,\"Skyreach\",161,161,10,[1]").has_value(),
+        "Reset test should start a run.");
+    auto reset = detector.ProcessLine("6/20/2026 00:05:00.000-7  CHALLENGE_MODE_RESET");
+    Expect(reset.has_value(), "CHALLENGE_MODE_RESET should end an active run.");
+    Expect(reset && reset->type == bean::log::MythicEventType::RunEndedFailure,
+        "RESET should map to RunEndedFailure.");
+    Expect(!detector.ProcessLine("6/20/2026 00:05:01.000-7  CHALLENGE_MODE_END,161,1,10,1.0,1.0,1.0").has_value(),
+        "END after RESET should be ignored because the run already ended.");
+}
+
+void TestCombatantInfoWithoutPlayerGuidIgnored()
+{
+    bean::log::MythicRunDetector detector;
+    Expect(detector.ProcessLine("6/20/2026 00:00:00.000-7  CHALLENGE_MODE_START,\"Skyreach\",161,161,10,[1]").has_value(),
+        "Non-player combatant test should start a run.");
+    detector.ProcessLine("6/20/2026 00:00:01.000-7  COMBATANT_INFO,Creature-0-0-0-0-1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,268");
+    Expect(detector.GetParticipants().empty(), "Non-player COMBATANT_INFO should not create participants.");
+}
+
+void TestStartCapturesQuotedDungeonName()
+{
+    bean::log::MythicRunDetector detector;
+    auto start = detector.ProcessLine(
+        "6/20/2026 00:00:00.000-7  CHALLENGE_MODE_START,\"Algeth'ar Academy\",402,402,15,[10,11]");
+    Expect(start.has_value(), "Quoted dungeon start should emit.");
+    Expect(start && start->mapName.has_value() && *start->mapName == "Algeth'ar Academy",
+        "Quoted dungeon name should populate mapName.");
+    Expect(start && start->keystoneLevel.has_value() && *start->keystoneLevel == 15,
+        "Quoted dungeon start should parse keystone level.");
+}
+
+void TestUnrelatedLinesIgnoredOutsideAndInsideRun()
+{
+    bean::log::MythicRunDetector detector;
+    Expect(!detector.ProcessLine("").has_value(), "Empty line should be ignored.");
+    Expect(!detector.ProcessLine("6/20/2026 00:00:00.000-7  SPELL_DAMAGE,Player-1-AAAA,\"A-Realm\",0x511,0x0,Creature-0-0-0-0-1,\"Mob\",0x10a48,0x0,1,\"Fireball\",0x4,100")
+                .has_value(),
+        "SPELL_DAMAGE outside a run should not emit a mythic event.");
+
+    Expect(detector.ProcessLine("6/20/2026 00:00:01.000-7  CHALLENGE_MODE_START,\"Skyreach\",161,161,10,[1]").has_value(),
+        "Run should start for unrelated-line test.");
+    Expect(!detector.ProcessLine("6/20/2026 00:00:02.000-7  SPELL_DAMAGE,Player-1-AAAA,\"A-Realm\",0x511,0x0,Creature-0-0-0-0-1,\"Mob\",0x10a48,0x0,1,\"Fireball\",0x4,100")
+                .has_value(),
+        "SPELL_DAMAGE inside a run should not emit a mythic event.");
+}
+
+void TestIgnoreResetWhenNotInRun()
+{
+    bean::log::MythicRunDetector detector;
+    Expect(!detector.ProcessLine("6/20/2026 00:00:00.000-7  CHALLENGE_MODE_RESET").has_value(),
+        "RESET without an active run should be ignored.");
+}
+
+void TestResolveSpecInfoCoversCommonSpecs()
+{
+    const auto brew = bean::log::ResolveSpecInfo(268);
+    Expect(brew.has_value() && std::string(brew->specName) == "Brewmaster", "Spec 268 Brewmaster.");
+    const auto devourer = bean::log::ResolveSpecInfo(1480);
+    Expect(devourer.has_value() && std::string(devourer->className) == "Demon Hunter", "Spec 1480 Demon Hunter.");
+    const auto arms = bean::log::ResolveSpecInfo(71);
+    Expect(arms.has_value() && std::string(arms->specName) == "Arms", "Spec 71 Arms.");
+    Expect(!bean::log::ResolveSpecInfo(0).has_value(), "Spec 0 should not resolve.");
+    Expect(!bean::log::ResolveSpecInfo(-1).has_value(), "Negative spec should not resolve.");
+}
+
 } // namespace
 
 int main()
@@ -199,13 +267,19 @@ int main()
     TestStartAndFailure();
     TestDuplicateStartForcesRestart();
     TestIgnoreEndWhenNotInRun();
+    TestIgnoreResetWhenNotInRun();
     TestAddonChatterDoesNotStartRun();
+    TestResetEndsActiveRun();
+    TestCombatantInfoWithoutPlayerGuidIgnored();
     TestEndEventOvertimeMapsToFailure();
     TestEndEventAllZeroPayloadMapsToFailure();
     TestRetailChallengeStartParsesMapAndLevel();
+    TestStartCapturesQuotedDungeonName();
+    TestUnrelatedLinesIgnoredOutsideAndInsideRun();
     TestParticipantsAreCapturedFromCombatLog();
     TestParticipantsCaptureNewExpansionSpec();
     TestParticipantCollectionShortCircuitsAfterFiveResolved();
+    TestResolveSpecInfoCoversCommonSpecs();
 
     if (gFailures == 0) {
         std::cout << "All MythicRunDetector tests passed.\n";

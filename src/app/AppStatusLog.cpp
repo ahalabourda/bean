@@ -209,6 +209,15 @@ void LogSessionDiagnostics(AppContext* ctx)
         << L", mic-noise-suppression=" << (ctx->settings.microphoneNoiseSuppression ? L"yes" : L"no");
     SetStatus(ctx, capture.str());
 
+#if defined(BEAN_ENABLE_LIBOBS) && BEAN_ENABLE_LIBOBS
+    SetStatus(ctx, L"Recorder engine: libobs");
+#else
+    SetStatus(
+        ctx,
+        L"Recorder engine: MOCK — no video files will be written. "
+        L"Rebuild with -DBEAN_ENABLE_LIBOBS=ON for real capture.");
+#endif
+
     SetStatus(ctx, std::wstring(L"Paths: output=") + ctx->settings.outputDirectory.wstring() + L", wow-log=" + ctx->settings.wowLogDirectory.wstring());
 
     std::wostringstream chatBlocker;

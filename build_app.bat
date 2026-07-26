@@ -2,14 +2,12 @@
 setlocal
 pushd "%~dp0"
 
-if not exist "build\CMakeCache.txt" (
-  echo [bean] Configuring CMake...
-  cmake -S . -B build
-  if errorlevel 1 goto :fail
-)
+echo [bean] Configuring CMake (libobs enabled)...
+cmake -S . -B build -DBEAN_ENABLE_LIBOBS=ON
+if errorlevel 1 goto :fail
 
 echo [bean] Building bean_app...
-cmake --build build --target bean_app
+cmake --build build --config Debug --target bean_app
 if errorlevel 1 goto :fail
 
 echo.
