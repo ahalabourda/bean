@@ -504,6 +504,7 @@ bool IsStyledButtonId(int controlId)
     case IDC_CLIPS_SET_START:
     case IDC_CLIPS_SET_END:
     case IDC_CLIPS_EXPORT:
+    case IDC_CLIPS_EXPORT_PRECISE:
     case IDC_CLIPS_OPEN_FOLDER:
     case IDC_KEYBINDS_CREATE_CLIP_REBIND:
     case IDC_KEYBINDS_MANUAL_START_REBIND:
@@ -568,7 +569,9 @@ void ConfigureStyledButtons(AppContext* ctx)
     for (const int id : recordingsButtons) {
         EnableOwnerDrawButton(ctx->recordingsPanel, id);
     }
-    const std::array<int, 6> clipsButtons = {IDC_CLIPS_REFRESH, IDC_CLIPS_PLAY_PAUSE, IDC_CLIPS_SET_START, IDC_CLIPS_SET_END, IDC_CLIPS_EXPORT, IDC_CLIPS_OPEN_FOLDER};
+    const std::array<int, 7> clipsButtons = {
+        IDC_CLIPS_REFRESH, IDC_CLIPS_PLAY_PAUSE, IDC_CLIPS_SET_START, IDC_CLIPS_SET_END,
+        IDC_CLIPS_EXPORT, IDC_CLIPS_EXPORT_PRECISE, IDC_CLIPS_OPEN_FOLDER};
     for (const int id : clipsButtons) {
         EnableOwnerDrawButton(ctx->clipsPanel, id);
     }

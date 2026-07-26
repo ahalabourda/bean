@@ -97,6 +97,9 @@ void RunMetadataWriter::Persist(FinishedRecordingSnapshot snapshot, RecordingSto
     record.mythicRunEndedAt = snapshot.mythicRunEndedAt;
     record.challengeMapId = snapshot.challengeMapId;
     record.keystoneLevel = snapshot.keystoneLevel;
+    if (!snapshot.encoderPreset.empty()) {
+        record.encoderPreset = snapshot.encoderPreset;
+    }
     for (const auto& participant : snapshot.participants) {
         RunRecord::Participant runParticipant;
         runParticipant.guid = participant.guid;

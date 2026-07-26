@@ -5,9 +5,11 @@
 #include "util/Strings.h"
 
 #include <algorithm>
+#include <climits>
 #include <cwctype>
 #include <iomanip>
 #include <sstream>
+#include <vector>
 
 namespace {
 
@@ -69,6 +71,74 @@ std::wstring FormatElapsed(std::chrono::seconds elapsed)
         swprintf_s(buffer, L"%02d:%02d", minutes, seconds);
     }
     return buffer;
+}
+
+bool ParseClipTime(const std::wstring& input, int& outSeconds)
+{
+    outSeconds = 0;
+    std::wstring trimmed;
+    trimmed.reserve(input.size());
+    for (const wchar_t ch : input) {
+        if (!iswspace(ch)) {
+            trimmed.push_back(ch);
+        }
+    }
+    if (trimmed.empty()) {
+        return false;
+    }
+
+    std::vector<int> parts;
+    size_t index = 0;
+    while (index < trimmed.size()) {
+        if (trimmed[index] == L':') {
+            return false;
+        }
+        if (!iswdigit(trimmed[index])) {
+            return false;
+        }
+        int value = 0;
+        const size_t start = index;
+        while (index < trimmed.size() && iswdigit(trimmed[index])) {
+            const int digit = trimmed[index] - L'0';
+            if (value > (INT_MAX - digit) / 10) {
+                return false;
+            }
+            value = value * 10 + digit;
+            ++index;
+        }
+        if (index == start) {
+            return false;
+        }
+        parts.push_back(value);
+        if (index == trimmed.size()) {
+            break;
+        }
+        if (trimmed[index] != L':') {
+            return false;
+        }
+        ++index;
+        if (index == trimmed.size()) {
+            return false; // trailing colon
+        }
+    }
+
+    if (parts.size() == 2) {
+        // mm:ss — minutes may exceed 59 for long recordings.
+        if (parts[1] > 59) {
+            return false;
+        }
+        outSeconds = parts[0] * 60 + parts[1];
+        return true;
+    }
+    if (parts.size() == 3) {
+        // hh:mm:ss
+        if (parts[1] > 59 || parts[2] > 59) {
+            return false;
+        }
+        outSeconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
+        return true;
+    }
+    return false;
 }
 
 std::wstring FormatBytes(uintmax_t bytes)

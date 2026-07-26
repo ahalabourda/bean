@@ -26,6 +26,7 @@ struct FinishedRecordingSnapshot {
     std::optional<int> challengeMapId;
     std::optional<int> keystoneLevel;
     std::optional<std::string> observedDungeonName;
+    std::string encoderPreset;
     std::vector<log::MythicParticipant> participants;
 };
 

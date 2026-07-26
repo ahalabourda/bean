@@ -595,22 +595,32 @@ void ClearClipsExportStatus(AppContext* ctx)
     SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Idle, L"");
 }
 
+void BeginClipExport(AppContext* ctx, bool precise);
+std::optional<std::filesystem::path> ResolveFfmpegExecutablePath(AppContext* ctx);
+
+std::filesystem::path AllocateUniqueClipOutputPath(const std::filesystem::path& desiredPath)
+{
+    std::error_code ec;
+    if (!std::filesystem::exists(desiredPath, ec) && !ec) {
+        return desiredPath;
+    }
+
+    const auto parent = desiredPath.parent_path();
+    const std::wstring stem = desiredPath.stem().wstring();
+    const std::wstring extension = desiredPath.extension().wstring();
+    for (int suffix = 1; suffix < 10'000; ++suffix) {
+        const auto candidate = parent / (stem + L"-" + std::to_wstring(suffix) + extension);
+        ec.clear();
+        if (!std::filesystem::exists(candidate, ec) && !ec) {
+            return candidate;
+        }
+    }
+    return desiredPath;
+}
+
 bool ParseClipSeconds(const std::wstring& input, int& outSeconds)
 {
-    if (input.empty()) {
-        return false;
-    }
-    try {
-        size_t consumed = 0;
-        const int parsed = std::stoi(input, &consumed);
-        if (consumed != input.size()) {
-            return false;
-        }
-        outSeconds = (std::max)(0, parsed);
-        return true;
-    } catch (...) {
-        return false;
-    }
+    return ParseClipTime(input, outSeconds);
 }
 
 int QueryClipPositionMs(const AppContext* ctx, int fallback = 0)
@@ -703,10 +713,155 @@ void RefreshClipsPlaybackControls(AppContext* ctx)
     }
     EnableWindow(GetDlgItem(ctx->clipsPanel, IDC_CLIPS_SET_START), (ctx->clipsLoaded && !previewBusy) ? TRUE : FALSE);
     EnableWindow(GetDlgItem(ctx->clipsPanel, IDC_CLIPS_SET_END), (ctx->clipsLoaded && !previewBusy) ? TRUE : FALSE);
-    EnableWindow(
-        GetDlgItem(ctx->clipsPanel, IDC_CLIPS_EXPORT),
-        (ctx->clipsLoaded && ffmpegAvailable && !previewBusy && !ctx->clipsExportInProgress.load()) ? TRUE : FALSE);
+    const BOOL exportEnabled =
+        (ctx->clipsLoaded && ffmpegAvailable && !previewBusy && !ctx->clipsExportInProgress.load()) ? TRUE : FALSE;
+    EnableWindow(GetDlgItem(ctx->clipsPanel, IDC_CLIPS_EXPORT), exportEnabled);
+    EnableWindow(GetDlgItem(ctx->clipsPanel, IDC_CLIPS_EXPORT_PRECISE), exportEnabled);
     UpdateClipsPositionLabel(ctx);
+}
+
+void BeginClipExport(AppContext* ctx, bool precise)
+{
+    if (!ctx) {
+        return;
+    }
+    if (ctx->clipsExportInProgress.load()) {
+        SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Exporting, L"Exporting...");
+        return;
+    }
+    if (!ctx->clipsLoaded || ctx->clipsLoadedPath.empty()) {
+        SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Failure, L"Select and load a recording first.");
+        return;
+    }
+    if (!std::filesystem::exists(ctx->clipsLoadedPath)) {
+        SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Failure, L"Selected recording file no longer exists.");
+        return;
+    }
+    int startSeconds = 0;
+    int endSeconds = 0;
+    if (!ParseClipSeconds(GetWindowTextString(ctx->clipsStartEdit), startSeconds)
+        || !ParseClipSeconds(GetWindowTextString(ctx->clipsEndEdit), endSeconds)) {
+        SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Failure, L"Start and end must be valid times (mm:ss).");
+        return;
+    }
+    if (endSeconds <= startSeconds) {
+        SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Failure, L"End must be greater than start.");
+        return;
+    }
+    const auto ffmpegPath = ResolveFfmpegExecutablePath(ctx);
+    if (!ffmpegPath.has_value()) {
+        SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Failure, L"FFmpeg executable could not be found.");
+        return;
+    }
+    const auto recordingsFolder = ResolveRecordingsFolderPath(ctx);
+    if (recordingsFolder.empty()) {
+        SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Failure, L"Recordings folder is unavailable.");
+        return;
+    }
+    const auto clipsFolder = recordingsFolder / "Clips";
+    std::error_code clipsCreateEc;
+    std::filesystem::create_directories(clipsFolder, clipsCreateEc);
+    if (clipsCreateEc) {
+        SetClipsExportStatus(
+            ctx,
+            AppContext::ClipExportStatus::Failure,
+            std::wstring(L"Could not create Clips folder: ") + ToWide(clipsCreateEc.message()));
+        return;
+    }
+
+    const std::wstring sourceStem = ctx->clipsLoadedPath.stem().wstring();
+    const std::wstring extension = ctx->clipsLoadedPath.extension().wstring().empty()
+        ? L".mp4"
+        : ctx->clipsLoadedPath.extension().wstring();
+    std::wstringstream outputName;
+    outputName << sourceStem << L"_clip_" << startSeconds << L"_" << endSeconds << extension;
+    const auto outputPath = AllocateUniqueClipOutputPath(clipsFolder / outputName.str());
+
+    // Precise export re-encodes; match the recording's quality tier when known.
+    // Fallback CRF 24 == High (see ResolveConstantQualityValueForPreset).
+    constexpr int kDefaultPreciseExportCrf = 24;
+    int preciseCrf = kDefaultPreciseExportCrf;
+    if (precise && ctx->runRepository) {
+        std::string runLookupError;
+        if (const auto run = ctx->runRepository->GetRunByVideoPath(ctx->clipsLoadedPath, runLookupError);
+            run.has_value() && run->encoderPreset.has_value() && !run->encoderPreset->empty()) {
+            preciseCrf = bean::obs::ResolveConstantQualityValueForPreset(*run->encoderPreset);
+        }
+    }
+
+    ctx->clipsExportInProgress.store(true);
+    RefreshClipsPlaybackControls(ctx);
+    SetClipsExportStatus(
+        ctx,
+        AppContext::ClipExportStatus::Exporting,
+        precise ? L"Exporting (precise)..." : L"Exporting (fast)...");
+    SetStatus(
+        ctx,
+        std::wstring(precise ? L"Exporting precise clip to " : L"Exporting fast clip to ")
+            + outputPath.filename().wstring() + L"...");
+    const std::filesystem::path inputPath = ctx->clipsLoadedPath;
+    const std::filesystem::path ffmpegExe = *ffmpegPath;
+    LaunchAppWorker(ctx, [ctx, ffmpegExe, inputPath, outputPath, startSeconds, endSeconds, precise, preciseCrf]() {
+        const int durationSeconds = endSeconds - startSeconds;
+        std::wstringstream arguments;
+        arguments << L"-y -hide_banner -v error"
+                  << L" -ss " << startSeconds
+                  << L" -i \"" << inputPath.wstring() << L"\""
+                  << L" -t " << durationSeconds;
+        if (precise) {
+            // Re-encode so cuts land on exact timestamps instead of nearest keyframes.
+            arguments << L" -c:v libx264 -crf " << preciseCrf << L" -preset veryfast"
+                      << L" -c:a aac -b:a 160k";
+            if (_wcsicmp(outputPath.extension().c_str(), L".mp4") == 0) {
+                arguments << L" -movflags +faststart";
+            }
+        } else {
+            arguments << L" -c copy -avoid_negative_ts make_zero";
+        }
+        arguments << L" \"" << outputPath.wstring() << L"\"";
+        const FfmpegProcessResult process = RunFfmpegProcess(ffmpegExe, arguments.str());
+
+        if (!process.launched) {
+            auto* payload = new ClipExportCompletePayload();
+            payload->message = std::wstring(L"Export failed to start (error ")
+                + std::to_wstring(process.launchError) + L").";
+            PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_EXPORT_COMPLETE, 0, reinterpret_cast<LPARAM>(payload));
+            PostStatus(
+                ctx,
+                std::wstring(L"Clip export failed to start (error ")
+                    + std::to_wstring(process.launchError) + L") using "
+                    + ffmpegExe.wstring() + L".");
+            ctx->clipsExportInProgress.store(false);
+            PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_UI_REFRESH, 0, 0);
+            return;
+        }
+
+        if (process.exitCode == 0) {
+            auto* payload = new ClipExportCompletePayload();
+            payload->success = true;
+            payload->message = precise ? L"Precise export complete!" : L"Fast export complete!";
+            PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_EXPORT_COMPLETE, 0, reinterpret_cast<LPARAM>(payload));
+            PostStatus(ctx, std::wstring(L"Clip export complete: ") + outputPath.wstring());
+        } else {
+            auto* payload = new ClipExportCompletePayload();
+            payload->message = std::wstring(L"Export failed (ffmpeg exit code ")
+                + std::to_wstring(process.exitCode) + L").";
+            PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_EXPORT_COMPLETE, 0, reinterpret_cast<LPARAM>(payload));
+            std::wstring diagnostic = process.output;
+            while (!diagnostic.empty() && (diagnostic.back() == L'\r' || diagnostic.back() == L'\n' || diagnostic.back() == L' ')) {
+                diagnostic.pop_back();
+            }
+            PostStatus(
+                ctx,
+                std::wstring(L"Clip export failed (ffmpeg exit code ")
+                    + std::to_wstring(process.exitCode)
+                    + L") using "
+                    + ffmpegExe.wstring()
+                    + (diagnostic.empty() ? L"." : L"): " + diagnostic));
+        }
+        ctx->clipsExportInProgress.store(false);
+        PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_UI_REFRESH, 0, 0);
+    });
 }
 
 std::optional<std::filesystem::path> GetSelectedClipSourcePath(const AppContext* ctx)
@@ -797,10 +952,10 @@ bool LoadClipFromSelection(AppContext* ctx, bool reportStatus = true)
         CloseClipMedia(ctx);
         ctx->clipsTimelinePosition = 0;
         if (ctx->clipsStartEdit) {
-            SetWindowTextW(ctx->clipsStartEdit, L"0");
+            SetWindowTextW(ctx->clipsStartEdit, L"00:00");
         }
         if (ctx->clipsEndEdit) {
-            SetWindowTextW(ctx->clipsEndEdit, L"0");
+            SetWindowTextW(ctx->clipsEndEdit, L"00:00");
         }
         RefreshClipsPlaybackControls(ctx);
         return false;
@@ -873,10 +1028,12 @@ bool LoadClipFromSelection(AppContext* ctx, bool reportStatus = true)
 
     ctx->clipsTimelinePosition = 0;
     if (ctx->clipsStartEdit) {
-        SetWindowTextW(ctx->clipsStartEdit, L"0");
+        SetWindowTextW(ctx->clipsStartEdit, L"00:00");
     }
     if (ctx->clipsEndEdit) {
-        SetWindowTextW(ctx->clipsEndEdit, std::to_wstring(ctx->clipsDurationMs / 1000).c_str());
+        SetWindowTextW(
+            ctx->clipsEndEdit,
+            FormatElapsed(std::chrono::seconds((std::max)(0, ctx->clipsDurationMs / 1000))).c_str());
     }
     ApplyClipVolumePercent(ctx, ctx->clipsVolumePercent);
     RefreshClipsPlaybackControls(ctx);
@@ -3925,7 +4082,9 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         }
         const int currentSeconds = QueryClipPositionMs(ctx, 0) / 1000;
         if (ctx->clipsStartEdit) {
-            SetWindowTextW(ctx->clipsStartEdit, std::to_wstring(currentSeconds).c_str());
+            SetWindowTextW(
+                ctx->clipsStartEdit,
+                FormatElapsed(std::chrono::seconds(currentSeconds)).c_str());
         }
         if (ctx->clipsTimeline) {
             InvalidateControlAndParentRegion(ctx->clipsTimeline);
@@ -3938,7 +4097,9 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         }
         const int currentSeconds = QueryClipPositionMs(ctx, 0) / 1000;
         if (ctx->clipsEndEdit) {
-            SetWindowTextW(ctx->clipsEndEdit, std::to_wstring(currentSeconds).c_str());
+            SetWindowTextW(
+                ctx->clipsEndEdit,
+                FormatElapsed(std::chrono::seconds(currentSeconds)).c_str());
         }
         if (ctx->clipsTimeline) {
             InvalidateControlAndParentRegion(ctx->clipsTimeline);
@@ -3946,111 +4107,11 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         break;
     }
     case IDC_CLIPS_EXPORT: {
-        if (ctx->clipsExportInProgress.load()) {
-            SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Exporting, L"Exporting...");
-            break;
-        }
-        if (!ctx->clipsLoaded || ctx->clipsLoadedPath.empty()) {
-            SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Failure, L"Select and load a recording first.");
-            break;
-        }
-        if (!std::filesystem::exists(ctx->clipsLoadedPath)) {
-            SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Failure, L"Selected recording file no longer exists.");
-            break;
-        }
-        int startSeconds = 0;
-        int endSeconds = 0;
-        if (!ParseClipSeconds(GetWindowTextString(ctx->clipsStartEdit), startSeconds)
-            || !ParseClipSeconds(GetWindowTextString(ctx->clipsEndEdit), endSeconds)) {
-            SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Failure, L"Start and end must be valid whole seconds.");
-            break;
-        }
-        if (endSeconds <= startSeconds) {
-            SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Failure, L"End must be greater than start.");
-            break;
-        }
-        const auto ffmpegPath = ResolveFfmpegExecutablePath(ctx);
-        if (!ffmpegPath.has_value()) {
-            SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Failure, L"FFmpeg executable could not be found.");
-            break;
-        }
-        const auto recordingsFolder = ResolveRecordingsFolderPath(ctx);
-        if (recordingsFolder.empty()) {
-            SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Failure, L"Recordings folder is unavailable.");
-            break;
-        }
-        const auto clipsFolder = recordingsFolder / "Clips";
-        std::error_code clipsCreateEc;
-        std::filesystem::create_directories(clipsFolder, clipsCreateEc);
-        if (clipsCreateEc) {
-            SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Failure, std::wstring(L"Could not create Clips folder: ") + ToWide(clipsCreateEc.message()));
-            break;
-        }
-
-        const std::wstring sourceStem = ctx->clipsLoadedPath.stem().wstring();
-        const std::wstring extension = ctx->clipsLoadedPath.extension().wstring().empty() ? L".mp4" : ctx->clipsLoadedPath.extension().wstring();
-        std::wstringstream outputName;
-        outputName << sourceStem << L"_clip_" << startSeconds << L"_" << endSeconds << extension;
-        const auto outputPath = clipsFolder / outputName.str();
-
-        ctx->clipsExportInProgress.store(true);
-        RefreshClipsPlaybackControls(ctx);
-        SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Exporting, L"Exporting...");
-        SetStatus(ctx, std::wstring(L"Exporting clip to ") + outputPath.filename().wstring() + L"...");
-        const std::filesystem::path inputPath = ctx->clipsLoadedPath;
-        const std::filesystem::path ffmpegExe = *ffmpegPath;
-        LaunchAppWorker(ctx, [ctx, ffmpegExe, inputPath, outputPath, startSeconds, endSeconds]() {
-            const int durationSeconds = endSeconds - startSeconds;
-            std::wstringstream arguments;
-            arguments << L"-y -hide_banner -v error"
-                      << L" -ss " << startSeconds
-                      << L" -i \"" << inputPath.wstring() << L"\""
-                      << L" -t " << durationSeconds
-                      << L" -c copy -avoid_negative_ts make_zero"
-                      << L" \"" << outputPath.wstring() << L"\"";
-            const FfmpegProcessResult process = RunFfmpegProcess(ffmpegExe, arguments.str());
-
-            if (!process.launched) {
-                auto* payload = new ClipExportCompletePayload();
-                payload->message = std::wstring(L"Export failed to start (error ")
-                    + std::to_wstring(process.launchError) + L").";
-                PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_EXPORT_COMPLETE, 0, reinterpret_cast<LPARAM>(payload));
-                PostStatus(
-                    ctx,
-                    std::wstring(L"Clip export failed to start (error ")
-                        + std::to_wstring(process.launchError) + L") using "
-                        + ffmpegExe.wstring() + L".");
-                ctx->clipsExportInProgress.store(false);
-                PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_UI_REFRESH, 0, 0);
-                return;
-            }
-
-            if (process.exitCode == 0) {
-                auto* payload = new ClipExportCompletePayload();
-                payload->success = true;
-                payload->message = L"Export complete!";
-                PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_EXPORT_COMPLETE, 0, reinterpret_cast<LPARAM>(payload));
-                PostStatus(ctx, std::wstring(L"Clip export complete: ") + outputPath.wstring());
-            } else {
-                auto* payload = new ClipExportCompletePayload();
-                payload->message = std::wstring(L"Export failed (ffmpeg exit code ")
-                    + std::to_wstring(process.exitCode) + L").";
-                PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_EXPORT_COMPLETE, 0, reinterpret_cast<LPARAM>(payload));
-                std::wstring diagnostic = process.output;
-                while (!diagnostic.empty() && (diagnostic.back() == L'\r' || diagnostic.back() == L'\n' || diagnostic.back() == L' ')) {
-                    diagnostic.pop_back();
-                }
-                PostStatus(
-                    ctx,
-                    std::wstring(L"Clip export failed (ffmpeg exit code ")
-                        + std::to_wstring(process.exitCode)
-                        + L") using "
-                        + ffmpegExe.wstring()
-                        + (diagnostic.empty() ? L"." : L"): " + diagnostic));
-            }
-            ctx->clipsExportInProgress.store(false);
-            PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_UI_REFRESH, 0, 0);
-        });
+        BeginClipExport(ctx, false);
+        break;
+    }
+    case IDC_CLIPS_EXPORT_PRECISE: {
+        BeginClipExport(ctx, true);
         break;
     }
     case IDC_CLIPS_OPEN_FOLDER: {
@@ -5044,12 +5105,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         if (ctx->clipsVolumeSlider) {
             SetWindowSubclass(ctx->clipsVolumeSlider, ClipsSliderSubclassProc, 1, reinterpret_cast<DWORD_PTR>(ctx));
         }
-        CreateWindowW(L"STATIC", L"Start (s):", WS_VISIBLE | WS_CHILD, 20, 398, 80, rowHeight, ctx->clipsPanel, reinterpret_cast<HMENU>(IDC_CLIPS_START_LABEL), nullptr, nullptr);
+        CreateWindowW(L"STATIC", L"Start:", WS_VISIBLE | WS_CHILD, 20, 398, 50, rowHeight, ctx->clipsPanel, reinterpret_cast<HMENU>(IDC_CLIPS_START_LABEL), nullptr, nullptr);
         ctx->clipsStartEdit = CreateWindowW(
             L"EDIT",
-            L"0",
-            WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER | WS_TABSTOP,
-            104,
+            L"00:00",
+            WS_VISIBLE | WS_CHILD | WS_BORDER | WS_TABSTOP,
+            74,
             398,
             74,
             rowHeight,
@@ -5058,13 +5119,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             nullptr,
             nullptr);
         EnableCtrlASelectAll(ctx->clipsStartEdit);
-        CreateWindowW(L"BUTTON", L"Set Start", WS_VISIBLE | WS_CHILD | WS_TABSTOP, 182, 397, 94, rowHeight + 4, ctx->clipsPanel, reinterpret_cast<HMENU>(IDC_CLIPS_SET_START), nullptr, nullptr);
-        CreateWindowW(L"STATIC", L"End (s):", WS_VISIBLE | WS_CHILD, 288, 398, 70, rowHeight, ctx->clipsPanel, reinterpret_cast<HMENU>(IDC_CLIPS_END_LABEL), nullptr, nullptr);
+        CreateWindowW(L"BUTTON", L"Set Start", WS_VISIBLE | WS_CHILD | WS_TABSTOP, 156, 397, 94, rowHeight + 4, ctx->clipsPanel, reinterpret_cast<HMENU>(IDC_CLIPS_SET_START), nullptr, nullptr);
+        CreateWindowW(L"STATIC", L"End:", WS_VISIBLE | WS_CHILD, 268, 398, 40, rowHeight, ctx->clipsPanel, reinterpret_cast<HMENU>(IDC_CLIPS_END_LABEL), nullptr, nullptr);
         ctx->clipsEndEdit = CreateWindowW(
             L"EDIT",
-            L"0",
-            WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER | WS_TABSTOP,
-            360,
+            L"00:00",
+            WS_VISIBLE | WS_CHILD | WS_BORDER | WS_TABSTOP,
+            312,
             398,
             74,
             rowHeight,
@@ -5073,16 +5134,17 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             nullptr,
             nullptr);
         EnableCtrlASelectAll(ctx->clipsEndEdit);
-        CreateWindowW(L"BUTTON", L"Set End", WS_VISIBLE | WS_CHILD | WS_TABSTOP, 438, 397, 94, rowHeight + 4, ctx->clipsPanel, reinterpret_cast<HMENU>(IDC_CLIPS_SET_END), nullptr, nullptr);
-        CreateWindowW(L"BUTTON", L"Export Clip", WS_VISIBLE | WS_CHILD | WS_TABSTOP, 20, 431, 112, rowHeight + 4, ctx->clipsPanel, reinterpret_cast<HMENU>(IDC_CLIPS_EXPORT), nullptr, nullptr);
-        CreateWindowW(L"BUTTON", L"Open Folder", WS_VISIBLE | WS_CHILD | WS_TABSTOP, 140, 431, 112, rowHeight + 4, ctx->clipsPanel, reinterpret_cast<HMENU>(IDC_CLIPS_OPEN_FOLDER), nullptr, nullptr);
+        CreateWindowW(L"BUTTON", L"Set End", WS_VISIBLE | WS_CHILD | WS_TABSTOP, 394, 397, 94, rowHeight + 4, ctx->clipsPanel, reinterpret_cast<HMENU>(IDC_CLIPS_SET_END), nullptr, nullptr);
+        CreateWindowW(L"BUTTON", L"Export Clip (Fast)", WS_VISIBLE | WS_CHILD | WS_TABSTOP, 20, 431, 150, rowHeight + 4, ctx->clipsPanel, reinterpret_cast<HMENU>(IDC_CLIPS_EXPORT), nullptr, nullptr);
+        CreateWindowW(L"BUTTON", L"Export Clip (Precise)", WS_VISIBLE | WS_CHILD | WS_TABSTOP, 180, 431, 170, rowHeight + 4, ctx->clipsPanel, reinterpret_cast<HMENU>(IDC_CLIPS_EXPORT_PRECISE), nullptr, nullptr);
+        CreateWindowW(L"BUTTON", L"Open Folder", WS_VISIBLE | WS_CHILD | WS_TABSTOP, 360, 431, 110, rowHeight + 4, ctx->clipsPanel, reinterpret_cast<HMENU>(IDC_CLIPS_OPEN_FOLDER), nullptr, nullptr);
         ctx->clipsFfmpegWarning = CreateWindowW(
             L"STATIC",
             L"FFmpeg is required to export clips.",
             WS_CHILD | SS_LEFT,
-            260,
+            480,
             431,
-            500,
+            280,
             rowHeight + 4,
             ctx->clipsPanel,
             reinterpret_cast<HMENU>(IDC_CLIPS_FFMPEG_WARNING),

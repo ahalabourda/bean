@@ -32,6 +32,9 @@ struct RunRecord {
     std::optional<int> challengeMapId;
     std::optional<int> keystoneLevel;
     std::optional<std::string> dungeonName;
+    // Recording quality tier at capture time (ultra/high/medium/low/minimum).
+    // Absent for older rows written before this field existed.
+    std::optional<std::string> encoderPreset;
     std::vector<Participant> participants;
 };
 

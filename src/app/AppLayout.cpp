@@ -342,16 +342,17 @@ void LayoutClipsPanel(AppContext* ctx, int panelWidth, int panelHeight)
     MoveControl(ctx->clipsPanel, IDC_CLIPS_VOLUME_LABEL, left, volumeTop, 60, rowHeight);
     MoveControl(ctx->clipsPanel, IDC_CLIPS_VOLUME_SLIDER, left + 62, volumeTop, 170, rowHeight);
 
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_START_LABEL, left, clippingTop, 88, rowHeight);
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_START_EDIT, left + 92, clippingTop, 74, rowHeight);
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_SET_START, left + 170, clippingTop - 1, 90, rowHeight + 4);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_START_LABEL, left, clippingTop, 50, rowHeight);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_START_EDIT, left + 54, clippingTop, 74, rowHeight);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_SET_START, left + 136, clippingTop - 1, 90, rowHeight + 4);
 
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_END_LABEL, left + 274, clippingTop, 82, rowHeight);
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_END_EDIT, left + 360, clippingTop, 74, rowHeight);
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_SET_END, left + 438, clippingTop - 1, 90, rowHeight + 4);
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_EXPORT, left, actionsTop - 1, 110, rowHeight + 4);
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_OPEN_FOLDER, left + 120, actionsTop - 1, 110, rowHeight + 4);
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_FFMPEG_WARNING, left + 240, actionsTop, right - left - 240, rowHeight + 4);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_END_LABEL, left + 240, clippingTop, 40, rowHeight);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_END_EDIT, left + 284, clippingTop, 74, rowHeight);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_SET_END, left + 366, clippingTop - 1, 90, rowHeight + 4);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_EXPORT, left, actionsTop - 1, 150, rowHeight + 4);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_EXPORT_PRECISE, left + 160, actionsTop - 1, 170, rowHeight + 4);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_OPEN_FOLDER, left + 340, actionsTop - 1, 110, rowHeight + 4);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_FFMPEG_WARNING, left + 460, actionsTop, (std::max)(0, right - left - 460), rowHeight + 4);
 }
 
 void LayoutKeybindsPanel(AppContext* ctx, int panelWidth, int panelHeight)

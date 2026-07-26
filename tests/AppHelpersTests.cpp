@@ -40,6 +40,22 @@ void TestFormatElapsed()
     Expect(FormatElapsed(std::chrono::seconds(0)) == L"00:00", "Zero elapsed should format.");
 }
 
+void TestParseClipTime()
+{
+    int seconds = -1;
+    Expect(ParseClipTime(L"01:05", seconds) && seconds == 65, "mm:ss should parse.");
+    Expect(ParseClipTime(L"1:05", seconds) && seconds == 65, "m:ss should parse.");
+    Expect(ParseClipTime(L"90:00", seconds) && seconds == 5400, "mm:ss may exceed 59 minutes.");
+    Expect(ParseClipTime(L"01:01:01", seconds) && seconds == 3661, "hh:mm:ss should parse.");
+    Expect(ParseClipTime(L" 02:30 ", seconds) && seconds == 150, "Whitespace should be ignored.");
+    Expect(!ParseClipTime(L"1:60", seconds), "Seconds over 59 should fail.");
+    Expect(!ParseClipTime(L"1:2:60", seconds), "hh:mm:ss seconds over 59 should fail.");
+    Expect(!ParseClipTime(L"1:2:3:4", seconds), "Four parts should fail.");
+    Expect(!ParseClipTime(L"65", seconds), "Bare seconds should fail.");
+    Expect(!ParseClipTime(L"", seconds), "Empty input should fail.");
+    Expect(!ParseClipTime(L"01:", seconds), "Trailing colon should fail.");
+}
+
 void TestFormatBytes()
 {
     Expect(FormatBytes(512) == L"512 B", "Bytes under 1 KiB should stay as B.");
@@ -109,6 +125,7 @@ void TestEnumerateRecordingMediaFiles()
 int main()
 {
     TestFormatElapsed();
+    TestParseClipTime();
     TestFormatBytes();
     TestSpecAbbreviationFromName();
     TestIsLikelyInvalidParticipantName();

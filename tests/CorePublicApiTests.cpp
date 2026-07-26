@@ -213,6 +213,7 @@ void TestRunRepositoryPublicMethods()
     record.challengeMapId = 405;
     record.keystoneLevel = 12;
     record.dungeonName = "Brackenhide Hollow";
+    record.encoderPreset = "ultra";
     record.participants = {
         {"Player-1", "Alpha", "Area52", std::nullopt, 268, "Brewmaster", "Monk"},
         {"Player-2", "Bravo", "Illidan", std::nullopt, 581, "Vengeance", "Demon Hunter"},
@@ -229,6 +230,7 @@ void TestRunRepositoryPublicMethods()
         Expect(loaded->videoFileName == "run1.mkv", "Loaded run should include videoFileName.");
         Expect(loaded->challengeMapId.has_value() && *loaded->challengeMapId == 405, "Loaded run should include challengeMapId.");
         Expect(loaded->keystoneLevel.has_value() && *loaded->keystoneLevel == 12, "Loaded run should include keystoneLevel.");
+        Expect(loaded->encoderPreset.has_value() && *loaded->encoderPreset == "ultra", "Loaded run should include encoderPreset.");
         Expect(loaded->participants.size() == 2, "Loaded run should include participants.");
         if (!loaded->participants.empty()) {
             const auto& p = loaded->participants.front();
@@ -238,6 +240,7 @@ void TestRunRepositoryPublicMethods()
     }
 
     record.result = "failure";
+    record.encoderPreset = "medium";
     record.participants = {{"Player-9", "Zulu", "Stormrage", std::nullopt, 62, "Arcane", "Mage"}};
     const bool upsertedAgain = repo.UpsertRun(record, error);
     Expect(upsertedAgain, "RunRepository::UpsertRun should overwrite existing row.");
@@ -245,6 +248,9 @@ void TestRunRepositoryPublicMethods()
     Expect(loadedAgain.has_value(), "GetRunByVideoPath should still find upserted row.");
     if (loadedAgain.has_value()) {
         Expect(loadedAgain->result == "failure", "Upsert should update result.");
+        Expect(
+            loadedAgain->encoderPreset.has_value() && *loadedAgain->encoderPreset == "medium",
+            "Upsert should update encoderPreset.");
         Expect(loadedAgain->participants.size() == 1, "Upsert should replace participant rows.");
     }
 }

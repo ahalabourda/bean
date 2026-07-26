@@ -786,6 +786,7 @@ void RecordingOrchestrator::PersistRunRecord(RecordingStopReason stopReason)
     snapshot.challengeMapId = activeRecordingMetadata_->challengeMapId;
     snapshot.keystoneLevel = activeRecordingMetadata_->keystoneLevel;
     snapshot.observedDungeonName = activeRecordingMetadata_->observedDungeonName;
+    snapshot.encoderPreset = settings_.encoderPreset;
     snapshot.participants = activeRecordingMetadata_->participants;
     activeRecordingMetadata_.reset();
     runMetadataWriter_.Persist(std::move(snapshot), stopReason);

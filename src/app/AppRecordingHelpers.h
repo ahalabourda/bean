@@ -13,6 +13,7 @@
 std::vector<std::filesystem::path> EnumerateRecordingMediaFiles(const std::filesystem::path& folder);
 
 std::wstring FormatElapsed(std::chrono::seconds elapsed);
+bool ParseClipTime(const std::wstring& input, int& outSeconds);
 std::wstring FormatBytes(uintmax_t bytes);
 std::wstring FormatLocalDateTime(const std::chrono::system_clock::time_point& timePoint);
 std::wstring FormatLocalDate(const std::chrono::system_clock::time_point& timePoint);

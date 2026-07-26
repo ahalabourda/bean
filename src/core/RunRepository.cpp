@@ -178,13 +178,13 @@ void BindIntOrNull(sqlite3_stmt* stmt, int index, const std::optional<int>& valu
     }
 }
 
-bool RunParticipantsHasColumn(sqlite3* db, const char* columnName, std::string& error)
+bool TableHasColumn(sqlite3* db, const char* tableName, const char* columnName, std::string& error)
 {
     auto& api = GetSqliteApi();
     sqlite3_stmt* stmt = nullptr;
-    const char* sql = "PRAGMA table_info(run_participants);";
-    if (api.prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
-        error = "Unable to inspect run_participants schema.";
+    const std::string sql = std::string("PRAGMA table_info(") + tableName + ");";
+    if (api.prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
+        error = std::string("Unable to inspect ") + tableName + " schema.";
         return false;
     }
 
@@ -199,6 +199,11 @@ bool RunParticipantsHasColumn(sqlite3* db, const char* columnName, std::string& 
 
     api.finalize(stmt);
     return found;
+}
+
+bool RunParticipantsHasColumn(sqlite3* db, const char* columnName, std::string& error)
+{
+    return TableHasColumn(db, "run_participants", columnName, error);
 }
 
 bool GetSqliteUserVersion(sqlite3* db, int& version, std::string& error)
@@ -223,7 +228,7 @@ bool SetSqliteUserVersion(sqlite3* db, int version, std::string& error)
 }
 
 // Current schema revision. Bump when adding numbered migrations below.
-constexpr int kRunsDbUserVersion = 2;
+constexpr int kRunsDbUserVersion = 3;
 
 bool MigrateRunParticipantsSchema(sqlite3* db, std::string& error)
 {
@@ -270,6 +275,19 @@ bool MigrateRunParticipantsSchema(sqlite3* db, std::string& error)
         return false;
     }
     return true;
+}
+
+bool MigrateAddEncoderPresetColumn(sqlite3* db, std::string& error)
+{
+    error.clear();
+    bool hasColumn = false;
+    if (!(hasColumn = TableHasColumn(db, "runs", "encoder_preset", error)) && !error.empty()) {
+        return false;
+    }
+    if (hasColumn) {
+        return true;
+    }
+    return ExecuteSql(db, "ALTER TABLE runs ADD COLUMN encoder_preset TEXT;", error);
 }
 
 } // namespace
@@ -341,7 +359,8 @@ bool RunRepository::EnsureInitialized(std::string& error)
         "mythic_ended_at_utc TEXT,"
         "challenge_map_id INTEGER,"
         "keystone_level INTEGER,"
-        "dungeon_name TEXT"
+        "dungeon_name TEXT,"
+        "encoder_preset TEXT"
         ");"
         "CREATE INDEX IF NOT EXISTS idx_runs_video_file_name ON runs(video_file_name);"
         "CREATE TABLE IF NOT EXISTS run_participants ("
@@ -367,12 +386,21 @@ bool RunRepository::EnsureInitialized(std::string& error)
         return false;
     }
     // Version 0/1: legacy DBs may still have denormalized spec_name/class_name
-    // columns. Version 2 is the current participant schema.
+    // columns. Version 2 is the participant schema without those columns.
+    // Version 3 adds encoder_preset to runs.
     if (userVersion < 2) {
         if (!MigrateRunParticipantsSchema(db, error)) {
             api.close(db);
             return false;
         }
+    }
+    if (userVersion < 3) {
+        if (!MigrateAddEncoderPresetColumn(db, error)) {
+            api.close(db);
+            return false;
+        }
+    }
+    if (userVersion < kRunsDbUserVersion) {
         if (!SetSqliteUserVersion(db, kRunsDbUserVersion, error)) {
             api.close(db);
             return false;
@@ -417,8 +445,8 @@ bool RunRepository::UpsertRun(const RunRecord& record, std::string& error)
         "INSERT INTO runs ("
         "video_path, video_file_name, trigger_reason, stop_reason, result,"
         "recording_started_at_utc, recording_ended_at_utc, mythic_started_at_utc, mythic_ended_at_utc,"
-        "challenge_map_id, keystone_level, dungeon_name"
-        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "challenge_map_id, keystone_level, dungeon_name, encoder_preset"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(video_path) DO UPDATE SET "
         "video_file_name=excluded.video_file_name,"
         "trigger_reason=excluded.trigger_reason,"
@@ -430,7 +458,8 @@ bool RunRepository::UpsertRun(const RunRecord& record, std::string& error)
         "mythic_ended_at_utc=excluded.mythic_ended_at_utc,"
         "challenge_map_id=excluded.challenge_map_id,"
         "keystone_level=excluded.keystone_level,"
-        "dungeon_name=excluded.dungeon_name;";
+        "dungeon_name=excluded.dungeon_name,"
+        "encoder_preset=excluded.encoder_preset;";
 
     sqlite3_stmt* stmt = nullptr;
     if (api.prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
@@ -453,6 +482,7 @@ bool RunRepository::UpsertRun(const RunRecord& record, std::string& error)
     BindIntOrNull(stmt, 10, record.challengeMapId);
     BindIntOrNull(stmt, 11, record.keystoneLevel);
     BindTextOrNull(stmt, 12, record.dungeonName);
+    BindTextOrNull(stmt, 13, record.encoderPreset);
 
     const int stepRc = api.step(stmt);
     api.finalize(stmt);
@@ -558,7 +588,7 @@ std::optional<RunRecord> RunRepository::ReadRunByVideoPathLocked(
     const char* sql =
         "SELECT video_path, video_file_name, trigger_reason, stop_reason, result, "
         "recording_started_at_utc, recording_ended_at_utc, mythic_started_at_utc, mythic_ended_at_utc, "
-        "challenge_map_id, keystone_level, dungeon_name, id "
+        "challenge_map_id, keystone_level, dungeon_name, encoder_preset, id "
         "FROM runs WHERE video_path = ?;";
 
     sqlite3_stmt* stmt = nullptr;
@@ -599,7 +629,12 @@ std::optional<RunRecord> RunRepository::ReadRunByVideoPathLocked(
     if (const auto* text = reinterpret_cast<const char*>(api.column_text(stmt, 11)); text) {
         record.dungeonName = text;
     }
-    const int runId = api.column_int(stmt, 12);
+    if (const auto* text = reinterpret_cast<const char*>(api.column_text(stmt, 12)); text) {
+        if (*text != '\0') {
+            record.encoderPreset = text;
+        }
+    }
+    const int runId = api.column_int(stmt, 13);
 
     api.finalize(stmt);
 
