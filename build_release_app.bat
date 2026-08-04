@@ -43,6 +43,19 @@ if exist "%DIST_DIR%" (
 mkdir "%DIST_DIR%"
 if errorlevel 1 goto :fail
 
+if not exist "LICENSE" (
+  echo [bean] Required LICENSE file is missing.
+  goto :fail
+)
+if not exist "THIRD-PARTY-NOTICES.md" (
+  echo [bean] Required THIRD-PARTY-NOTICES.md file is missing.
+  goto :fail
+)
+copy /Y "LICENSE" "%DIST_DIR%\LICENSE" >nul
+if errorlevel 1 goto :fail
+copy /Y "THIRD-PARTY-NOTICES.md" "%DIST_DIR%\THIRD-PARTY-NOTICES.md" >nul
+if errorlevel 1 goto :fail
+
 copy /Y "%SOURCE_EXE%" "%DIST_DIR%\bean.exe" >nul
 if errorlevel 1 goto :fail
 
