@@ -133,7 +133,8 @@ std::string NormalizeEncoderPreset(std::string preset)
 namespace SettingsKeys {
 constexpr char kSchemaVersion[] = "schemaVersion";
 constexpr char kOutputDirectory[] = "outputDirectory";
-constexpr char kWowLogDirectory[] = "wowLogDirectory";
+constexpr char kWowInstallDirectory[] = "wowInstallDirectory";
+constexpr char kLegacyWowLogDirectory[] = "wowLogDirectory";
 constexpr char kEncoderPreset[] = "encoderPreset";
 constexpr char kVideoEncoder[] = "videoEncoder";
 constexpr char kVideoContainer[] = "videoContainer";
@@ -417,9 +418,20 @@ bool SettingsStore::LoadLocked(AppSettings& settings, std::string& error) const
     if (!output.empty()) {
         settings.outputDirectory = output;
     }
-    const auto wowDir = ReadQuoted(content, SettingsKeys::kWowLogDirectory);
-    if (!wowDir.empty()) {
-        settings.wowLogDirectory = wowDir;
+    const auto wowInstallDir = ReadQuoted(content, SettingsKeys::kWowInstallDirectory);
+    if (!wowInstallDir.empty()) {
+        settings.wowInstallDirectory = wowInstallDir;
+    } else {
+        // Older releases stored the selected flavor's Logs directory. Convert
+        // valid retail/PTR paths to the shared installation root.
+        const auto legacyWowLogDir = ReadQuoted(content, SettingsKeys::kLegacyWowLogDirectory);
+        if (!legacyWowLogDir.empty()) {
+            const auto migratedInstall =
+                ResolveWowInstallDirectoryFromLogDirectory(legacyWowLogDir);
+            if (migratedInstall.has_value()) {
+                settings.wowInstallDirectory = *migratedInstall;
+            }
+        }
     }
     const auto preset = ReadQuoted(content, SettingsKeys::kEncoderPreset);
     settings.encoderPreset = NormalizeEncoderPreset(preset);
@@ -543,7 +555,7 @@ bool SettingsStore::SaveLocked(const AppSettings& settings, std::string& error) 
         << "{\n"
         << "  \"" << SettingsKeys::kSchemaVersion << "\": " << kSettingsSchemaVersion << ",\n"
         << "  \"" << SettingsKeys::kOutputDirectory << "\": \"" << EscapeJson(settings.outputDirectory.string()) << "\",\n"
-        << "  \"" << SettingsKeys::kWowLogDirectory << "\": \"" << EscapeJson(settings.wowLogDirectory.string()) << "\",\n"
+        << "  \"" << SettingsKeys::kWowInstallDirectory << "\": \"" << EscapeJson(settings.wowInstallDirectory.string()) << "\",\n"
         << "  \"" << SettingsKeys::kVideoEncoder << "\": \"" << EscapeJson(settings.videoEncoder) << "\",\n"
         << "  \"" << SettingsKeys::kEncoderPreset << "\": \"" << EscapeJson(settings.encoderPreset) << "\",\n"
         << "  \"" << SettingsKeys::kVideoContainer << "\": \"" << EscapeJson(settings.videoContainer) << "\",\n"

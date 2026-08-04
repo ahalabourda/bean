@@ -237,12 +237,25 @@ bool IsUsableObsInstallPresent()
         || std::filesystem::exists(bin64 / "libobs-opengl.dll");
 }
 
-std::filesystem::path ResolveDefaultWowLogDirectory()
+const char* WowEditionLabel(WowEdition edition)
+{
+    switch (edition) {
+    case WowEdition::Retail:
+        return "Retail";
+    case WowEdition::Ptr:
+        return "PTR";
+    case WowEdition::Unknown:
+    default:
+        return "Unknown";
+    }
+}
+
+std::filesystem::path ResolveDefaultWowInstallDirectory()
 {
     for (const auto& driveRoot : EnumerateDriveRoots()) {
         const std::filesystem::path candidates[] = {
-            driveRoot / "Program Files (x86)" / "World of Warcraft" / "_retail_" / "Logs",
-            driveRoot / "Program Files" / "World of Warcraft" / "_retail_" / "Logs"
+            driveRoot / "Program Files (x86)" / "World of Warcraft",
+            driveRoot / "Program Files" / "World of Warcraft"
         };
         for (const auto& candidate : candidates) {
             if (DirectoryExists(candidate)) {
@@ -251,8 +264,25 @@ std::filesystem::path ResolveDefaultWowLogDirectory()
         }
     }
 
-    // Preserve the historical fallback when no install is auto-detected.
-    return R"(C:\Program Files (x86)\World of Warcraft\_retail_\Logs)";
+    return R"(C:\Program Files (x86)\World of Warcraft)";
+}
+
+std::filesystem::path ResolveWowLogDirectoryFromInstallDirectory(
+    const std::filesystem::path& installDirectory,
+    WowEdition edition)
+{
+    if (installDirectory.empty()) {
+        return {};
+    }
+    const wchar_t* flavorDirectory = edition == WowEdition::Ptr ? L"_ptr_" : L"_retail_";
+    return installDirectory / flavorDirectory / "Logs";
+}
+
+std::filesystem::path ResolveDefaultWowLogDirectory()
+{
+    return ResolveWowLogDirectoryFromInstallDirectory(
+        ResolveDefaultWowInstallDirectory(),
+        WowEdition::Retail);
 }
 
 std::optional<std::filesystem::path> ResolveWowInstallDirectoryFromLogDirectory(
@@ -265,7 +295,7 @@ std::optional<std::filesystem::path> ResolveWowInstallDirectoryFromLogDirectory(
     if (normalized.filename() == L"Logs") {
         normalized = normalized.parent_path();
     }
-    if (normalized.filename() == L"_retail_") {
+    if (normalized.filename() == L"_retail_" || normalized.filename() == L"_ptr_") {
         auto installDirectory = normalized.parent_path();
         if (!installDirectory.empty()) {
             return installDirectory;
@@ -274,17 +304,20 @@ std::optional<std::filesystem::path> ResolveWowInstallDirectoryFromLogDirectory(
     return std::nullopt;
 }
 
-bool IsAdvancedCombatLoggingEnabled(const std::filesystem::path& wowLogDirectory)
+bool IsAdvancedCombatLoggingEnabled(
+    const std::filesystem::path& installDirectory,
+    WowEdition edition)
 {
-    auto installDirectory = ResolveWowInstallDirectoryFromLogDirectory(wowLogDirectory);
-    if (!installDirectory.has_value()) {
-        installDirectory = ResolveWowInstallDirectoryFromLogDirectory(ResolveDefaultWowLogDirectory());
+    auto resolvedInstallDirectory = installDirectory;
+    if (resolvedInstallDirectory.empty()) {
+        resolvedInstallDirectory = ResolveDefaultWowInstallDirectory();
     }
-    if (!installDirectory.has_value()) {
+    if (resolvedInstallDirectory.empty()) {
         return false;
     }
 
-    const auto configPath = *installDirectory / "_retail_" / "WTF" / "Config.wtf";
+    const auto configPath =
+        resolvedInstallDirectory / (edition == WowEdition::Ptr ? L"_ptr_" : L"_retail_") / "WTF" / "Config.wtf";
     std::ifstream stream(configPath);
     if (!stream.is_open()) {
         return false;

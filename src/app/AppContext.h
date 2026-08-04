@@ -436,6 +436,8 @@ struct AppContext {
     bool alwaysOnMonitoring = false;
     std::optional<std::chrono::steady_clock::time_point> monitoringLastStartAttemptAt;
     bool wowWindowDetected = false;
+    bool wowBothInstancesDetected = false;
+    bean::core::WowEdition detectedWowEdition = bean::core::WowEdition::Unknown;
     bool obsInstallDetected = false;
     bool ffmpegDetected = false;
     bool warcraftRecorderDetected = false;

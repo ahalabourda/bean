@@ -218,7 +218,10 @@ void LogSessionDiagnostics(AppContext* ctx)
         L"Rebuild with -DBEAN_ENABLE_LIBOBS=ON for real capture.");
 #endif
 
-    SetStatus(ctx, std::wstring(L"Paths: output=") + ctx->settings.outputDirectory.wstring() + L", wow-log=" + ctx->settings.wowLogDirectory.wstring());
+    SetStatus(
+        ctx,
+        std::wstring(L"Paths: output=") + ctx->settings.outputDirectory.wstring()
+            + L", wow-install=" + ctx->settings.wowInstallDirectory.wstring());
 
     std::wostringstream chatBlocker;
     chatBlocker

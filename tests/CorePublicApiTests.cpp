@@ -138,7 +138,7 @@ void TestSettingsStoreLoadSaveAndConversion()
 
     bean::core::AppSettings saveSettings;
     saveSettings.outputDirectory = MakeTempDir("settings-output");
-    saveSettings.wowLogDirectory = MakeTempDir("settings-logs");
+    saveSettings.wowInstallDirectory = MakeTempDir("settings-logs");
     saveSettings.videoEncoder = "nvenc";
     saveSettings.encoderPreset = "balanced";
     saveSettings.videoContainer = "mp4";
@@ -456,7 +456,9 @@ void TestRecordingOrchestratorPublicMethods()
     bean::core::RecordingOrchestrator orchestrator(std::move(engine));
 
     auto outputDir = MakeTempDir("orchestrator-output");
-    auto logDir = MakeTempDir("orchestrator-logs");
+    auto installDir = MakeTempDir("orchestrator-install");
+    auto logDir = installDir / "_ptr_" / "Logs";
+    std::filesystem::create_directories(logDir);
     const auto logFile = logDir / "WoWCombatLog-010101_010101.txt";
     {
         std::ofstream seed(logFile, std::ios::trunc | std::ios::binary);
@@ -465,7 +467,8 @@ void TestRecordingOrchestratorPublicMethods()
 
     bean::core::AppSettings settings;
     settings.outputDirectory = outputDir;
-    settings.wowLogDirectory = logDir;
+    settings.wowInstallDirectory = installDir;
+    settings.detectedWowEdition = bean::core::WowEdition::Ptr;
     settings.postRunStopDelaySeconds = 0;
     settings.videoContainer = "mkv";
     settings.captureMicrophone = true;
@@ -537,7 +540,7 @@ void TestRecordingOrchestratorReportsStartFailure()
     bean::core::RecordingOrchestrator orchestrator(std::move(engine));
     bean::core::AppSettings settings;
     settings.outputDirectory = MakeTempDir("orchestrator-fail-output");
-    settings.wowLogDirectory = MakeTempDir("orchestrator-fail-logs");
+    settings.wowInstallDirectory = MakeTempDir("orchestrator-fail-logs");
     settings.videoContainer = "mkv";
     orchestrator.ApplySettings(settings);
 
@@ -593,7 +596,7 @@ void TestSettingsSchemaVersionRoundTrip()
     // is awkward; instead write a minimal JSON with schemaVersion and load fields.
     bean::core::AppSettings settings;
     settings.outputDirectory = dir / "out";
-    settings.wowLogDirectory = dir / "logs";
+    settings.wowInstallDirectory = dir / "logs";
     settings.fps = 45;
     settings.videoContainer = "mkv";
     std::string error;

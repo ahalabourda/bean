@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/GameEnvironment.h"
 #include "obs/IRecorderEngine.h"
 
 #include <filesystem>
@@ -54,7 +55,7 @@ struct AppSettings {
     };
 
     std::filesystem::path outputDirectory;
-    std::filesystem::path wowLogDirectory;
+    std::filesystem::path wowInstallDirectory;
     std::string videoEncoder = kDefaultVideoEncoder;
     std::string encoderPreset = kDefaultEncoderPreset;
     std::string videoContainer = kDefaultVideoContainer;
@@ -68,6 +69,7 @@ struct AppSettings {
     // Runtime-only WoW client dimensions. These are never persisted.
     int detectedWowClientWidth = 0;
     int detectedWowClientHeight = 0;
+    WowEdition detectedWowEdition = WowEdition::Unknown;
     int fps = kDefaultFps;
     int postRunStopDelaySeconds = kDefaultPostRunStopDelaySeconds;
     int clipDurationSeconds = kDefaultClipDurationSeconds;

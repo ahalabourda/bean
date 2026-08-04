@@ -149,6 +149,17 @@ void TestWowInstallPathResolution()
         R"(D:\Games\WoW\_retail_)");
     Expect(fromRetail.has_value() && fromRetail->filename() == L"WoW",
         "_retail_ path should resolve to its parent.");
+
+    const auto fromPtr = ResolveWowInstallDirectoryFromLogDirectory(
+        R"(D:\Games\WoW\_ptr_\Logs)");
+    Expect(fromPtr.has_value() && fromPtr->filename() == L"WoW",
+        "_ptr_ Logs path should resolve to its parent.");
+
+    const auto ptrLogs = bean::core::ResolveWowLogDirectoryFromInstallDirectory(
+        R"(D:\Games\WoW)",
+        bean::core::WowEdition::Ptr);
+    Expect(ptrLogs == R"(D:\Games\WoW\_ptr_\Logs)",
+        "PTR edition should resolve to the _ptr_ Logs directory.");
 }
 
 void TestAdvancedCombatLoggingConfigParse()
@@ -163,15 +174,24 @@ void TestAdvancedCombatLoggingConfigParse()
     }
     const auto logs = install / "_retail_" / "Logs";
     std::filesystem::create_directories(logs);
-    Expect(bean::core::IsAdvancedCombatLoggingEnabled(logs),
+    Expect(bean::core::IsAdvancedCombatLoggingEnabled(install, bean::core::WowEdition::Retail),
         "Config.wtf with advancedCombatLogging 1 should report enabled.");
 
     {
         std::ofstream cfg(wtfDir / "Config.wtf", std::ios::trunc);
         cfg << "SET advancedCombatLogging \"0\"\n";
     }
-    Expect(!bean::core::IsAdvancedCombatLoggingEnabled(logs),
+    Expect(!bean::core::IsAdvancedCombatLoggingEnabled(install, bean::core::WowEdition::Retail),
         "Config.wtf with advancedCombatLogging 0 should report disabled.");
+
+    const auto ptrWtfDir = install / "_ptr_" / "WTF";
+    std::filesystem::create_directories(ptrWtfDir);
+    {
+        std::ofstream cfg(ptrWtfDir / "Config.wtf", std::ios::trunc);
+        cfg << "SET advancedCombatLogging \"1\"\n";
+    }
+    Expect(bean::core::IsAdvancedCombatLoggingEnabled(install, bean::core::WowEdition::Ptr),
+        "PTR Config.wtf should be checked when PTR is selected.");
 }
 
 void TestRunMetadataWriterPersistsSuccess()
@@ -317,7 +337,7 @@ void TestSettingsEncoderPresetMigrationAndKeybinds()
     bean::core::SettingsStore store;
     bean::core::AppSettings settings;
     settings.outputDirectory = MakeTempDir("settings-preset-out");
-    settings.wowLogDirectory = MakeTempDir("settings-preset-logs");
+    settings.wowInstallDirectory = MakeTempDir("settings-preset-logs");
     settings.encoderPreset = "balanced"; // legacy name -> medium
     settings.audioCaptureScope = bean::core::AppSettings::AudioCaptureScope::WowAndDiscord;
     settings.microphoneNoiseSuppression = true;
@@ -354,7 +374,7 @@ void TestSettingsLegacyWowOnlyAudioFlag()
         out << "{\n"
             << "  \"schemaVersion\": 1,\n"
             << "  \"outputDirectory\": \"C:/Videos\",\n"
-            << "  \"wowLogDirectory\": \"C:/Logs\",\n"
+            << "  \"wowLogDirectory\": \"C:/Program Files/World of Warcraft/_retail_/Logs\",\n"
             << "  \"captureWowProcessAudioOnly\": false,\n"
             << "  \"videoEncoder\": \"gpu_auto\",\n"
             << "  \"encoderPreset\": \"high\",\n"
@@ -395,6 +415,10 @@ void TestSettingsLegacyWowOnlyAudioFlag()
     Expect(store.Load(loaded, error), "Legacy audio config should load.");
     Expect(loaded.audioCaptureScope == bean::core::AppSettings::AudioCaptureScope::AllDesktop,
         "captureWowProcessAudioOnly=false should map to AllDesktop.");
+    Expect(
+        loaded.wowInstallDirectory
+            == R"(C:\Program Files\World of Warcraft)",
+        "Legacy wowLogDirectory should migrate to the WoW install directory.");
 }
 
 void TestMockInitializeFailureAndDoubleStart()
@@ -422,7 +446,7 @@ void TestOrchestratorRejectsClipWhenIdle()
     bean::core::RecordingOrchestrator orchestrator(std::move(engine));
     bean::core::AppSettings settings;
     settings.outputDirectory = MakeTempDir("orch-clip-idle-out");
-    settings.wowLogDirectory = MakeTempDir("orch-clip-idle-logs");
+    settings.wowInstallDirectory = MakeTempDir("orch-clip-idle-logs");
     orchestrator.ApplySettings(settings);
 
     std::string error;
@@ -436,7 +460,7 @@ void TestOrchestratorClipRequestWhileRecording()
     bean::core::RecordingOrchestrator orchestrator(std::move(engine));
     bean::core::AppSettings settings;
     settings.outputDirectory = MakeTempDir("orch-clip-live-out");
-    settings.wowLogDirectory = MakeTempDir("orch-clip-live-logs");
+    settings.wowInstallDirectory = MakeTempDir("orch-clip-live-logs");
     settings.clipDurationSeconds = 15;
     settings.videoContainer = "mkv";
     orchestrator.ApplySettings(settings);
@@ -535,7 +559,7 @@ void TestSettingsClampsOutOfRangeValues()
         out << "{\n"
             << "  \"schemaVersion\": 1,\n"
             << "  \"outputDirectory\": \"C:/Videos\",\n"
-            << "  \"wowLogDirectory\": \"C:/Logs\",\n"
+            << "  \"wowInstallDirectory\": \"C:/Logs\",\n"
             << "  \"videoEncoder\": \"gpu_auto\",\n"
             << "  \"encoderPreset\": \"quality\",\n"
             << "  \"videoContainer\": \"avi\",\n"
@@ -595,7 +619,7 @@ void TestSettingsEncoderPresetLegacyAliases()
         bean::core::SettingsStore store;
         bean::core::AppSettings settings;
         settings.outputDirectory = MakeTempDir(std::string("preset-alias-out-") + label);
-        settings.wowLogDirectory = MakeTempDir(std::string("preset-alias-logs-") + label);
+        settings.wowInstallDirectory = MakeTempDir(std::string("preset-alias-logs-") + label);
         settings.encoderPreset = input;
         std::string error;
         Expect(store.Save(settings, error), std::string("Save should succeed for ") + label);
@@ -670,7 +694,7 @@ void TestOrchestratorRejectsDoubleManualStart()
 
     bean::core::AppSettings settings;
     settings.outputDirectory = MakeTempDir("orch-double-start-out");
-    settings.wowLogDirectory = MakeTempDir("orch-double-start-logs");
+    settings.wowInstallDirectory = MakeTempDir("orch-double-start-logs");
     settings.videoContainer = "mkv";
     orchestrator.ApplySettings(settings);
 
@@ -690,7 +714,9 @@ void TestOrchestratorPersistsMythicFailureMetadata()
     bean::core::RecordingOrchestrator orchestrator(std::move(engine));
 
     const auto outputDir = MakeTempDir("orch-fail-meta-out");
-    const auto logDir = MakeTempDir("orch-fail-meta-logs");
+    const auto installDir = MakeTempDir("orch-fail-meta-install");
+    const auto logDir = installDir / "_retail_" / "Logs";
+    std::filesystem::create_directories(logDir);
     const auto logFile = logDir / "WoWCombatLog-020202_020202.txt";
     {
         std::ofstream seed(logFile, std::ios::trunc | std::ios::binary);
@@ -699,7 +725,7 @@ void TestOrchestratorPersistsMythicFailureMetadata()
 
     bean::core::AppSettings settings;
     settings.outputDirectory = outputDir;
-    settings.wowLogDirectory = logDir;
+    settings.wowInstallDirectory = installDir;
     settings.postRunStopDelaySeconds = 0;
     settings.videoContainer = "mkv";
     orchestrator.ApplySettings(settings);

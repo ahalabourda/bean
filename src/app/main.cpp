@@ -1775,6 +1775,25 @@ void RefreshMicrophoneDeviceOptionsUi(AppContext* ctx)
     RefreshMicrophoneOptionsUi(ctx);
 }
 
+struct WowWindowUiInfo {
+    HWND window = nullptr;
+    bean::core::WowEdition edition = bean::core::WowEdition::Unknown;
+    bool retailWindowDetected = false;
+    bool ptrWindowDetected = false;
+};
+
+bean::core::WowEdition WowEditionForExecutableName(std::wstring executableName)
+{
+    std::transform(executableName.begin(), executableName.end(), executableName.begin(), towlower);
+    if (executableName == L"wowt.exe") {
+        return bean::core::WowEdition::Ptr;
+    }
+    if (executableName == L"wow.exe") {
+        return bean::core::WowEdition::Retail;
+    }
+    return bean::core::WowEdition::Unknown;
+}
+
 BOOL CALLBACK FindWowWindowForUiProc(HWND hwnd, LPARAM lParam)
 {
     if (!IsWindowVisible(hwnd)) {
@@ -1794,16 +1813,13 @@ BOOL CALLBACK FindWowWindowForUiProc(HWND hwnd, LPARAM lParam)
 
     wchar_t processPath[MAX_PATH] = {};
     DWORD processPathSize = static_cast<DWORD>(std::size(processPath));
-    bool wowProcess = false;
+    bean::core::WowEdition edition = bean::core::WowEdition::Unknown;
     if (QueryFullProcessImageNameW(processHandle, 0, processPath, &processPathSize)) {
-        std::wstring exeName = std::filesystem::path(processPath).filename().wstring();
-        std::transform(exeName.begin(), exeName.end(), exeName.begin(), towlower);
-        wowProcess = (exeName.size() >= 7
-            && exeName.rfind(L"wow", 0) == 0
-            && exeName.substr(exeName.size() - 4) == L".exe");
+        edition = WowEditionForExecutableName(
+            std::filesystem::path(processPath).filename().wstring());
     }
     CloseHandle(processHandle);
-    if (!wowProcess) {
+    if (edition == bean::core::WowEdition::Unknown) {
         return TRUE;
     }
 
@@ -1818,30 +1834,45 @@ BOOL CALLBACK FindWowWindowForUiProc(HWND hwnd, LPARAM lParam)
     const bool titleLooksLikeWow = (wcsstr(title, L"World of Warcraft") != nullptr);
     const bool classLooksLikeWow = (_wcsicmp(className, L"GxWindowClass") == 0);
     if (titleLooksLikeWow || classLooksLikeWow) {
-        auto* found = reinterpret_cast<HWND*>(lParam);
-        *found = hwnd;
-        return FALSE;
+        auto* found = reinterpret_cast<WowWindowUiInfo*>(lParam);
+        found->retailWindowDetected =
+            found->retailWindowDetected || edition == bean::core::WowEdition::Retail;
+        found->ptrWindowDetected =
+            found->ptrWindowDetected || edition == bean::core::WowEdition::Ptr;
+        if (!found->window
+            || (edition == bean::core::WowEdition::Ptr
+                && found->edition != bean::core::WowEdition::Ptr)) {
+            found->window = hwnd;
+            found->edition = edition;
+        }
     }
 
     return TRUE;
 }
 
-HWND FindWowWindowForUi()
+WowWindowUiInfo FindWowWindowForUi()
 {
-    HWND found = nullptr;
+    WowWindowUiInfo found;
     EnumWindows(FindWowWindowForUiProc, reinterpret_cast<LPARAM>(&found));
     return found;
 }
 
-std::optional<std::pair<int, int>> GetWowClientSizeForUi()
+struct WowClientInfo {
+    int width = 0;
+    int height = 0;
+    bean::core::WowEdition edition = bean::core::WowEdition::Unknown;
+    bool bothInstancesDetected = false;
+};
+
+std::optional<WowClientInfo> GetWowClientSizeForUi()
 {
-    const HWND wowWindow = FindWowWindowForUi();
-    if (!wowWindow) {
+    const WowWindowUiInfo wow = FindWowWindowForUi();
+    if (!wow.window) {
         return std::nullopt;
     }
 
     RECT client{};
-    if (!GetClientRect(wowWindow, &client)) {
+    if (!GetClientRect(wow.window, &client)) {
         return std::nullopt;
     }
     const int width = client.right - client.left;
@@ -1849,7 +1880,11 @@ std::optional<std::pair<int, int>> GetWowClientSizeForUi()
     if (width <= 0 || height <= 0) {
         return std::nullopt;
     }
-    return std::make_pair(width, height);
+    return WowClientInfo{
+        width,
+        height,
+        wow.edition,
+        wow.retailWindowDetected && wow.ptrWindowDetected};
 }
 
 std::pair<int, int> ScaleResolutionToHeight(int sourceWidth, int sourceHeight, int targetHeight)
@@ -1972,7 +2007,8 @@ void BeginFfmpegProbe(AppContext* ctx)
 bool DetectAdvancedCombatLoggingForUi(const AppContext* ctx)
 {
     return bean::core::IsAdvancedCombatLoggingEnabled(
-        ctx ? ctx->settings.wowLogDirectory : std::filesystem::path{});
+        ctx ? ctx->settings.wowInstallDirectory : std::filesystem::path{},
+        ctx ? ctx->detectedWowEdition : bean::core::WowEdition::Unknown);
 }
 
 bool EnsureChatPreviewFrameBitmap(AppContext* ctx, HDC referenceDc, int width, int height)
@@ -2094,9 +2130,9 @@ void DrawChatPrivacyPreview(const DRAWITEMSTRUCT* drawInfo, AppContext* ctx)
     int sourceWidth = ctx->chatPreviewSourceWidth > 0 ? ctx->chatPreviewSourceWidth : 1920;
     int sourceHeight = ctx->chatPreviewSourceHeight > 0 ? ctx->chatPreviewSourceHeight : 1080;
     if (!previewPausedDuringRecording) {
-        if (HWND wowWindow = FindWowWindowForUi()) {
+        if (const WowWindowUiInfo wow = FindWowWindowForUi(); wow.window) {
             RECT wowRect{};
-            if (GetClientRect(wowWindow, &wowRect)) {
+            if (GetClientRect(wow.window, &wowRect)) {
                 const int wowWidth = static_cast<int>(wowRect.right - wowRect.left);
                 const int wowHeight = static_cast<int>(wowRect.bottom - wowRect.top);
                 sourceWidth = (std::max)(1, wowWidth);
@@ -2123,7 +2159,7 @@ void DrawChatPrivacyPreview(const DRAWITEMSTRUCT* drawInfo, AppContext* ctx)
             const bool shouldCapture = !ctx->chatPreviewFrameValid
                 || !ctx->chatPreviewLastCaptureAt.has_value()
                 || (now - *ctx->chatPreviewLastCaptureAt) >= kChatPreviewCaptureInterval;
-            if (shouldCapture && !IsIconic(wowWindow)
+            if (shouldCapture && !IsIconic(wow.window)
                 && EnsureChatPreviewFrameBitmap(ctx, paintDc, previewWidth, previewHeight)) {
                 HDC frameDc = CreateCompatibleDC(paintDc);
                 HGDIOBJ oldBitmap = nullptr;
@@ -2137,7 +2173,7 @@ void DrawChatPrivacyPreview(const DRAWITEMSTRUCT* drawInfo, AppContext* ctx)
                         if (scratchBitmap) {
                             oldScratchBitmap = SelectObject(scratchDc, scratchBitmap);
                             constexpr UINT kPrintWindowRenderFullContent = 0x00000002;
-                            const BOOL printed = PrintWindow(wowWindow, scratchDc, PW_CLIENTONLY | kPrintWindowRenderFullContent);
+                            const BOOL printed = PrintWindow(wow.window, scratchDc, PW_CLIENTONLY | kPrintWindowRenderFullContent);
                             if (printed) {
                                 SetStretchBltMode(frameDc, COLORONCOLOR);
                                 const BOOL copied = StretchBlt(
@@ -3053,6 +3089,7 @@ void RefreshLiveStatus(AppContext* ctx)
     }
     const bool recordingStateChanged = (wasRecording != ctx->isRecording);
     const bool wowWasDetected = ctx->wowWindowDetected;
+    const auto wowWasEdition = ctx->detectedWowEdition;
     const int wowWasWidth = ctx->detectedWowClientWidth;
     const int wowWasHeight = ctx->detectedWowClientHeight;
     bool wowStatusRefreshed = false;
@@ -3061,13 +3098,34 @@ void RefreshLiveStatus(AppContext* ctx)
             || (now - *ctx->wowWindowLastCheckedAt) >= kWowWindowPollInterval)) {
         const auto wowSize = GetWowClientSizeForUi();
         ctx->wowWindowDetected = wowSize.has_value();
-        ctx->detectedWowClientWidth = wowSize.has_value() ? wowSize->first : 0;
-        ctx->detectedWowClientHeight = wowSize.has_value() ? wowSize->second : 0;
+        ctx->wowBothInstancesDetected =
+            wowSize.has_value() && wowSize->bothInstancesDetected;
+        ctx->detectedWowEdition = wowSize.has_value()
+            ? wowSize->edition
+            : bean::core::WowEdition::Unknown;
+        ctx->detectedWowClientWidth = wowSize.has_value() ? wowSize->width : 0;
+        ctx->detectedWowClientHeight = wowSize.has_value() ? wowSize->height : 0;
         ctx->settings.detectedWowClientWidth = ctx->detectedWowClientWidth;
         ctx->settings.detectedWowClientHeight = ctx->detectedWowClientHeight;
+        ctx->settings.detectedWowEdition = ctx->detectedWowEdition;
         ctx->orchestrator->ApplySettings(ctx->settings);
         ctx->wowWindowLastCheckedAt = now;
         wowStatusRefreshed = true;
+    }
+    if (wowStatusRefreshed
+        && wowWasEdition != ctx->detectedWowEdition
+        && monitoring
+        && !ctx->isRecording) {
+        // The watcher owns an open handle to the selected flavor's directory.
+        // Restart it when the player switches between Retail and PTR.
+        ctx->orchestrator->StopMonitoring();
+        monitoring = false;
+        if (ctx->alwaysOnMonitoring) {
+            std::string monitoringError;
+            ctx->orchestrator->ApplySettings(ctx->settings);
+            ctx->orchestrator->StartMonitoring(monitoringError);
+            monitoring = ctx->orchestrator->IsMonitoring();
+        }
     }
     const bool obsWasDetected = ctx->obsInstallDetected;
     bool obsStatusRefreshed = false;
@@ -3119,10 +3177,16 @@ void RefreshLiveStatus(AppContext* ctx)
         InvalidateRect(ctx->wowWindowIcon, nullptr, TRUE);
     }
     if (ctx->wowWindowText) {
-        const std::wstring wowStatusText = ctx->wowWindowDetected
-            ? L"WoW window detected - " + std::to_wstring(ctx->detectedWowClientWidth)
-                + L" \u00D7 " + std::to_wstring(ctx->detectedWowClientHeight)
-            : L"WoW window not detected";
+        std::wstring wowStatusText;
+        if (!ctx->wowWindowDetected) {
+            wowStatusText = L"WoW window not detected";
+        } else if (ctx->wowBothInstancesDetected) {
+            wowStatusText = L"Warning: Retail and PTR windows detected; using PTR";
+        } else {
+            wowStatusText =
+                L"WoW (" + ToWide(bean::core::WowEditionLabel(ctx->detectedWowEdition))
+                + L") window detected";
+        }
         UpdateTransparentStaticText(ctx->wowWindowText, wowStatusText.c_str());
     }
     if (ctx->gameResolutionText) {
@@ -3236,6 +3300,7 @@ void RefreshLiveStatus(AppContext* ctx)
     }
     if (ctx->statusTabButton
         && (wowWasDetected != ctx->wowWindowDetected
+            || wowWasEdition != ctx->detectedWowEdition
             || obsWasDetected != ctx->obsInstallDetected
             || ffmpegWasDetected != ctx->ffmpegDetected
             || warcraftRecorderWasDetected != ctx->warcraftRecorderDetected
@@ -3307,7 +3372,7 @@ void PullSettingsFromUi(AppContext* ctx)
     }
 
     ctx->settings.outputDirectory = ToUtf8(GetWindowTextString(ctx->outputEdit));
-    ctx->settings.wowLogDirectory = ToUtf8(GetWindowTextString(ctx->wowLogEdit));
+    ctx->settings.wowInstallDirectory = ToUtf8(GetWindowTextString(ctx->wowLogEdit));
     if (ctx->recordingResolutionCombo) {
         const LRESULT selectedIndex = SendMessageW(ctx->recordingResolutionCombo, CB_GETCURSEL, 0, 0);
         if (selectedIndex >= 0) {
@@ -3643,6 +3708,7 @@ void CommitConfigurationSettings(AppContext* ctx)
         return;
     }
 
+    const auto previousWowInstallDirectory = ctx->settings.wowInstallDirectory;
     PullSettingsFromUi(ctx);
 
     std::string error;
@@ -3651,6 +3717,13 @@ void CommitConfigurationSettings(AppContext* ctx)
         return;
     }
     ctx->orchestrator->ApplySettings(ctx->settings);
+    if (ctx->orchestrator->IsMonitoring()
+        && !ctx->isRecording
+        && previousWowInstallDirectory != ctx->settings.wowInstallDirectory) {
+        ctx->orchestrator->StopMonitoring();
+        std::string monitoringError;
+        ctx->orchestrator->StartMonitoring(monitoringError);
+    }
 }
 
 // Restarting an existing timer resets its countdown, so repeated calls while the
@@ -3720,10 +3793,10 @@ void RefreshFolderAvailability(AppContext* ctx)
     }
 
     const auto outputPath = GetWindowTextString(ctx->outputEdit);
-    const auto wowLogPath = GetWindowTextString(ctx->wowLogEdit);
+    const auto wowInstallPath = GetWindowTextString(ctx->wowLogEdit);
 
     ctx->outputAvailable = DirectoryExists(outputPath);
-    ctx->wowLogAvailable = DirectoryExists(wowLogPath);
+    ctx->wowLogAvailable = DirectoryExists(wowInstallPath);
     ctx->outputFolderWillBeCreatedOnRecordStart = !ctx->outputAvailable && !outputPath.empty();
 
     if (ctx->outputStatus) {
@@ -3769,8 +3842,8 @@ bool ApplyReasonableDefaults(bean::core::AppSettings& settings, std::string& war
         }
     }
 
-    if (settings.wowLogDirectory.empty()) {
-        settings.wowLogDirectory = bean::core::ResolveDefaultWowLogDirectory();
+    if (settings.wowInstallDirectory.empty()) {
+        settings.wowInstallDirectory = bean::core::ResolveDefaultWowInstallDirectory();
         changed = true;
     }
     if (settings.videoEncoder.empty()) {
@@ -3858,9 +3931,10 @@ void PushSettingsToUi(AppContext* ctx)
     }
 
     SetWindowTextW(ctx->outputEdit, ToWide(ctx->settings.outputDirectory.string()).c_str());
-    SetWindowTextW(ctx->wowLogEdit, ToWide(ctx->settings.wowLogDirectory.string()).c_str());
+    SetWindowTextW(ctx->wowLogEdit, ToWide(ctx->settings.wowInstallDirectory.string()).c_str());
     ctx->detectedWowClientWidth = ctx->settings.detectedWowClientWidth;
     ctx->detectedWowClientHeight = ctx->settings.detectedWowClientHeight;
+    ctx->detectedWowEdition = ctx->settings.detectedWowEdition;
     ctx->wowWindowDetected = ctx->detectedWowClientWidth > 0 && ctx->detectedWowClientHeight > 0;
     RefreshRecordingResolutionOptions(ctx);
     SetWindowTextW(ctx->fpsEdit, ToWide(std::to_string(ctx->settings.fps)).c_str());
@@ -4533,7 +4607,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ctx->outputStatus = CreateWindowW(L"STATIC", L"X", WS_VISIBLE | WS_CHILD | SS_NOTIFY | SS_CENTER | SS_CENTERIMAGE, xStatus, y, 40, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_OUTPUT_STATUS), nullptr, nullptr);
         y += rowSpacing;
 
-        CreateWindowW(L"STATIC", L"WoW Log Folder:", WS_VISIBLE | WS_CHILD, xLabel, y, labelWidth, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_LOG_LABEL), nullptr, nullptr);
+        CreateWindowW(L"STATIC", L"WoW Install:", WS_VISIBLE | WS_CHILD, xLabel, y, labelWidth, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_LOG_LABEL), nullptr, nullptr);
         ctx->wowLogEdit = CreateWindowW(L"EDIT", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, xEdit, y, editWidth, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_LOG_EDIT), nullptr, nullptr);
         EnableCtrlASelectAll(ctx->wowLogEdit);
         CreateWindowW(L"BUTTON", L"Browse", WS_VISIBLE | WS_CHILD | WS_TABSTOP, xButton, y, buttonWidth, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_LOG_BROWSE), nullptr, nullptr);
@@ -4756,7 +4830,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ctx->lengthValue = CreateWindowW(L"STATIC", L"00:00:00", WS_VISIBLE | WS_CHILD | SS_OWNERDRAW, xLabel + 385, y, 85, rowHeight, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_LENGTH_VALUE), nullptr, nullptr);
         y += 34;
 
-        CreateWindowW(L"STATIC", L"WoW Window:", WS_VISIBLE | WS_CHILD, xLabel, y, 90, rowHeight, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_WOW_WINDOW_LABEL), nullptr, nullptr);
+        CreateWindowW(L"STATIC", L"WoW:", WS_VISIBLE | WS_CHILD, xLabel, y, 90, rowHeight, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_WOW_WINDOW_LABEL), nullptr, nullptr);
         ctx->wowWindowIcon = CreateWindowW(L"STATIC", L"X", WS_VISIBLE | WS_CHILD | SS_OWNERDRAW, xLabel + 95, y, 20, rowHeight, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_WOW_WINDOW_ICON), nullptr, nullptr);
         ctx->wowWindowText = CreateWindowW(L"STATIC", L"WoW window not detected", WS_VISIBLE | WS_CHILD, xLabel + 118, y, 220, rowHeight, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_WOW_WINDOW_TEXT), nullptr, nullptr);
         y += 36;

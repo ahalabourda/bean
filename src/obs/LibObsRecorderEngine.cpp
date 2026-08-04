@@ -369,6 +369,7 @@ struct WowWindowSearchState {
     HWND wowWindow = nullptr;
     DWORD wowProcessId = 0;
     int bestScore = -1;
+    bool ptrWindow = false;
     std::wstring processPath;
     std::wstring windowTitle;
     std::wstring className;
@@ -397,6 +398,7 @@ bool IsLikelyWowGameClientExecutableName(std::wstring exeName)
     const std::wstring stem = exeName.substr(0, exeName.size() - 4);
     // Common game-client binary names.
     return stem == L"wow"
+        || stem == L"wowt"
         || stem == L"wowclassic";
 }
 
@@ -489,8 +491,10 @@ BOOL CALLBACK FindWowWindowProc(HWND hwnd, LPARAM lParam)
     wchar_t processPath[MAX_PATH] = {};
     DWORD processPathSize = static_cast<DWORD>(std::size(processPath));
     bool wowProcess = false;
+    std::wstring executableName;
     if (QueryFullProcessImageNameW(processHandle, 0, processPath, &processPathSize)) {
-        wowProcess = IsLikelyWowGameClientExecutableName(std::filesystem::path(processPath).filename().wstring());
+        executableName = std::filesystem::path(processPath).filename().wstring();
+        wowProcess = IsLikelyWowGameClientExecutableName(executableName);
     }
     CloseHandle(processHandle);
     if (!wowProcess) {
@@ -513,8 +517,11 @@ BOOL CALLBACK FindWowWindowProc(HWND hwnd, LPARAM lParam)
     }
 
     auto* state = reinterpret_cast<WowWindowSearchState*>(lParam);
-    if (score > state->bestScore) {
+    std::transform(executableName.begin(), executableName.end(), executableName.begin(), towlower);
+    const bool ptrWindow = executableName == L"wowt.exe";
+    if (!state->ptrWindow && (score > state->bestScore || ptrWindow)) {
         state->bestScore = score;
+        state->ptrWindow = ptrWindow;
         state->wowWindow = hwnd;
         state->wowProcessId = processId;
         state->processPath = processPath;
@@ -523,7 +530,7 @@ BOOL CALLBACK FindWowWindowProc(HWND hwnd, LPARAM lParam)
     }
 
     // Best possible match found; no need to keep scanning.
-    if (score >= 3) {
+    if (score >= 3 && state->ptrWindow) {
         return FALSE;
     }
 

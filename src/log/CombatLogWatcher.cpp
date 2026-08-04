@@ -247,7 +247,11 @@ bool CombatLogWatcher::Start(LineCallback callback, std::string& error)
         error = "Combat log directory is not set.";
         return false;
     }
-    if (!std::filesystem::exists(directory_)) {
+    std::error_code directoryEc;
+    if (!std::filesystem::exists(directory_, directoryEc)
+        || directoryEc
+        || !std::filesystem::is_directory(directory_, directoryEc)
+        || directoryEc) {
         running_ = false;
         error = "Combat log directory does not exist.";
         return false;

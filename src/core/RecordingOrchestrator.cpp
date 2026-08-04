@@ -215,10 +215,14 @@ bool RecordingOrchestrator::StartMonitoring(std::string& error)
         ? std::filesystem::temp_directory_path() / "Battle Encounter Archival Nexus Recordings"
         : settings_.outputDirectory;
 
-    watcher_.SetLogDirectory(settings_.wowLogDirectory);
+    const auto wowLogDirectory = ResolveWowLogDirectoryFromInstallDirectory(
+        settings_.wowInstallDirectory,
+        settings_.detectedWowEdition);
     PushStatus(
         "Monitoring start requested: output='" + settings_.outputDirectory.string()
-        + "', wow-log='" + settings_.wowLogDirectory.string()
+        + "', wow-install='" + settings_.wowInstallDirectory.string()
+        + "', wow-edition=" + WowEditionLabel(settings_.detectedWowEdition)
+        + ", wow-log='" + wowLogDirectory.string()
         + "', encoder=" + settings_.videoEncoder
         + ", quality=" + settings_.encoderPreset
         + ", container=" + settings_.videoContainer
@@ -228,6 +232,7 @@ bool RecordingOrchestrator::StartMonitoring(std::string& error)
         + ", microphone=" + BoolLabel(settings_.captureMicrophone)
         + ", microphone-noise-suppression=" + BoolLabel(settings_.microphoneNoiseSuppression));
 
+    watcher_.SetLogDirectory(wowLogDirectory);
     auto recordingConfig = ToRecordingConfig(settings_);
     if (!engine_->Initialize(recordingConfig, error)) {
         PushStatus("OBS initialize failed: " + error);
