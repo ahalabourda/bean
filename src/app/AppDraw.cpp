@@ -384,6 +384,61 @@ void DrawCheckOrXGlyph(HDC dc, const RECT& bounds, bool valid)
     }
 }
 
+void DrawUpdateAlertGlyph(HDC dc, const RECT& bounds)
+{
+    if (!dc) {
+        return;
+    }
+    EnsureThemeResources();
+
+    const int width = bounds.right - bounds.left;
+    const int height = bounds.bottom - bounds.top;
+    const int diameter = (std::max)(10, (std::min)(14, (std::min)(width, height)));
+    const int left = bounds.left + (width - diameter) / 2;
+    const int top = bounds.top + (height - diameter) / 2;
+    const int right = left + diameter;
+    const int bottom = top + diameter;
+
+    HPEN borderPen = CreatePen(PS_SOLID, 1, kColorWarning);
+    HBRUSH fillBrush = CreateSolidBrush(kColorWarning);
+    HGDIOBJ oldPen = borderPen ? SelectObject(dc, borderPen) : nullptr;
+    HGDIOBJ oldBrush = fillBrush ? SelectObject(dc, fillBrush) : nullptr;
+    Ellipse(dc, left, top, right, bottom);
+    if (oldBrush) {
+        SelectObject(dc, oldBrush);
+    }
+    if (oldPen) {
+        SelectObject(dc, oldPen);
+    }
+    if (fillBrush) {
+        DeleteObject(fillBrush);
+    }
+    if (borderPen) {
+        DeleteObject(borderPen);
+    }
+
+    const int centerX = (left + right) / 2;
+    HPEN exclamationPen = CreatePen(PS_SOLID, 2, kColorWindowTop);
+    HGDIOBJ oldExclamationPen = exclamationPen ? SelectObject(dc, exclamationPen) : nullptr;
+    MoveToEx(dc, centerX, top + 3, nullptr);
+    LineTo(dc, centerX, bottom - 5);
+    if (oldExclamationPen) {
+        SelectObject(dc, oldExclamationPen);
+    }
+    if (exclamationPen) {
+        DeleteObject(exclamationPen);
+    }
+    HBRUSH dotBrush = CreateSolidBrush(kColorWindowTop);
+    HGDIOBJ oldDotBrush = dotBrush ? SelectObject(dc, dotBrush) : nullptr;
+    Ellipse(dc, centerX - 1, bottom - 4, centerX + 2, bottom - 1);
+    if (oldDotBrush) {
+        SelectObject(dc, oldDotBrush);
+    }
+    if (dotBrush) {
+        DeleteObject(dotBrush);
+    }
+}
+
 } // namespace
 
 void EnsureThemeResources()
@@ -692,6 +747,8 @@ void DrawStyledButton(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
     const bool isStatusTab = drawInfo->CtlID == IDC_TAB_STATUS;
     const bool isConfigurationTab = drawInfo->CtlID == IDC_TAB_CONFIGURATION;
     const bool showValidityIndicator = isStatusTab || isConfigurationTab;
+    const bool showAboutUpdateIndicator = drawInfo->CtlID == IDC_TAB_ABOUT && ctx && ctx->aboutUpdateAvailable;
+    const bool showTabIndicator = showValidityIndicator || showAboutUpdateIndicator;
     const bool isActiveTab = ctx
         && ((drawInfo->CtlID == IDC_TAB_STATUS && ctx->activeTab == AppContext::MainTab::Status)
             || (drawInfo->CtlID == IDC_TAB_CONFIGURATION && ctx->activeTab == AppContext::MainTab::Configuration)
@@ -755,7 +812,7 @@ void DrawStyledButton(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
     } else {
         if (isTab) {
             textRect.left += 12;
-            textRect.right -= showValidityIndicator ? 28 : 10;
+            textRect.right -= showTabIndicator ? 28 : 10;
             DrawTextW(drawInfo->hDC, textBuffer, -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
             if (showValidityIndicator && ctx) {
                 const bool isValid = isStatusTab ? IsStatusTabValid(ctx) : IsConfigurationTabValid(ctx);
@@ -768,6 +825,17 @@ void DrawStyledButton(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
                 iconRect.top += yInset;
                 iconRect.bottom = iconRect.top + targetSize;
                 DrawCheckOrXGlyph(drawInfo->hDC, iconRect, isValid);
+            }
+            if (showAboutUpdateIndicator) {
+                RECT iconRect = rc;
+                iconRect.left = iconRect.right - 20;
+                iconRect.right -= 8;
+                const int height = iconRect.bottom - iconRect.top;
+                const int targetSize = 14;
+                const int yInset = (std::max)(0, (height - targetSize) / 2);
+                iconRect.top += yInset;
+                iconRect.bottom = iconRect.top + targetSize;
+                DrawUpdateAlertGlyph(drawInfo->hDC, iconRect);
             }
         } else {
             DrawTextW(drawInfo->hDC, textBuffer, -1, &textRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);

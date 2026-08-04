@@ -509,6 +509,9 @@ struct AppContext {
     std::atomic<bool> youtubeBusy{false};
     std::atomic<bool> aboutUpdateCheckInProgress{false};
     std::atomic<std::uint64_t> aboutUpdateCheckRequestId{0};
+    // Kept on the UI thread so the About tab can advertise an update even
+    // while its panel has never been opened.
+    bool aboutUpdateAvailable = false;
     bool youtubeOAuthConfigured = false;
     bool youtubeLinked = false;
     bool youtubeUnlinkConfirmPending = false;

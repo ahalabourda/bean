@@ -2974,7 +2974,7 @@ void SetActiveTab(AppContext* ctx, AppContext::MainTab tab)
 
 void ApplyAboutUpdateAvailabilityResult(AppContext* ctx, const UpdateAvailabilityPayload& payload)
 {
-    if (!ctx || !ctx->aboutPanel) {
+    if (!ctx) {
         return;
     }
 
@@ -2983,12 +2983,21 @@ void ApplyAboutUpdateAvailabilityResult(AppContext* ctx, const UpdateAvailabilit
     }
     ctx->aboutUpdateCheckInProgress.store(false);
 
-    HWND updateButton = GetDlgItem(ctx->aboutPanel, IDC_ABOUT_CHECK_UPDATES_BUTTON);
-    if (!updateButton) {
-        return;
+    const bool wasUpdateAvailable = ctx->aboutUpdateAvailable;
+    if (payload.availability == bean::app::UpdateAvailability::UpdateAvailable) {
+        ctx->aboutUpdateAvailable = true;
+    } else if (payload.availability == bean::app::UpdateAvailability::UpToDate) {
+        ctx->aboutUpdateAvailable = false;
+    }
+    if (wasUpdateAvailable != ctx->aboutUpdateAvailable && ctx->aboutTabButton) {
+        InvalidateRect(ctx->aboutTabButton, nullptr, TRUE);
     }
 
-    HWND updateText = GetDlgItem(ctx->aboutPanel, IDC_ABOUT_UPDATE_TEXT);
+    HWND updateButton = ctx->aboutPanel ? GetDlgItem(ctx->aboutPanel, IDC_ABOUT_CHECK_UPDATES_BUTTON) : nullptr;
+    HWND updateText = ctx->aboutPanel ? GetDlgItem(ctx->aboutPanel, IDC_ABOUT_UPDATE_TEXT) : nullptr;
+    if (!updateButton || !updateText) {
+        return;
+    }
     switch (payload.availability) {
     case bean::app::UpdateAvailability::UpdateAvailable:
         UpdateTransparentStaticText(updateText, payload.statusMessage.c_str());
@@ -6107,6 +6116,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int cmdShow)
 
     ShowWindow(hwnd, cmdShow);
     UpdateWindow(hwnd);
+    // Check in the background as soon as the UI is ready so update notices do
+    // not depend on the user opening the About tab.
+    RefreshAboutUpdateButtonState(&context);
     // Taskbar overlay icons are ignored until the window has a taskbar button.
     ApplyTaskbarOverlayState(&context, true);
 
