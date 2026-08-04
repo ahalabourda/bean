@@ -464,6 +464,9 @@ void EnsureThemeResources()
     if (!gTheme.inputBrush) {
         gTheme.inputBrush = CreateSolidBrush(kColorInputBg);
     }
+    if (!gTheme.youtubeInputBrush) {
+        gTheme.youtubeInputBrush = CreateSolidBrush(kColorYouTubeInputBg);
+    }
     if (!gTheme.buttonBrush) {
         gTheme.buttonBrush = CreateSolidBrush(kColorButtonBg);
     }
@@ -514,6 +517,7 @@ void DestroyThemeResources()
     if (gTheme.recordingsFont) { DeleteObject(gTheme.recordingsFont); gTheme.recordingsFont = nullptr; }
     if (gTheme.headingFont) { DeleteObject(gTheme.headingFont); gTheme.headingFont = nullptr; }
     if (gTheme.inputBrush) { DeleteObject(gTheme.inputBrush); gTheme.inputBrush = nullptr; }
+    if (gTheme.youtubeInputBrush) { DeleteObject(gTheme.youtubeInputBrush); gTheme.youtubeInputBrush = nullptr; }
     if (gTheme.buttonBrush) { DeleteObject(gTheme.buttonBrush); gTheme.buttonBrush = nullptr; }
     if (gTheme.panelSolidBrush) { DeleteObject(gTheme.panelSolidBrush); gTheme.panelSolidBrush = nullptr; }
     if (gTheme.panelBorderBrush) { DeleteObject(gTheme.panelBorderBrush); gTheme.panelBorderBrush = nullptr; }
@@ -614,6 +618,7 @@ bool IsStyledButtonId(int controlId)
     case IDC_TAB_CONFIGURATION:
     case IDC_TAB_CHAT_PRIVACY:
     case IDC_TAB_RECORDINGS:
+    case IDC_TAB_YOUTUBE:
     case IDC_TAB_CLIPS:
     case IDC_TAB_KEYBINDS:
     case IDC_TAB_ABOUT:
@@ -627,6 +632,7 @@ bool IsStyledButtonId(int controlId)
     case IDC_RECORDINGS_REFRESH:
     case IDC_RECORDINGS_OPEN_FOLDER:
     case IDC_RECORDINGS_OPEN_DB_FOLDER:
+    case IDC_YOUTUBE_REFRESH:
     case IDC_YOUTUBE_LINK_BUTTON:
     case IDC_YOUTUBE_UNLINK_BUTTON:
     case IDC_YOUTUBE_UNLINK_YES_BUTTON:
@@ -675,6 +681,7 @@ bool IsOwnerDrawStaticId(int controlId)
     return IsStatusLightId(controlId)
         || controlId == IDC_LENGTH_VALUE
         || controlId == IDC_YOUTUBE_LINK_STATUS
+        || controlId == IDC_YOUTUBE_UPLOAD_STATUS
         || controlId == IDC_CONFIGURATION_TOOLTIP
         || controlId == IDC_PRESET_HELP
         || controlId == IDC_POST_RUN_DELAY_HELP
@@ -689,7 +696,7 @@ void ConfigureStyledButtons(AppContext* ctx)
     if (!ctx) {
         return;
     }
-    const std::array<int, 7> mainButtons = {IDC_TAB_STATUS, IDC_TAB_CONFIGURATION, IDC_TAB_CHAT_PRIVACY, IDC_TAB_RECORDINGS, IDC_TAB_CLIPS, IDC_TAB_KEYBINDS, IDC_TAB_ABOUT};
+    const std::array<int, 8> mainButtons = {IDC_TAB_STATUS, IDC_TAB_CONFIGURATION, IDC_TAB_CHAT_PRIVACY, IDC_TAB_RECORDINGS, IDC_TAB_YOUTUBE, IDC_TAB_CLIPS, IDC_TAB_KEYBINDS, IDC_TAB_ABOUT};
     for (const int id : mainButtons) {
         EnableOwnerDrawButton(ctx->mainWindow, id);
     }
@@ -706,11 +713,17 @@ void ConfigureStyledButtons(AppContext* ctx)
     for (const int id : chatPrivacyButtons) {
         EnableOwnerDrawButton(ctx->chatPrivacyPanel, id);
     }
-    const std::array<int, 9> recordingsButtons = {
-        IDC_RECORDINGS_REFRESH, IDC_RECORDINGS_OPEN_FOLDER, IDC_RECORDINGS_OPEN_DB_FOLDER, IDC_YOUTUBE_LINK_BUTTON, IDC_YOUTUBE_UNLINK_BUTTON,
-        IDC_YOUTUBE_UNLINK_YES_BUTTON, IDC_YOUTUBE_UNLINK_NO_BUTTON, IDC_YOUTUBE_ACCOUNT_LINK, IDC_YOUTUBE_UPLOAD_BUTTON};
+    const std::array<int, 3> recordingsButtons = {
+        IDC_RECORDINGS_REFRESH, IDC_RECORDINGS_OPEN_FOLDER, IDC_RECORDINGS_OPEN_DB_FOLDER};
     for (const int id : recordingsButtons) {
         EnableOwnerDrawButton(ctx->recordingsPanel, id);
+    }
+    const std::array<int, 7> youtubeButtons = {
+        IDC_YOUTUBE_REFRESH, IDC_YOUTUBE_LINK_BUTTON, IDC_YOUTUBE_UNLINK_BUTTON,
+        IDC_YOUTUBE_UNLINK_YES_BUTTON, IDC_YOUTUBE_UNLINK_NO_BUTTON, IDC_YOUTUBE_ACCOUNT_LINK,
+        IDC_YOUTUBE_UPLOAD_BUTTON};
+    for (const int id : youtubeButtons) {
+        EnableOwnerDrawButton(ctx->youtubePanel, id);
     }
     const std::array<int, 7> clipsButtons = {
         IDC_CLIPS_REFRESH, IDC_CLIPS_PLAY_PAUSE, IDC_CLIPS_SET_START, IDC_CLIPS_SET_END,
@@ -742,7 +755,7 @@ void DrawStyledButton(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
     const bool isPressed = (drawInfo->itemState & ODS_SELECTED) != 0;
     const bool isHovered = !isDisabled && (drawInfo->hwndItem == gHoveredStyledButton);
     const bool isTab = drawInfo->CtlID == IDC_TAB_STATUS || drawInfo->CtlID == IDC_TAB_CONFIGURATION || drawInfo->CtlID == IDC_TAB_CHAT_PRIVACY
-        || drawInfo->CtlID == IDC_TAB_RECORDINGS || drawInfo->CtlID == IDC_TAB_CLIPS || drawInfo->CtlID == IDC_TAB_KEYBINDS || drawInfo->CtlID == IDC_TAB_ABOUT;
+        || drawInfo->CtlID == IDC_TAB_RECORDINGS || drawInfo->CtlID == IDC_TAB_YOUTUBE || drawInfo->CtlID == IDC_TAB_CLIPS || drawInfo->CtlID == IDC_TAB_KEYBINDS || drawInfo->CtlID == IDC_TAB_ABOUT;
     const bool isLinkDisplay = drawInfo->CtlID == IDC_YOUTUBE_ACCOUNT_LINK;
     const bool isStatusTab = drawInfo->CtlID == IDC_TAB_STATUS;
     const bool isConfigurationTab = drawInfo->CtlID == IDC_TAB_CONFIGURATION;
@@ -754,6 +767,7 @@ void DrawStyledButton(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
             || (drawInfo->CtlID == IDC_TAB_CONFIGURATION && ctx->activeTab == AppContext::MainTab::Configuration)
             || (drawInfo->CtlID == IDC_TAB_CHAT_PRIVACY && ctx->activeTab == AppContext::MainTab::ChatPrivacy)
             || (drawInfo->CtlID == IDC_TAB_RECORDINGS && ctx->activeTab == AppContext::MainTab::Recordings)
+            || (drawInfo->CtlID == IDC_TAB_YOUTUBE && ctx->activeTab == AppContext::MainTab::YouTube)
             || (drawInfo->CtlID == IDC_TAB_CLIPS && ctx->activeTab == AppContext::MainTab::Clips)
             || (drawInfo->CtlID == IDC_TAB_KEYBINDS && ctx->activeTab == AppContext::MainTab::Keybinds)
             || (drawInfo->CtlID == IDC_TAB_ABOUT && ctx->activeTab == AppContext::MainTab::About));
@@ -1118,6 +1132,9 @@ LRESULT CALLBACK RecordingsHeaderSubclassProc(HWND hwnd, UINT message, WPARAM wP
         if (ctx && ctx->recordingsListHeader == hwnd) {
             ctx->recordingsListHeader = nullptr;
         }
+        if (ctx && ctx->youtubeMediaListHeader == hwnd) {
+            ctx->youtubeMediaListHeader = nullptr;
+        }
         RemoveWindowSubclass(hwnd, RecordingsHeaderSubclassProc, 2);
         break;
     default:
@@ -1145,4 +1162,64 @@ void DrawYouTubeLinkStatus(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx
     glyphBounds.right = centerX + half;
     glyphBounds.bottom = centerY + half;
     DrawCheckOrXGlyph(drawInfo->hDC, glyphBounds, ctx->youtubeLinked);
+}
+
+void DrawYouTubeUploadStatus(const DRAWITEMSTRUCT* drawInfo, AppContext* ctx)
+{
+    if (!drawInfo || !ctx) {
+        return;
+    }
+    RECT rc = drawInfo->rcItem;
+    if (gTheme.panelSolidBrush) {
+        FillRect(drawInfo->hDC, &rc, gTheme.panelSolidBrush);
+    }
+
+    const int textLength = GetWindowTextLengthW(drawInfo->hwndItem);
+    std::wstring statusText(static_cast<size_t>((std::max)(0, textLength)), L'\0');
+    if (textLength > 0) {
+        GetWindowTextW(drawInfo->hwndItem, statusText.data(), textLength + 1);
+    }
+    HFONT normalFont = gTheme.uiFont;
+    const HGDIOBJ oldFont = normalFont ? SelectObject(drawInfo->hDC, normalFont) : nullptr;
+    SetBkMode(drawInfo->hDC, TRANSPARENT);
+    SetTextColor(drawInfo->hDC, kColorTextPrimary);
+    RECT statusRect = rc;
+    DrawTextW(drawInfo->hDC, statusText.c_str(), -1, &statusRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+    ctx->youtubeUploadLinkBounds = {};
+    if (!ctx->youtubeLastVideoUrl.empty()) {
+        SIZE statusSize{};
+        SIZE linkSize{};
+        GetTextExtentPoint32W(drawInfo->hDC, statusText.c_str(), static_cast<int>(statusText.size()), &statusSize);
+        GetTextExtentPoint32W(drawInfo->hDC, L" ", 1, &linkSize);
+        const int linkX = rc.left + statusSize.cx + linkSize.cx;
+        RECT linkRect{linkX, rc.top, rc.right, rc.bottom};
+        LOGFONTW logFont{};
+        HFONT linkFont = nullptr;
+        if (gTheme.uiFont && GetObjectW(gTheme.uiFont, sizeof(logFont), &logFont) == sizeof(logFont)) {
+            logFont.lfUnderline = TRUE;
+            linkFont = CreateFontIndirectW(&logFont);
+        }
+        if (linkFont) {
+            SelectObject(drawInfo->hDC, linkFont);
+        }
+        SetTextColor(drawInfo->hDC, RGB(111, 183, 255));
+        SIZE linkTextSize{};
+        GetTextExtentPoint32W(drawInfo->hDC, L"View.", 5, &linkTextSize);
+        DrawTextW(drawInfo->hDC, L"View.", -1, &linkRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        RECT clientRect{};
+        GetClientRect(drawInfo->hwndItem, &clientRect);
+        ctx->youtubeUploadLinkBounds = {
+            linkX - rc.left,
+            clientRect.top,
+            linkX - rc.left + linkTextSize.cx,
+            clientRect.bottom};
+        if (linkFont) {
+            SelectObject(drawInfo->hDC, normalFont ? normalFont : oldFont);
+            DeleteObject(linkFont);
+        }
+    }
+    if (oldFont) {
+        SelectObject(drawInfo->hDC, oldFont);
+    }
 }

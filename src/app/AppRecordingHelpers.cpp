@@ -57,6 +57,55 @@ std::vector<std::filesystem::path> EnumerateRecordingMediaFiles(const std::files
     return files;
 }
 
+std::vector<YouTubeMediaFile> EnumerateYouTubeMediaFiles(const std::filesystem::path& recordingsFolder)
+{
+    std::vector<YouTubeMediaFile> files;
+    if (recordingsFolder.empty()) {
+        return files;
+    }
+
+    const auto appendFiles = [&files](const std::filesystem::path& folder, YouTubeMediaType type) {
+        std::error_code ec;
+        for (const auto& entry : std::filesystem::directory_iterator(folder, ec)) {
+            if (ec) {
+                break;
+            }
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+            const auto ext = entry.path().extension().wstring();
+            if (_wcsicmp(ext.c_str(), L".mp4") != 0 && _wcsicmp(ext.c_str(), L".mkv") != 0) {
+                continue;
+            }
+
+            YouTubeMediaFile file;
+            file.path = entry.path();
+            file.type = type;
+            std::error_code timeEc;
+            file.modified = std::filesystem::last_write_time(file.path, timeEc);
+            if (timeEc) {
+                file.modified = std::filesystem::file_time_type{};
+            }
+            std::error_code sizeEc;
+            file.size = std::filesystem::file_size(file.path, sizeEc);
+            if (sizeEc) {
+                file.size = 0;
+            }
+            files.push_back(std::move(file));
+        }
+    };
+
+    appendFiles(recordingsFolder, YouTubeMediaType::Recording);
+    appendFiles(recordingsFolder / "Clips", YouTubeMediaType::Clip);
+    std::sort(files.begin(), files.end(), [](const YouTubeMediaFile& a, const YouTubeMediaFile& b) {
+        if (a.modified != b.modified) {
+            return a.modified > b.modified;
+        }
+        return a.path.filename().wstring() < b.path.filename().wstring();
+    });
+    return files;
+}
+
 std::wstring FormatElapsed(std::chrono::seconds elapsed)
 {
     const auto total = elapsed.count();

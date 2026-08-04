@@ -29,4 +29,5 @@ void ConfigureConfigurationTooltips(AppContext* ctx);
 void DrawRecordingsGridLines(const NMLVCUSTOMDRAW* customDraw, const AppContext* ctx);
 LRESULT CALLBACK RecordingsHeaderSubclassProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR refData);
 void DrawYouTubeLinkStatus(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx);
+void DrawYouTubeUploadStatus(const DRAWITEMSTRUCT* drawInfo, AppContext* ctx);
 LRESULT CALLBACK HoverTooltipSubclassProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR subclassId, DWORD_PTR refData);

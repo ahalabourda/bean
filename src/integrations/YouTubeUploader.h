@@ -19,6 +19,7 @@ enum class YouTubePrivacy {
 struct YouTubeCredentials {
     std::string clientId;
     std::string refreshToken;
+    std::string authServerUrl;
 };
 
 struct YouTubeAuthResult {

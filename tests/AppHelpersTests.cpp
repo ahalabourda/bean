@@ -120,6 +120,35 @@ void TestEnumerateRecordingMediaFiles()
     }
 }
 
+void TestEnumerateYouTubeMediaFiles()
+{
+    const auto dir = MakeTempDir("youtube-media-enumerate");
+    const auto clipsDir = dir / "Clips";
+    std::error_code ec;
+    std::filesystem::create_directories(clipsDir, ec);
+    {
+        std::ofstream((dir / "recording.mkv").string()) << "recording";
+        std::ofstream((clipsDir / "clip.mp4").string()) << "clip";
+        std::ofstream((clipsDir / "ignore.txt").string()) << "ignore";
+    }
+
+    const auto files = EnumerateYouTubeMediaFiles(dir);
+    Expect(files.size() == 2, "YouTube media should include recordings and clips only.");
+    bool foundRecording = false;
+    bool foundClip = false;
+    for (const auto& file : files) {
+        if (file.path.filename() == "recording.mkv") {
+            foundRecording = file.type == YouTubeMediaType::Recording;
+        }
+        if (file.path.filename() == "clip.mp4") {
+            foundClip = file.type == YouTubeMediaType::Clip;
+        }
+    }
+    Expect(foundRecording, "Root media should be classified as a recording.");
+    Expect(foundClip, "Clips-folder media should be classified as a clip.");
+    Expect(EnumerateYouTubeMediaFiles({}).empty(), "Empty YouTube media folder should yield no files.");
+}
+
 } // namespace
 
 int main()
@@ -131,6 +160,7 @@ int main()
     TestIsLikelyInvalidParticipantName();
     TestClassColorForParticipant();
     TestEnumerateRecordingMediaFiles();
+    TestEnumerateYouTubeMediaFiles();
 
     if (gFailures == 0) {
         std::cout << "All app helper tests passed.\n";

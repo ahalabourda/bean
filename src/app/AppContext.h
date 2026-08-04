@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/ClipPreviewEngine.h"
+#include "app/AppRecordingHelpers.h"
 #include "core/RecordingOrchestrator.h"
 #include "core/RunRepository.h"
 #include "core/SettingsStore.h"
@@ -73,6 +74,7 @@ inline constexpr COLORREF kColorPanelBorder = RGB(72, 86, 122);
 inline constexpr COLORREF kColorTextPrimary = RGB(228, 234, 246);
 inline constexpr COLORREF kColorTextMuted = RGB(165, 176, 203);
 inline constexpr COLORREF kColorInputBg = RGB(17, 21, 33);
+inline constexpr COLORREF kColorYouTubeInputBg = RGB(31, 39, 59);
 inline constexpr COLORREF kColorInputBorder = RGB(66, 79, 113);
 inline constexpr COLORREF kColorButtonBg = RGB(48, 59, 86);
 inline constexpr COLORREF kColorButtonText = RGB(235, 241, 255);
@@ -99,6 +101,7 @@ struct VisualTheme {
     HFONT recordingsFont = nullptr;
     HFONT headingFont = nullptr;
     HBRUSH inputBrush = nullptr;
+    HBRUSH youtubeInputBrush = nullptr;
     HBRUSH buttonBrush = nullptr;
     HBRUSH panelSolidBrush = nullptr;
     HBRUSH panelBorderBrush = nullptr;
@@ -228,6 +231,7 @@ enum ControlId {
     IDC_TAB_CONFIGURATION,
     IDC_TAB_CHAT_PRIVACY,
     IDC_TAB_RECORDINGS,
+    IDC_TAB_YOUTUBE,
     IDC_TAB_CLIPS,
     IDC_TAB_KEYBINDS,
     IDC_TAB_ABOUT,
@@ -255,8 +259,11 @@ enum ControlId {
     IDC_RECORDINGS_OPEN_DB_FOLDER,
     IDC_RECORDINGS_INFO_LABEL,
     IDC_RECORDINGS_INFO_TEXT,
-    IDC_RECORDINGS_UPLOAD_PROGRESS,
-    IDC_RECORDINGS_UPLOAD_STATUS,
+    IDC_YOUTUBE_LABEL,
+    IDC_YOUTUBE_MEDIA_LIST,
+    IDC_YOUTUBE_REFRESH,
+    IDC_YOUTUBE_UPLOAD_PROGRESS,
+    IDC_YOUTUBE_UPLOAD_STATUS,
     IDC_YOUTUBE_LINK_BUTTON,
     IDC_YOUTUBE_UNLINK_BUTTON,
     IDC_YOUTUBE_UNLINK_CONFIRM_LABEL,
@@ -361,6 +368,7 @@ struct AppContext {
     HWND statusTabButton = nullptr;
     HWND configurationTabButton = nullptr;
     HWND recordingsTabButton = nullptr;
+    HWND youtubeTabButton = nullptr;
     HWND chatPrivacyTabButton = nullptr;
     HWND aboutTabButton = nullptr;
     HWND clipsTabButton = nullptr;
@@ -368,6 +376,7 @@ struct AppContext {
     HWND statusPanel = nullptr;
     HWND recorderPanel = nullptr;
     HWND recordingsPanel = nullptr;
+    HWND youtubePanel = nullptr;
     HWND chatPrivacyPanel = nullptr;
     HWND aboutPanel = nullptr;
     HWND clipsPanel = nullptr;
@@ -400,8 +409,11 @@ struct AppContext {
     HWND recordingsInfoLabel = nullptr;
     HWND recordingsLabel = nullptr;
     HWND recordingsInfoText = nullptr;
-    HWND recordingsUploadProgress = nullptr;
-    HWND recordingsUploadStatus = nullptr;
+    HWND youtubeLabel = nullptr;
+    HWND youtubeMediaList = nullptr;
+    HWND youtubeMediaListHeader = nullptr;
+    HWND youtubeUploadProgress = nullptr;
+    HWND youtubeUploadStatus = nullptr;
     HWND youtubeLinkButton = nullptr;
     HWND youtubeUnlinkButton = nullptr;
     HWND youtubeUnlinkConfirmLabel = nullptr;
@@ -495,6 +507,7 @@ struct AppContext {
         std::vector<ParticipantUi> participants;
     };
     std::vector<RecordingItem> recordingItems;
+    std::vector<YouTubeMediaFile> youtubeMediaItems;
     std::vector<COLORREF> visibleParticipantRowColors;
     HIMAGELIST participantSpecIcons = nullptr;
     std::unordered_map<std::string, int> participantSpecIconIndexByKey;
@@ -515,6 +528,8 @@ struct AppContext {
     bool youtubeOAuthConfigured = false;
     bool youtubeLinked = false;
     bool youtubeUnlinkConfirmPending = false;
+    std::wstring youtubeLastVideoUrl;
+    RECT youtubeUploadLinkBounds{};
     bool clipsLoaded = false;
     bool clipsIsPlaying = false;
     bool clipsTimelineScrubbing = false;
@@ -547,6 +562,7 @@ struct AppContext {
         Configuration,
         ChatPrivacy,
         Recordings,
+        YouTube,
         Clips,
         Keybinds,
         About

@@ -175,8 +175,7 @@ void LayoutRecordingsPanel(AppContext* ctx, int panelWidth, int panelHeight)
     const int left = 20;
     const int right = panelWidth - 20;
     const int listTop = 90;
-    const int lowerAreaTop = panelHeight - 140;
-    const int listHeight = (std::max)(140, lowerAreaTop - listTop);
+    const int listHeight = (std::max)(180, panelHeight - listTop - 20);
 
     const int participantsGap = 12;
     const int participantsWidth = (std::max)(170, (std::min)(240, panelWidth / 4));
@@ -205,35 +204,69 @@ void LayoutRecordingsPanel(AppContext* ctx, int panelWidth, int panelHeight)
         ListView_SetColumnWidth(ctx->recordingsInfoText, 0, (std::max)(80, participantsWidth - 8));
     }
 
-    const int accountTop = listTop + listHeight + 12;
-    const int rightColumnWidth = (std::max)(220, (std::min)(320, (right - left) / 3));
-    const int rightColumnX = right - rightColumnWidth;
-    const int leftColumnWidth = (std::max)(240, rightColumnX - left - 12);
+}
+
+void LayoutYouTubePanel(AppContext* ctx, int panelWidth, int panelHeight)
+{
+    if (!ctx || !ctx->youtubePanel) {
+        return;
+    }
+
+    const int rowHeight = 24;
+    const int left = 20;
+    const int right = panelWidth - 20;
+    const int listTop = 96;
+    const int accountTop = 20;
+    const int accountRightWidth = (std::max)(250, (std::min)(340, (right - left) / 3));
+    const int accountRightX = right - accountRightWidth;
+    const int accountLeftWidth = (std::max)(240, accountRightX - left - 12);
     const int statusIconWidth = 24;
-    const int actionX = rightColumnX + statusIconWidth + 8;
-    const int actionWidth = (std::max)(120, rightColumnWidth - statusIconWidth - 8);
+    const int actionX = accountRightX + statusIconWidth + 8;
+    const int actionWidth = (std::max)(120, accountRightWidth - statusIconWidth - 8);
     const int confirmLabelWidth = (std::max)(80, (std::min)(110, actionWidth / 2));
     const int confirmButtonWidth = (std::max)(44, (actionWidth - confirmLabelWidth - 8) / 2);
     constexpr int accountLabelWidth = 154;
     const int accountFieldX = left + accountLabelWidth + 10;
-    const int accountFieldWidth = leftColumnWidth - accountLabelWidth - 10;
-    MoveControl(ctx->recordingsPanel, IDC_YOUTUBE_ACCOUNT_LABEL, left, accountTop, accountLabelWidth, rowHeight);
-    MoveControl(ctx->recordingsPanel, IDC_YOUTUBE_ACCOUNT_LINK, accountFieldX, accountTop - 2, accountFieldWidth, rowHeight + 8);
-    MoveControl(ctx->recordingsPanel, IDC_YOUTUBE_LINK_STATUS, rightColumnX, accountTop, statusIconWidth, rowHeight);
-    MoveControl(ctx->recordingsPanel, IDC_YOUTUBE_LINK_BUTTON, actionX, accountTop - 2, actionWidth, rowHeight + 4);
-    MoveControl(ctx->recordingsPanel, IDC_YOUTUBE_UNLINK_BUTTON, actionX, accountTop - 2, actionWidth, rowHeight + 4);
-    MoveControl(ctx->recordingsPanel, IDC_YOUTUBE_UNLINK_CONFIRM_LABEL, actionX, accountTop, confirmLabelWidth, rowHeight);
-    MoveControl(ctx->recordingsPanel, IDC_YOUTUBE_UNLINK_YES_BUTTON, actionX + confirmLabelWidth + 8, accountTop - 2, confirmButtonWidth, rowHeight + 4);
-    MoveControl(ctx->recordingsPanel, IDC_YOUTUBE_UNLINK_NO_BUTTON, actionX + confirmLabelWidth + 8 + confirmButtonWidth + 6, accountTop - 2, confirmButtonWidth, rowHeight + 4);
+    const int accountFieldWidth = accountLeftWidth - accountLabelWidth - 10;
 
-    const int uploadControlsTop = accountTop + 36;
-    MoveControl(ctx->recordingsPanel, IDC_YOUTUBE_TITLE_LABEL, left, uploadControlsTop, 120, rowHeight);
-    MoveControl(ctx->recordingsPanel, IDC_YOUTUBE_TITLE_EDIT, left + 130, uploadControlsTop, leftColumnWidth - 130, rowHeight);
-    MoveControl(ctx->recordingsPanel, IDC_YOUTUBE_PRIVACY_LABEL, rightColumnX, uploadControlsTop, 70, rowHeight);
-    MoveControl(ctx->recordingsPanel, IDC_YOUTUBE_PRIVACY_COMBO, rightColumnX + 74, uploadControlsTop, rightColumnWidth - 74, 140);
-    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_UPLOAD_PROGRESS, left, uploadControlsTop + 34, leftColumnWidth, 20);
-    MoveControl(ctx->recordingsPanel, IDC_YOUTUBE_UPLOAD_BUTTON, rightColumnX, uploadControlsTop + 32, rightColumnWidth, rowHeight + 4);
-    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_UPLOAD_STATUS, left, uploadControlsTop + 58, right - left, rowHeight);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_ACCOUNT_LABEL, left, accountTop, accountLabelWidth, rowHeight);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_ACCOUNT_LINK, accountFieldX, accountTop - 2, accountFieldWidth, rowHeight + 8);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_LINK_STATUS, accountRightX, accountTop, statusIconWidth, rowHeight);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_LINK_BUTTON, actionX, accountTop - 2, actionWidth, rowHeight + 4);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_UNLINK_BUTTON, actionX, accountTop - 2, actionWidth, rowHeight + 4);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_UNLINK_CONFIRM_LABEL, actionX, accountTop, confirmLabelWidth, rowHeight);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_UNLINK_YES_BUTTON, actionX + confirmLabelWidth + 8, accountTop - 2, confirmButtonWidth, rowHeight + 4);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_UNLINK_NO_BUTTON, actionX + confirmLabelWidth + 8 + confirmButtonWidth + 6, accountTop - 2, confirmButtonWidth, rowHeight + 4);
+
+    constexpr int refreshWidth = 96;
+    constexpr int refreshGap = 10;
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_LABEL, left, 58, right - left - refreshWidth - refreshGap, rowHeight);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_REFRESH, right - refreshWidth, 57, refreshWidth, rowHeight + 4);
+    const int preferredListHeight = (std::max)(140, panelHeight - listTop - 114);
+    const int maxListHeight = (std::max)(0, panelHeight - listTop - 114);
+    const int listHeight = (std::min)(preferredListHeight, maxListHeight);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_MEDIA_LIST, left, listTop, right - left, listHeight);
+    if (ctx->youtubeMediaList) {
+        const int typeWidth = (std::max)(86, (right - left) * 12 / 100);
+        const int dateWidth = (std::max)(130, (right - left) * 23 / 100);
+        const int reservedRightPadding = GetSystemMetrics(SM_CXVSCROLL) + 12;
+        const int nameWidth = (std::max)(220, right - left - typeWidth - dateWidth - reservedRightPadding);
+        ListView_SetColumnWidth(ctx->youtubeMediaList, 0, typeWidth);
+        ListView_SetColumnWidth(ctx->youtubeMediaList, 1, nameWidth);
+        ListView_SetColumnWidth(ctx->youtubeMediaList, 2, dateWidth);
+    }
+
+    const int controlsTop = listTop + listHeight + 12;
+    const int rightColumnWidth = (std::max)(220, (std::min)(320, (right - left) / 3));
+    const int rightColumnX = right - rightColumnWidth;
+    const int leftColumnWidth = (std::max)(240, rightColumnX - left - 12);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_TITLE_LABEL, left, controlsTop, 45, rowHeight);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_TITLE_EDIT, left + 50, controlsTop, leftColumnWidth - 50, rowHeight);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_PRIVACY_LABEL, rightColumnX, controlsTop, 70, rowHeight);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_PRIVACY_COMBO, rightColumnX + 74, controlsTop, rightColumnWidth - 74, rowHeight);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_UPLOAD_PROGRESS, left, controlsTop + 46, leftColumnWidth, 20);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_UPLOAD_BUTTON, rightColumnX, controlsTop + 44, rightColumnWidth, rowHeight + 4);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_UPLOAD_STATUS, left, controlsTop + 70, leftColumnWidth, rowHeight);
 }
 
 void LayoutChatPrivacyPanel(AppContext* ctx, int panelWidth, int panelHeight)
@@ -379,7 +412,7 @@ void LayoutKeybindsPanel(AppContext* ctx, int panelWidth, int panelHeight)
 
 void LayoutMainUi(AppContext* ctx, int clientWidth, int clientHeight)
 {
-    if (!ctx || !ctx->statusPanel || !ctx->recorderPanel || !ctx->chatPrivacyPanel || !ctx->recordingsPanel || !ctx->clipsPanel || !ctx->keybindsPanel || !ctx->aboutPanel) {
+    if (!ctx || !ctx->statusPanel || !ctx->recorderPanel || !ctx->chatPrivacyPanel || !ctx->recordingsPanel || !ctx->youtubePanel || !ctx->clipsPanel || !ctx->keybindsPanel || !ctx->aboutPanel) {
         return;
     }
 
@@ -397,13 +430,15 @@ void LayoutMainUi(AppContext* ctx, int clientWidth, int clientHeight)
     MoveWindow(ctx->chatPrivacyTabButton, outer, navY + 80, navWidth, navHeight, TRUE);
     MoveWindow(ctx->recordingsTabButton, outer, navY + 120, navWidth, navHeight, TRUE);
     MoveWindow(ctx->clipsTabButton, outer, navY + 160, navWidth, navHeight, TRUE);
-    MoveWindow(ctx->keybindsTabButton, outer, navY + 200, navWidth, navHeight, TRUE);
-    MoveWindow(ctx->aboutTabButton, outer, navY + 240, navWidth, navHeight, TRUE);
+    MoveWindow(ctx->youtubeTabButton, outer, navY + 200, navWidth, navHeight, TRUE);
+    MoveWindow(ctx->keybindsTabButton, outer, navY + 240, navWidth, navHeight, TRUE);
+    MoveWindow(ctx->aboutTabButton, outer, navY + 280, navWidth, navHeight, TRUE);
 
     MoveWindow(ctx->statusPanel, panelX, panelY, panelWidth, panelHeight, TRUE);
     MoveWindow(ctx->recorderPanel, panelX, panelY, panelWidth, panelHeight, TRUE);
     MoveWindow(ctx->chatPrivacyPanel, panelX, panelY, panelWidth, panelHeight, TRUE);
     MoveWindow(ctx->recordingsPanel, panelX, panelY, panelWidth, panelHeight, TRUE);
+    MoveWindow(ctx->youtubePanel, panelX, panelY, panelWidth, panelHeight, TRUE);
     MoveWindow(ctx->clipsPanel, panelX, panelY, panelWidth, panelHeight, TRUE);
     MoveWindow(ctx->keybindsPanel, panelX, panelY, panelWidth, panelHeight, TRUE);
     MoveWindow(ctx->aboutPanel, panelX, panelY, panelWidth, panelHeight, TRUE);
@@ -412,6 +447,7 @@ void LayoutMainUi(AppContext* ctx, int clientWidth, int clientHeight)
     LayoutConfigurationPanel(ctx, panelWidth, panelHeight);
     LayoutChatPrivacyPanel(ctx, panelWidth, panelHeight);
     LayoutRecordingsPanel(ctx, panelWidth, panelHeight);
+    LayoutYouTubePanel(ctx, panelWidth, panelHeight);
     LayoutClipsPanel(ctx, panelWidth, panelHeight);
     LayoutKeybindsPanel(ctx, panelWidth, panelHeight);
     LayoutAboutPanel(ctx, panelWidth, panelHeight);

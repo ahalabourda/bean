@@ -27,7 +27,6 @@
 namespace bean::integrations {
 namespace {
 
-constexpr const char* kTokenEndpoint = "https://oauth2.googleapis.com/token";
 constexpr const char* kUploadInitEndpoint = "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status";
 constexpr const char* kChannelIdentityEndpoint = "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true";
 constexpr DWORD kDefaultHttpTimeoutMs = 30000;
@@ -525,19 +524,19 @@ std::string BuildTokenRequestBody(const std::map<std::string, std::string>& valu
 std::optional<std::string> ExchangeRefreshTokenForAccessToken(const YouTubeCredentials& credentials, std::string& error)
 {
     error.clear();
-    if (credentials.clientId.empty() || credentials.refreshToken.empty()) {
-        error = "Missing YouTube client ID or refresh token.";
+    if (credentials.clientId.empty() || credentials.refreshToken.empty() || credentials.authServerUrl.empty()) {
+        error = "Missing YouTube client ID, refresh token, or auth server URL.";
         return std::nullopt;
     }
 
+    const std::string tokenBrokerUrl = NormalizeBaseUrl(credentials.authServerUrl) + "/token";
     std::map<std::string, std::string> form;
     form["client_id"] = credentials.clientId;
     form["refresh_token"] = credentials.refreshToken;
-    form["grant_type"] = "refresh_token";
 
     const auto response = SendRequest(
         L"POST",
-        kTokenEndpoint,
+        tokenBrokerUrl,
         {L"Content-Type: application/x-www-form-urlencoded"},
         BuildTokenRequestBody(form));
     if (!response.error.empty()) {
@@ -552,7 +551,7 @@ std::optional<std::string> ExchangeRefreshTokenForAccessToken(const YouTubeCrede
         if (details.empty()) {
             details = "HTTP " + std::to_string(response.statusCode);
         }
-        error = "Failed to refresh YouTube access token: " + details;
+        error = "Failed to refresh YouTube access token through auth server: " + details;
         return std::nullopt;
     }
 

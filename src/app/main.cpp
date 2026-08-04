@@ -2371,6 +2371,7 @@ struct YouTubeAuthCompletionPayload {
 struct YouTubeUploadProgressPayload {
     int percent = 0;
     std::wstring text;
+    std::wstring videoUrl;
 };
 
 struct YouTubeIdentityResolvedPayload {
@@ -2386,7 +2387,11 @@ struct UpdateAvailabilityPayload {
     std::wstring statusMessage;
 };
 
-void PostYouTubeUploadProgress(AppContext* ctx, int percent, const std::wstring& text)
+void PostYouTubeUploadProgress(
+    AppContext* ctx,
+    int percent,
+    const std::wstring& text,
+    const std::wstring& videoUrl = {})
 {
     if (!ctx || !ctx->mainWindow) {
         return;
@@ -2394,7 +2399,45 @@ void PostYouTubeUploadProgress(AppContext* ctx, int percent, const std::wstring&
     auto* payload = new YouTubeUploadProgressPayload();
     payload->percent = std::clamp(percent, 0, 100);
     payload->text = text;
+    payload->videoUrl = videoUrl;
     PostMessageW(ctx->mainWindow, WM_BEAN_YOUTUBE_UPLOAD_PROGRESS, 0, reinterpret_cast<LPARAM>(payload));
+}
+
+LRESULT CALLBACK YouTubeUploadStatusSubclassProc(
+    HWND hwnd,
+    UINT message,
+    WPARAM wParam,
+    LPARAM lParam,
+    UINT_PTR,
+    DWORD_PTR refData)
+{
+    auto* ctx = reinterpret_cast<AppContext*>(refData);
+    if (message == WM_SETCURSOR && ctx && !ctx->youtubeLastVideoUrl.empty()) {
+        POINT point{};
+        GetCursorPos(&point);
+        ScreenToClient(hwnd, &point);
+        if (PtInRect(&ctx->youtubeUploadLinkBounds, point)) {
+            SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32649)));
+            return TRUE;
+        }
+    }
+    if (message == WM_LBUTTONUP && ctx && !ctx->youtubeLastVideoUrl.empty()) {
+        const POINT point{
+            static_cast<short>(LOWORD(lParam)),
+            static_cast<short>(HIWORD(lParam))};
+        if (PtInRect(&ctx->youtubeUploadLinkBounds, point)) {
+            const auto result = reinterpret_cast<intptr_t>(
+                ShellExecuteW(hwnd, L"open", ctx->youtubeLastVideoUrl.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+            if (result <= 32) {
+                SetStatus(ctx, L"Failed to open the uploaded YouTube video.");
+            }
+            return 0;
+        }
+    }
+    if (message == WM_NCDESTROY) {
+        RemoveWindowSubclass(hwnd, YouTubeUploadStatusSubclassProc, 4);
+    }
+    return DefSubclassProc(hwnd, message, wParam, lParam);
 }
 
 void RequestYouTubeUiRefresh(AppContext* ctx)
@@ -2413,6 +2456,7 @@ void ResolveLinkedYouTubeIdentityAsync(AppContext* ctx, bool postErrorToStatus)
     bean::integrations::YouTubeCredentials creds;
     creds.clientId = ctx->settings.youtubeClientId;
     creds.refreshToken = ctx->settings.youtubeRefreshToken;
+    creds.authServerUrl = GetYouTubeAuthServerUrl();
     LaunchAppWorker(ctx, [ctx, creds, postErrorToStatus]() {
         const auto identity = bean::integrations::YouTubeUploader::GetLinkedChannelIdentity(creds);
         auto* payload = new YouTubeIdentityResolvedPayload();
@@ -2424,25 +2468,25 @@ void ResolveLinkedYouTubeIdentityAsync(AppContext* ctx, bool postErrorToStatus)
     });
 }
 
-void SetRecordingsUploadUi(AppContext* ctx, int percent, const std::wstring& text)
+void SetYouTubeUploadUi(AppContext* ctx, int percent, const std::wstring& text)
 {
     if (!ctx) {
         return;
     }
-    if (ctx->recordingsUploadProgress) {
-        SendMessageW(ctx->recordingsUploadProgress, PBM_SETPOS, static_cast<WPARAM>(std::clamp(percent, 0, 100)), 0);
+    if (ctx->youtubeUploadProgress) {
+        SendMessageW(ctx->youtubeUploadProgress, PBM_SETPOS, static_cast<WPARAM>(std::clamp(percent, 0, 100)), 0);
     }
-    if (ctx->recordingsUploadStatus) {
-        UpdateTransparentStaticText(ctx->recordingsUploadStatus, text.c_str());
+    if (ctx->youtubeUploadStatus) {
+        UpdateTransparentStaticText(ctx->youtubeUploadStatus, text.c_str());
     }
 }
 
-int GetSelectedRecordingIndex(AppContext* ctx)
+int GetSelectedYouTubeMediaIndex(AppContext* ctx)
 {
-    if (!ctx || !ctx->recordingsList) {
+    if (!ctx || !ctx->youtubeMediaList) {
         return -1;
     }
-    return ListView_GetNextItem(ctx->recordingsList, -1, LVNI_SELECTED);
+    return ListView_GetNextItem(ctx->youtubeMediaList, -1, LVNI_SELECTED);
 }
 
 std::wstring DefaultYouTubeTitle(const std::filesystem::path& path)
@@ -2453,6 +2497,97 @@ std::wstring DefaultYouTubeTitle(const std::filesystem::path& path)
     }
     std::replace(title.begin(), title.end(), L'_', L' ');
     return title;
+}
+
+void RepopulateYouTubeMediaList(AppContext* ctx)
+{
+    if (!ctx || !ctx->youtubeMediaList) {
+        return;
+    }
+
+    ListView_DeleteAllItems(ctx->youtubeMediaList);
+    for (size_t index = 0; index < ctx->youtubeMediaItems.size(); ++index) {
+        const auto& media = ctx->youtubeMediaItems[index];
+        LVITEMW item{};
+        item.mask = LVIF_TEXT;
+        item.iItem = static_cast<int>(index);
+        const wchar_t* typeText = media.type == YouTubeMediaType::Clip ? L"Clip" : L"Recording";
+        item.pszText = const_cast<wchar_t*>(typeText);
+        SendMessageW(ctx->youtubeMediaList, LVM_INSERTITEMW, 0, reinterpret_cast<LPARAM>(&item));
+
+        const std::wstring fileName = media.path.filename().wstring();
+        const std::wstring dateText = FormatLocalDate(FileTimeToSystemClock(media.modified));
+        LVITEMW subItem{};
+        subItem.mask = LVIF_TEXT;
+        subItem.iItem = static_cast<int>(index);
+        subItem.iSubItem = 1;
+        subItem.pszText = const_cast<wchar_t*>(fileName.c_str());
+        SendMessageW(ctx->youtubeMediaList, LVM_SETITEMTEXTW, static_cast<WPARAM>(index), reinterpret_cast<LPARAM>(&subItem));
+        subItem.iSubItem = 2;
+        subItem.pszText = const_cast<wchar_t*>(dateText.c_str());
+        SendMessageW(ctx->youtubeMediaList, LVM_SETITEMTEXTW, static_cast<WPARAM>(index), reinterpret_cast<LPARAM>(&subItem));
+    }
+}
+
+void RefreshYouTubeUiState(AppContext* ctx);
+
+void UpdateYouTubeMediaSelection(AppContext* ctx)
+{
+    if (!ctx) {
+        return;
+    }
+    const int selectedIndex = GetSelectedYouTubeMediaIndex(ctx);
+    if (selectedIndex >= 0 && static_cast<size_t>(selectedIndex) < ctx->youtubeMediaItems.size()) {
+        if (ctx->youtubeTitleEdit) {
+            SetWindowTextW(
+                ctx->youtubeTitleEdit,
+                DefaultYouTubeTitle(ctx->youtubeMediaItems[static_cast<size_t>(selectedIndex)].path).c_str());
+        }
+    } else if (ctx->youtubeTitleEdit) {
+        SetWindowTextW(ctx->youtubeTitleEdit, L"");
+    }
+    RefreshYouTubeUiState(ctx);
+}
+
+void RefreshYouTubeMediaList(AppContext* ctx)
+{
+    if (!ctx || !ctx->youtubeMediaList || !ctx->youtubeLabel) {
+        return;
+    }
+
+    const auto recordingsFolder = ResolveRecordingsFolderPath(ctx);
+    if (recordingsFolder.empty() || !DirectoryExists(recordingsFolder.wstring())) {
+        ctx->youtubeMediaItems.clear();
+        RepopulateYouTubeMediaList(ctx);
+        UpdateYouTubeMediaSelection(ctx);
+        SetWindowTextW(ctx->youtubeLabel, L"Recordings folder is unavailable.");
+        return;
+    }
+
+    ctx->youtubeMediaItems = EnumerateYouTubeMediaFiles(recordingsFolder);
+    RepopulateYouTubeMediaList(ctx);
+    UpdateYouTubeMediaSelection(ctx);
+
+    size_t recordingCount = 0;
+    size_t clipCount = 0;
+    for (const auto& item : ctx->youtubeMediaItems) {
+        if (item.type == YouTubeMediaType::Clip) {
+            ++clipCount;
+        } else {
+            ++recordingCount;
+        }
+    }
+    std::wostringstream summary;
+    summary << recordingsFolder.wstring() << L" (" << recordingCount << L" recording";
+    if (recordingCount != 1) {
+        summary << L"s";
+    }
+    summary << L", " << clipCount << L" clip";
+    if (clipCount != 1) {
+        summary << L"s";
+    }
+    summary << L")";
+    SetWindowTextW(ctx->youtubeLabel, summary.str().c_str());
 }
 
 void RefreshYouTubeUiState(AppContext* ctx)
@@ -2467,8 +2602,8 @@ void RefreshYouTubeUiState(AppContext* ctx)
     if (!linked) {
         ctx->youtubeUnlinkConfirmPending = false;
     }
-    const int selectedIndex = GetSelectedRecordingIndex(ctx);
-    const bool canUpload = oauthConfigured && linked && !ctx->youtubeBusy.load() && selectedIndex >= 0 && static_cast<size_t>(selectedIndex) < ctx->recordingItems.size();
+    const int selectedIndex = GetSelectedYouTubeMediaIndex(ctx);
+    const bool canUpload = oauthConfigured && linked && !ctx->youtubeBusy.load() && selectedIndex >= 0 && static_cast<size_t>(selectedIndex) < ctx->youtubeMediaItems.size();
 
     if (ctx->youtubeLinkStatus) {
         if (!oauthConfigured) {
@@ -2538,12 +2673,13 @@ void UnlinkYouTubeAccount(AppContext* ctx)
     ctx->settings.youtubeRefreshToken.clear();
     ctx->settings.youtubeChannelId.clear();
     ctx->settings.youtubeChannelTitle.clear();
+    ctx->youtubeLastVideoUrl.clear();
     std::string saveError;
     if (!ctx->settingsStore.Save(ctx->settings, saveError)) {
         SetStatus(ctx, std::wstring(L"Failed to unlink YouTube account: ") + ToWide(saveError));
     } else {
         SetStatus(ctx, L"YouTube account unlinked.");
-        SetRecordingsUploadUi(ctx, 0, L"No upload in progress.");
+        SetYouTubeUploadUi(ctx, 0, L"No upload in progress.");
     }
 }
 
@@ -2658,15 +2794,8 @@ void UpdateRecordingInfoPane(AppContext* ctx, int selectedIndex)
     }
     UpdateRecordingParticipantsPane(ctx, selectedIndex);
     if (selectedIndex < 0 || static_cast<size_t>(selectedIndex) >= ctx->recordingItems.size()) {
-        RefreshYouTubeUiState(ctx);
         return;
     }
-
-    const auto& item = ctx->recordingItems[static_cast<size_t>(selectedIndex)];
-    if (ctx->youtubeTitleEdit) {
-        SetWindowTextW(ctx->youtubeTitleEdit, DefaultYouTubeTitle(item.path).c_str());
-    }
-    RefreshYouTubeUiState(ctx);
 }
 
 void SortRecordingItems(AppContext* ctx)
@@ -2917,8 +3046,8 @@ void RefreshLiveStatus(AppContext* ctx);
 
 void SetActiveTab(AppContext* ctx, AppContext::MainTab tab)
 {
-    if (!ctx || !ctx->statusTabButton || !ctx->configurationTabButton || !ctx->chatPrivacyTabButton || !ctx->recordingsTabButton || !ctx->clipsTabButton || !ctx->keybindsTabButton || !ctx->aboutTabButton
-        || !ctx->statusPanel || !ctx->recorderPanel || !ctx->chatPrivacyPanel || !ctx->recordingsPanel || !ctx->clipsPanel || !ctx->keybindsPanel || !ctx->aboutPanel) {
+    if (!ctx || !ctx->statusTabButton || !ctx->configurationTabButton || !ctx->chatPrivacyTabButton || !ctx->recordingsTabButton || !ctx->youtubeTabButton || !ctx->clipsTabButton || !ctx->keybindsTabButton || !ctx->aboutTabButton
+        || !ctx->statusPanel || !ctx->recorderPanel || !ctx->chatPrivacyPanel || !ctx->recordingsPanel || !ctx->youtubePanel || !ctx->clipsPanel || !ctx->keybindsPanel || !ctx->aboutPanel) {
         return;
     }
 
@@ -2931,6 +3060,7 @@ void SetActiveTab(AppContext* ctx, AppContext::MainTab tab)
     const bool showConfiguration = (tab == AppContext::MainTab::Configuration);
     const bool showChatPrivacy = (tab == AppContext::MainTab::ChatPrivacy);
     const bool showRecordings = (tab == AppContext::MainTab::Recordings);
+    const bool showYouTube = (tab == AppContext::MainTab::YouTube);
     const bool showClips = (tab == AppContext::MainTab::Clips);
     const bool showKeybinds = (tab == AppContext::MainTab::Keybinds);
     const bool showAbout = (tab == AppContext::MainTab::About);
@@ -2939,6 +3069,7 @@ void SetActiveTab(AppContext* ctx, AppContext::MainTab tab)
     ShowWindow(ctx->recorderPanel, showConfiguration ? SW_SHOW : SW_HIDE);
     ShowWindow(ctx->chatPrivacyPanel, showChatPrivacy ? SW_SHOW : SW_HIDE);
     ShowWindow(ctx->recordingsPanel, showRecordings ? SW_SHOW : SW_HIDE);
+    ShowWindow(ctx->youtubePanel, showYouTube ? SW_SHOW : SW_HIDE);
     ShowWindow(ctx->clipsPanel, showClips ? SW_SHOW : SW_HIDE);
     ShowWindow(ctx->keybindsPanel, showKeybinds ? SW_SHOW : SW_HIDE);
     ShowWindow(ctx->aboutPanel, showAbout ? SW_SHOW : SW_HIDE);
@@ -2949,12 +3080,16 @@ void SetActiveTab(AppContext* ctx, AppContext::MainTab tab)
     EnableWindow(ctx->configurationTabButton, !showConfiguration);
     EnableWindow(ctx->chatPrivacyTabButton, !showChatPrivacy);
     EnableWindow(ctx->recordingsTabButton, !showRecordings);
+    EnableWindow(ctx->youtubeTabButton, !showYouTube);
     EnableWindow(ctx->clipsTabButton, !showClips);
     EnableWindow(ctx->keybindsTabButton, !showKeybinds);
     EnableWindow(ctx->aboutTabButton, !showAbout);
 
     if (showRecordings) {
         RefreshRecordingsList(ctx);
+    }
+    if (showYouTube) {
+        RefreshYouTubeMediaList(ctx);
     }
     if (showClips) {
         RefreshClipsSourceList(ctx);
@@ -3824,6 +3959,8 @@ void RefreshFolderAvailability(AppContext* ctx)
     }
     if (ctx->activeTab == AppContext::MainTab::Recordings) {
         RefreshRecordingsList(ctx);
+    } else if (ctx->activeTab == AppContext::MainTab::YouTube) {
+        RefreshYouTubeMediaList(ctx);
     } else if (ctx->activeTab == AppContext::MainTab::Clips) {
         RefreshClipsSourceList(ctx);
     }
@@ -4050,6 +4187,9 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
     case IDC_TAB_RECORDINGS:
         SetActiveTab(ctx, AppContext::MainTab::Recordings);
         break;
+    case IDC_TAB_YOUTUBE:
+        SetActiveTab(ctx, AppContext::MainTab::YouTube);
+        break;
     case IDC_TAB_CLIPS:
         SetActiveTab(ctx, AppContext::MainTab::Clips);
         break;
@@ -4153,6 +4293,13 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         break;
     case IDC_RECORDINGS_REFRESH:
         RefreshRecordingsList(ctx);
+        break;
+    case IDC_YOUTUBE_REFRESH:
+        RefreshYouTubeMediaList(ctx);
+        SetStatus(ctx, L"YouTube media list refreshed.");
+        break;
+    case IDC_YOUTUBE_MEDIA_LIST:
+        UpdateYouTubeMediaSelection(ctx);
         break;
     case IDC_CLIPS_REFRESH:
         RefreshClipsSourceList(ctx);
@@ -4373,9 +4520,9 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
             break;
         }
         PullSettingsFromUi(ctx);
-        const int selected = GetSelectedRecordingIndex(ctx);
-        if (selected < 0 || static_cast<size_t>(selected) >= ctx->recordingItems.size()) {
-            SetStatus(ctx, L"Select a recording before uploading.");
+        const int selected = GetSelectedYouTubeMediaIndex(ctx);
+        if (selected < 0 || static_cast<size_t>(selected) >= ctx->youtubeMediaItems.size()) {
+            SetStatus(ctx, L"Select a recording or clip before uploading.");
             break;
         }
         if (ctx->settings.youtubeClientId.empty() || ctx->settings.youtubeRefreshToken.empty()) {
@@ -4395,14 +4542,16 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
             privacy = bean::integrations::YouTubePrivacy::Public;
         }
 
-        const auto path = ctx->recordingItems[static_cast<size_t>(selected)].path;
+        const auto path = ctx->youtubeMediaItems[static_cast<size_t>(selected)].path;
         const auto title = ToUtf8(titleWide);
         bean::integrations::YouTubeCredentials creds;
         creds.clientId = ctx->settings.youtubeClientId;
         creds.refreshToken = ctx->settings.youtubeRefreshToken;
+        creds.authServerUrl = GetYouTubeAuthServerUrl();
+        ctx->youtubeLastVideoUrl.clear();
         ctx->youtubeBusy.store(true);
         RefreshYouTubeUiState(ctx);
-        SetRecordingsUploadUi(ctx, 0, std::wstring(L"Uploading: ") + path.filename().wstring());
+        SetYouTubeUploadUi(ctx, 0, std::wstring(L"Uploading: ") + path.filename().wstring());
         SetStatus(ctx, std::wstring(L"Uploading to YouTube: ") + path.filename().wstring());
         LaunchAppWorker(ctx, [ctx, path, title, privacy, creds]() {
             bean::integrations::YouTubeUploadRequest req;
@@ -4450,10 +4599,12 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
             }
 
             std::wstring message = L"YouTube upload complete.";
+            std::wstring videoUrl;
             if (!upload.videoUrl.empty()) {
-                message += L" " + ToWide(upload.videoUrl);
+                videoUrl = ToWide(upload.videoUrl);
             }
             PostStatus(ctx, message);
+            PostYouTubeUploadProgress(ctx, 100, message, videoUrl);
             ctx->youtubeBusy.store(false);
             RequestYouTubeUiRefresh(ctx);
         });
@@ -4590,14 +4741,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ctx->chatPrivacyTabButton = CreateWindowW(L"BUTTON", L"Chat Blocker", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 96, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_CHAT_PRIVACY), nullptr, nullptr);
         ctx->recordingsTabButton = CreateWindowW(L"BUTTON", L"Recordings", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 134, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_RECORDINGS), nullptr, nullptr);
         ctx->clipsTabButton = CreateWindowW(L"BUTTON", L"Clips", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 172, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_CLIPS), nullptr, nullptr);
-        ctx->keybindsTabButton = CreateWindowW(L"BUTTON", L"Keybinds", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 210, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_KEYBINDS), nullptr, nullptr);
-        ctx->aboutTabButton = CreateWindowW(L"BUTTON", L"About", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 248, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_ABOUT), nullptr, nullptr);
+        ctx->youtubeTabButton = CreateWindowW(L"BUTTON", L"YouTube", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 210, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_YOUTUBE), nullptr, nullptr);
+        ctx->keybindsTabButton = CreateWindowW(L"BUTTON", L"Keybinds", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 248, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_KEYBINDS), nullptr, nullptr);
+        ctx->aboutTabButton = CreateWindowW(L"BUTTON", L"About", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 286, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_ABOUT), nullptr, nullptr);
 
         EnsureThemeResources();
         ctx->statusPanel = CreateWindowExW(WS_EX_CONTROLPARENT, L"STATIC", L"", WS_VISIBLE | WS_CHILD, panelX, panelY, panelWidth, panelHeight, hwnd, nullptr, nullptr, nullptr);
         ctx->recorderPanel = CreateWindowExW(WS_EX_CONTROLPARENT, L"STATIC", L"", WS_CHILD, panelX, panelY, panelWidth, panelHeight, hwnd, nullptr, nullptr, nullptr);
         ctx->chatPrivacyPanel = CreateWindowExW(WS_EX_CONTROLPARENT, L"STATIC", L"", WS_CHILD, panelX, panelY, panelWidth, panelHeight, hwnd, nullptr, nullptr, nullptr);
         ctx->recordingsPanel = CreateWindowExW(WS_EX_CONTROLPARENT, L"STATIC", L"", WS_CHILD, panelX, panelY, panelWidth, panelHeight, hwnd, nullptr, nullptr, nullptr);
+        ctx->youtubePanel = CreateWindowExW(WS_EX_CONTROLPARENT, L"STATIC", L"", WS_CHILD, panelX, panelY, panelWidth, panelHeight, hwnd, nullptr, nullptr, nullptr);
         ctx->clipsPanel = CreateWindowExW(WS_EX_CONTROLPARENT, L"STATIC", L"", WS_CHILD, panelX, panelY, panelWidth, panelHeight, hwnd, nullptr, nullptr, nullptr);
         ctx->keybindsPanel = CreateWindowExW(WS_EX_CONTROLPARENT, L"STATIC", L"", WS_CHILD, panelX, panelY, panelWidth, panelHeight, hwnd, nullptr, nullptr, nullptr);
         ctx->aboutPanel = CreateWindowExW(WS_EX_CONTROLPARENT, L"STATIC", L"", WS_CHILD, panelX, panelY, panelWidth, panelHeight, hwnd, nullptr, nullptr, nullptr);
@@ -4605,9 +4758,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         SetWindowSubclass(ctx->recorderPanel, PanelMessageForwarder, 2, 0);
         SetWindowSubclass(ctx->chatPrivacyPanel, PanelMessageForwarder, 3, 0);
         SetWindowSubclass(ctx->recordingsPanel, PanelMessageForwarder, 4, 0);
-        SetWindowSubclass(ctx->clipsPanel, PanelMessageForwarder, 5, 0);
-        SetWindowSubclass(ctx->keybindsPanel, PanelMessageForwarder, 7, 0);
-        SetWindowSubclass(ctx->aboutPanel, PanelMessageForwarder, 6, 0);
+        SetWindowSubclass(ctx->youtubePanel, PanelMessageForwarder, 5, 0);
+        SetWindowSubclass(ctx->clipsPanel, PanelMessageForwarder, 6, 0);
+        SetWindowSubclass(ctx->keybindsPanel, PanelMessageForwarder, 8, 0);
+        SetWindowSubclass(ctx->aboutPanel, PanelMessageForwarder, 7, 0);
 
         CreateWindowW(L"STATIC", L"Output Folder:", WS_VISIBLE | WS_CHILD, xLabel, y, labelWidth, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_OUTPUT_LABEL), nullptr, nullptr);
         ctx->outputEdit = CreateWindowW(L"EDIT", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, xEdit, y, editWidth, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_OUTPUT_EDIT), nullptr, nullptr);
@@ -5108,29 +5262,81 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         partyColumn.pszText = const_cast<wchar_t*>(L"");
         SendMessageW(ctx->recordingsInfoText, LVM_INSERTCOLUMNW, 0, reinterpret_cast<LPARAM>(&partyColumn));
 
-        ctx->youtubeLinkButton = CreateWindowW(L"BUTTON", L"Link YouTube", WS_VISIBLE | WS_CHILD, 540, 322, 110, rowHeight + 4, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_LINK_BUTTON), nullptr, nullptr);
-        ctx->youtubeUnlinkButton = CreateWindowW(L"BUTTON", L"Unlink Account", WS_CHILD, 652, 322, 108, rowHeight + 4, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_UNLINK_BUTTON), nullptr, nullptr);
-        ctx->youtubeUnlinkConfirmLabel = CreateWindowW(L"STATIC", L"You sure?", WS_CHILD, 540, 352, 100, rowHeight, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_UNLINK_CONFIRM_LABEL), nullptr, nullptr);
-        ctx->youtubeUnlinkYesButton = CreateWindowW(L"BUTTON", L"Yes", WS_CHILD, 644, 350, 54, rowHeight + 4, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_UNLINK_YES_BUTTON), nullptr, nullptr);
-        ctx->youtubeUnlinkNoButton = CreateWindowW(L"BUTTON", L"No", WS_CHILD, 702, 350, 54, rowHeight + 4, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_UNLINK_NO_BUTTON), nullptr, nullptr);
-        ctx->youtubeLinkStatus = CreateWindowW(L"STATIC", L"Not linked", WS_VISIBLE | WS_CHILD | SS_OWNERDRAW, 540, 352, 24, rowHeight, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_LINK_STATUS), nullptr, nullptr);
-        ctx->youtubeAccountLabel = CreateWindowW(L"STATIC", L"YouTube Account:", WS_VISIBLE | WS_CHILD, 20, 352, 500, rowHeight, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_ACCOUNT_LABEL), nullptr, nullptr);
-        ctx->youtubeAccountLink = CreateWindowW(L"BUTTON", L"", WS_CHILD | WS_TABSTOP | BS_OWNERDRAW, 90, 348, 430, rowHeight + 8, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_ACCOUNT_LINK), nullptr, nullptr);
+        ctx->youtubeLabel = CreateWindowW(L"STATIC", L"Recordings and clips:", WS_VISIBLE | WS_CHILD, 20, 58, 740, rowHeight, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_LABEL), nullptr, nullptr);
+        CreateWindowW(L"BUTTON", L"Refresh", WS_VISIBLE | WS_CHILD | WS_TABSTOP, 664, 57, 96, rowHeight + 4, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_REFRESH), nullptr, nullptr);
+        ctx->youtubeMediaList = CreateWindowW(
+            WC_LISTVIEWW,
+            L"",
+            WS_VISIBLE | WS_CHILD | WS_BORDER | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
+            20,
+            96,
+            740,
+            220,
+            ctx->youtubePanel,
+            reinterpret_cast<HMENU>(IDC_YOUTUBE_MEDIA_LIST),
+            nullptr,
+            nullptr);
+        SetWindowTheme(ctx->youtubeMediaList, L"", L"");
+        ListView_SetExtendedListViewStyle(ctx->youtubeMediaList, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+        ListView_SetBkColor(ctx->youtubeMediaList, kColorListRow);
+        ListView_SetTextBkColor(ctx->youtubeMediaList, kColorListRow);
+        ListView_SetTextColor(ctx->youtubeMediaList, kColorTextPrimary);
+        LVCOLUMNW youtubeColumn{};
+        youtubeColumn.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM | LVCF_FMT;
+        youtubeColumn.cx = 90;
+        youtubeColumn.fmt = LVCFMT_LEFT;
+        youtubeColumn.pszText = const_cast<wchar_t*>(L"Type");
+        SendMessageW(ctx->youtubeMediaList, LVM_INSERTCOLUMNW, 0, reinterpret_cast<LPARAM>(&youtubeColumn));
+        youtubeColumn.cx = 320;
+        youtubeColumn.pszText = const_cast<wchar_t*>(L"Name");
+        SendMessageW(ctx->youtubeMediaList, LVM_INSERTCOLUMNW, 1, reinterpret_cast<LPARAM>(&youtubeColumn));
+        youtubeColumn.cx = 160;
+        youtubeColumn.fmt = LVCFMT_CENTER;
+        youtubeColumn.pszText = const_cast<wchar_t*>(L"Date");
+        SendMessageW(ctx->youtubeMediaList, LVM_INSERTCOLUMNW, 2, reinterpret_cast<LPARAM>(&youtubeColumn));
+        ctx->youtubeMediaListHeader = ListView_GetHeader(ctx->youtubeMediaList);
+        if (ctx->youtubeMediaListHeader) {
+            SetWindowTheme(ctx->youtubeMediaListHeader, L"", L"");
+            SetWindowSubclass(ctx->youtubeMediaListHeader, RecordingsHeaderSubclassProc, 2, reinterpret_cast<DWORD_PTR>(ctx));
+            InvalidateRect(ctx->youtubeMediaListHeader, nullptr, TRUE);
+        }
 
-        CreateWindowW(L"STATIC", L"Video Title:", WS_VISIBLE | WS_CHILD, 20, 392, 120, rowHeight, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_TITLE_LABEL), nullptr, nullptr);
-        ctx->youtubeTitleEdit = CreateWindowW(L"EDIT", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL, 150, 392, 370, rowHeight, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_TITLE_EDIT), nullptr, nullptr);
+        ctx->youtubeLinkButton = CreateWindowW(L"BUTTON", L"Link YouTube", WS_VISIBLE | WS_CHILD, 540, 20, 110, rowHeight + 4, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_LINK_BUTTON), nullptr, nullptr);
+        ctx->youtubeUnlinkButton = CreateWindowW(L"BUTTON", L"Unlink Account", WS_CHILD, 652, 20, 108, rowHeight + 4, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_UNLINK_BUTTON), nullptr, nullptr);
+        ctx->youtubeUnlinkConfirmLabel = CreateWindowW(L"STATIC", L"You sure?", WS_CHILD, 540, 50, 100, rowHeight, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_UNLINK_CONFIRM_LABEL), nullptr, nullptr);
+        ctx->youtubeUnlinkYesButton = CreateWindowW(L"BUTTON", L"Yes", WS_CHILD, 644, 48, 54, rowHeight + 4, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_UNLINK_YES_BUTTON), nullptr, nullptr);
+        ctx->youtubeUnlinkNoButton = CreateWindowW(L"BUTTON", L"No", WS_CHILD, 702, 48, 54, rowHeight + 4, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_UNLINK_NO_BUTTON), nullptr, nullptr);
+        ctx->youtubeLinkStatus = CreateWindowW(L"STATIC", L"Not linked", WS_VISIBLE | WS_CHILD | SS_OWNERDRAW, 540, 50, 24, rowHeight, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_LINK_STATUS), nullptr, nullptr);
+        ctx->youtubeAccountLabel = CreateWindowW(L"STATIC", L"YouTube Account:", WS_VISIBLE | WS_CHILD, 20, 20, 500, rowHeight, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_ACCOUNT_LABEL), nullptr, nullptr);
+        ctx->youtubeAccountLink = CreateWindowW(L"BUTTON", L"", WS_CHILD | WS_TABSTOP | BS_OWNERDRAW, 170, 16, 350, rowHeight + 8, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_ACCOUNT_LINK), nullptr, nullptr);
+
+        CreateWindowW(L"STATIC", L"Title:", WS_VISIBLE | WS_CHILD, 20, 20, 120, rowHeight, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_TITLE_LABEL), nullptr, nullptr);
+        ctx->youtubeTitleEdit = CreateWindowW(L"EDIT", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL, 150, 20, 370, rowHeight, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_TITLE_EDIT), nullptr, nullptr);
         EnableCtrlASelectAll(ctx->youtubeTitleEdit);
-        CreateWindowW(L"STATIC", L"Visibility:", WS_VISIBLE | WS_CHILD, 540, 392, 70, rowHeight, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_PRIVACY_LABEL), nullptr, nullptr);
-        ctx->youtubePrivacyCombo = CreateWindowW(L"COMBOBOX", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST, 612, 392, 148, 120, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_PRIVACY_COMBO), nullptr, nullptr);
+        CreateWindowW(L"STATIC", L"Visibility:", WS_VISIBLE | WS_CHILD, 540, 20, 70, rowHeight, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_PRIVACY_LABEL), nullptr, nullptr);
+        ctx->youtubePrivacyCombo = CreateWindowW(L"COMBOBOX", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST, 612, 20, 148, 120, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_PRIVACY_COMBO), nullptr, nullptr);
         SendMessageW(ctx->youtubePrivacyCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"private"));
         SendMessageW(ctx->youtubePrivacyCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"unlisted"));
         SendMessageW(ctx->youtubePrivacyCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"public"));
         SendMessageW(ctx->youtubePrivacyCombo, CB_SETCURSEL, 0, 0);
-        ctx->youtubeUploadButton = CreateWindowW(L"BUTTON", L"Upload to YouTube", WS_VISIBLE | WS_CHILD, 540, 424, 220, rowHeight + 4, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_UPLOAD_BUTTON), nullptr, nullptr);
-        ctx->recordingsUploadProgress = CreateWindowW(PROGRESS_CLASSW, L"", WS_VISIBLE | WS_CHILD, 20, 426, 500, 20, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_RECORDINGS_UPLOAD_PROGRESS), nullptr, nullptr);
-        SendMessageW(ctx->recordingsUploadProgress, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
-        SendMessageW(ctx->recordingsUploadProgress, PBM_SETPOS, 0, 0);
-        ctx->recordingsUploadStatus = CreateWindowW(L"STATIC", L"No upload in progress.", WS_VISIBLE | WS_CHILD, 20, 448, 740, rowHeight, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_RECORDINGS_UPLOAD_STATUS), nullptr, nullptr);
+        SendMessageW(ctx->youtubePrivacyCombo, CB_SETMINVISIBLE, 8, 0);
+        ctx->youtubeUploadButton = CreateWindowW(L"BUTTON", L"Upload to YouTube", WS_VISIBLE | WS_CHILD, 540, 424, 220, rowHeight + 4, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_UPLOAD_BUTTON), nullptr, nullptr);
+        ctx->youtubeUploadProgress = CreateWindowW(PROGRESS_CLASSW, L"", WS_VISIBLE | WS_CHILD, 20, 426, 500, 20, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_UPLOAD_PROGRESS), nullptr, nullptr);
+        SendMessageW(ctx->youtubeUploadProgress, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
+        SendMessageW(ctx->youtubeUploadProgress, PBM_SETPOS, 0, 0);
+        ctx->youtubeUploadStatus = CreateWindowW(
+            L"STATIC",
+            L"No upload in progress.",
+            WS_VISIBLE | WS_CHILD | SS_OWNERDRAW | SS_NOTIFY,
+            20,
+            448,
+            740,
+            rowHeight,
+            ctx->youtubePanel,
+            reinterpret_cast<HMENU>(IDC_YOUTUBE_UPLOAD_STATUS),
+            nullptr,
+            nullptr);
+        SetWindowSubclass(ctx->youtubeUploadStatus, YouTubeUploadStatusSubclassProc, 4, reinterpret_cast<DWORD_PTR>(ctx));
 
         CreateWindowW(L"STATIC", L"Source Recording:", WS_VISIBLE | WS_CHILD, 20, 20, 110, rowHeight, ctx->clipsPanel, reinterpret_cast<HMENU>(IDC_CLIPS_SOURCE_LABEL), nullptr, nullptr);
         ctx->clipsSourceCombo = CreateWindowW(
@@ -5307,8 +5513,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         if (aboutFlavorText && gTheme.mutedItalicHintFont) {
             SendMessageW(aboutFlavorText, WM_SETFONT, reinterpret_cast<WPARAM>(gTheme.mutedItalicHintFont), TRUE);
         }
-        SendMessageW(ctx->recordingsUploadProgress, PBM_SETBARCOLOR, 0, static_cast<LPARAM>(kColorListSelection));
-        SendMessageW(ctx->recordingsUploadProgress, PBM_SETBKCOLOR, 0, static_cast<LPARAM>(kColorInputBg));
+        SendMessageW(ctx->youtubeUploadProgress, PBM_SETBARCOLOR, 0, static_cast<LPARAM>(kColorListSelection));
+        SendMessageW(ctx->youtubeUploadProgress, PBM_SETBKCOLOR, 0, static_cast<LPARAM>(kColorInputBg));
 
         const std::wstring statusLogInitError = InitializeStatusLogFile(ctx);
         if (!statusLogInitError.empty()) {
@@ -5480,7 +5686,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             break;
         }
         auto* hdr = reinterpret_cast<LPNMHDR>(lParam);
-        if (!ctx->recordingsList) {
+        if (!ctx->recordingsList && !ctx->youtubeMediaList) {
             break;
         }
         if (hdr->idFrom == IDC_RECORDINGS_INFO_TEXT && hdr->code == NM_CUSTOMDRAW) {
@@ -5568,6 +5774,41 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             }
             return 0;
         }
+        if (hdr->idFrom == IDC_YOUTUBE_MEDIA_LIST && hdr->code == NM_CUSTOMDRAW) {
+            auto* customDraw = reinterpret_cast<NMLVCUSTOMDRAW*>(lParam);
+            if (customDraw->nmcd.dwDrawStage == CDDS_PREPAINT) {
+                return CDRF_NOTIFYITEMDRAW;
+            }
+            if (customDraw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
+                customDraw->clrText = kColorTextPrimary;
+                customDraw->clrTextBk = (customDraw->nmcd.uItemState & CDIS_SELECTED)
+                    ? kColorListSelection
+                    : ((customDraw->nmcd.dwItemSpec % 2 == 0) ? kColorListRow : kColorListRowAlt);
+                return CDRF_NOTIFYSUBITEMDRAW;
+            }
+            if (customDraw->nmcd.dwDrawStage == (CDDS_ITEMPREPAINT | CDDS_SUBITEM)) {
+                customDraw->clrText = kColorTextPrimary;
+                customDraw->clrTextBk = (customDraw->nmcd.uItemState & CDIS_SELECTED)
+                    ? kColorListSelection
+                    : ((customDraw->nmcd.dwItemSpec % 2 == 0) ? kColorListRow : kColorListRowAlt);
+                return CDRF_NEWFONT;
+            }
+        }
+        if (hdr->idFrom == IDC_YOUTUBE_MEDIA_LIST && hdr->code == LVN_ITEMCHANGED) {
+            UpdateYouTubeMediaSelection(ctx);
+            return 0;
+        }
+        if (hdr->idFrom == IDC_YOUTUBE_MEDIA_LIST && hdr->code == NM_DBLCLK) {
+            const int selected = GetSelectedYouTubeMediaIndex(ctx);
+            if (selected >= 0 && static_cast<size_t>(selected) < ctx->youtubeMediaItems.size()) {
+                const auto& path = ctx->youtubeMediaItems[static_cast<size_t>(selected)].path;
+                const auto result = reinterpret_cast<intptr_t>(ShellExecuteW(hwnd, L"open", path.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+                if (result <= 32) {
+                    SetStatus(ctx, L"Failed to open selected YouTube media file.");
+                }
+            }
+            return 0;
+        }
         break;
     }
     case WM_DRAWITEM: {
@@ -5588,6 +5829,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 DrawLengthValue(drawInfo);
             } else if (drawInfo->CtlID == IDC_YOUTUBE_LINK_STATUS) {
                 DrawYouTubeLinkStatus(drawInfo, ctx);
+            } else if (drawInfo->CtlID == IDC_YOUTUBE_UPLOAD_STATUS) {
+                DrawYouTubeUploadStatus(drawInfo, ctx);
             } else if (drawInfo->CtlID == IDC_CONFIGURATION_TOOLTIP || (ctx && drawInfo->hwndItem == ctx->configurationTooltip)) {
                 DrawConfigurationTooltip(drawInfo);
             } else if (drawInfo->CtlID == IDC_PRESET_HELP || drawInfo->CtlID == IDC_POST_RUN_DELAY_HELP || drawInfo->CtlID == IDC_ADVANCED_LOGGING_HELP) {
@@ -5652,7 +5895,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         SetTextColor(dc, kColorTextPrimary);
         if (control != ctx->outputStatus && control != ctx->wowLogStatus) {
             const int id = GetDlgCtrlID(control);
-            if (id == IDC_RECORDINGS_LABEL || id == IDC_RECORDINGS_UPLOAD_STATUS || id == IDC_ABOUT_BUILD_TEXT || id == IDC_ABOUT_FLAVOR_TEXT || id == IDC_YOUTUBE_UNLINK_CONFIRM_LABEL || id == IDC_CHAT_PREVIEW_STATUS || id == IDC_CONFIGURATION_AUTOSAVE_HINT || id == IDC_KEYBINDS_AUTOSAVE_HINT) {
+            if (id == IDC_RECORDINGS_LABEL || id == IDC_YOUTUBE_LABEL || id == IDC_YOUTUBE_UPLOAD_STATUS || id == IDC_ABOUT_BUILD_TEXT || id == IDC_ABOUT_FLAVOR_TEXT || id == IDC_YOUTUBE_UNLINK_CONFIRM_LABEL || id == IDC_CHAT_PREVIEW_STATUS || id == IDC_CONFIGURATION_AUTOSAVE_HINT || id == IDC_KEYBINDS_AUTOSAVE_HINT) {
                 SetTextColor(dc, kColorTextMuted);
             }
         }
@@ -5662,6 +5905,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
     case WM_CTLCOLORLISTBOX: {
         HDC dc = reinterpret_cast<HDC>(wParam);
         SetTextColor(dc, kColorTextPrimary);
+        if (ctx && reinterpret_cast<HWND>(lParam) == ctx->youtubeTitleEdit) {
+            SetBkColor(dc, kColorYouTubeInputBg);
+            return reinterpret_cast<LRESULT>(gTheme.youtubeInputBrush ? gTheme.youtubeInputBrush : reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        }
         SetBkColor(dc, kColorInputBg);
         return reinterpret_cast<LRESULT>(gTheme.inputBrush ? gTheme.inputBrush : reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
     }
@@ -5809,6 +6056,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
     case WM_BEAN_YOUTUBE_UI_REFRESH:
         if (ctx) {
             RefreshYouTubeUiState(ctx);
+            if (ctx->activeTab == AppContext::MainTab::YouTube) {
+                RefreshYouTubeMediaList(ctx);
+            }
         }
         return 0;
     case WM_BEAN_CLIPS_UI_REFRESH:
@@ -5890,7 +6140,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
     case WM_BEAN_YOUTUBE_UPLOAD_PROGRESS: {
         auto* payload = reinterpret_cast<YouTubeUploadProgressPayload*>(lParam);
         if (ctx && payload) {
-            SetRecordingsUploadUi(ctx, payload->percent, payload->text);
+            if (!payload->videoUrl.empty()) {
+                ctx->youtubeLastVideoUrl = payload->videoUrl;
+            }
+            SetYouTubeUploadUi(ctx, payload->percent, payload->text);
+            RefreshYouTubeUiState(ctx);
         }
         delete payload;
         return 0;
