@@ -28,7 +28,9 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - name: Configure
         # LibObs is the production engine; CI still builds it (OBS is loaded at

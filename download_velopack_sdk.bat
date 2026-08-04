@@ -5,6 +5,7 @@ pushd "%~dp0"
 set "SDK_ROOT=tools\velopack-sdk"
 set "SDK_ZIP=tools\velopack_libc_1.2.0.zip"
 set "SDK_URL=https://github.com/velopack/velopack/releases/download/1.2.0/velopack_libc_1.2.0.zip"
+set "SDK_SHA256=547262ed7a1ab1ff62f580aa53851ede2f1a451ac61b8974eb7bc01117488835"
 
 if not exist "tools" mkdir "tools"
 if exist "%SDK_ROOT%" (
@@ -13,7 +14,11 @@ if exist "%SDK_ROOT%" (
 )
 
 echo [bean] Downloading Velopack C/C++ SDK 1.2.0...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest -Uri '%SDK_URL%' -OutFile '%SDK_ZIP%'"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Uri '%SDK_URL%' -OutFile '%SDK_ZIP%'"
+if errorlevel 1 goto :fail
+
+echo [bean] Verifying Velopack SDK checksum...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$expected='%SDK_SHA256%'; $actual=(Get-FileHash -LiteralPath '%SDK_ZIP%' -Algorithm SHA256).Hash.ToLowerInvariant(); if ($actual -ne $expected) { Write-Error ('Checksum mismatch for %SDK_ZIP%: expected ' + $expected + ', got ' + $actual); exit 1 }"
 if errorlevel 1 goto :fail
 
 echo [bean] Extracting SDK...

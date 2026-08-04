@@ -133,8 +133,16 @@ exit /b 0
 
 :download_ffmpeg
 set "FFMPEG_URL=%BEAN_FFMPEG_URL%"
-if not defined FFMPEG_URL set "FFMPEG_URL=https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+if not defined FFMPEG_URL set "FFMPEG_URL=https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.1.2-essentials_build.zip"
+set "FFMPEG_SHA256_URL=%BEAN_FFMPEG_SHA256_URL%"
+set "FFMPEG_SHA256_EXPECTED=%BEAN_FFMPEG_SHA256%"
+if not defined FFMPEG_SHA256_EXPECTED if not defined FFMPEG_SHA256_URL if defined BEAN_FFMPEG_URL (
+  echo [bean] A custom FFmpeg URL requires BEAN_FFMPEG_SHA256 or BEAN_FFMPEG_SHA256_URL.
+  exit /b 1
+)
+if not defined FFMPEG_SHA256_EXPECTED if not defined FFMPEG_SHA256_URL set "FFMPEG_SHA256_EXPECTED=db580001caa24ac104c8cb856cd113a87b0a443f7bdf47d8c12b1d740584a2ec"
 set "FFMPEG_ZIP=tools\ffmpeg-release-essentials.zip"
+set "FFMPEG_SHA256_FILE=tools\ffmpeg-release-essentials.zip.sha256"
 set "FFMPEG_TEMP=tools\ffmpeg-download"
 
 if exist "tools\ffmpeg\bin\ffmpeg.exe" (
@@ -151,6 +159,21 @@ if errorlevel 1 (
   exit /b 1
 )
 
+if not defined FFMPEG_SHA256_EXPECTED (
+  echo [bean] Downloading FFmpeg checksum...
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Uri '%FFMPEG_SHA256_URL%' -OutFile '%FFMPEG_SHA256_FILE%'"
+  if errorlevel 1 (
+    echo [bean] Failed to download FFmpeg checksum from "%FFMPEG_SHA256_URL%".
+    exit /b 1
+  )
+  for /f "usebackq delims=" %%H in ("%FFMPEG_SHA256_FILE%") do if not defined FFMPEG_SHA256_EXPECTED set "FFMPEG_SHA256_EXPECTED=%%H"
+)
+
+for /f "tokens=1" %%H in ("%FFMPEG_SHA256_EXPECTED%") do set "FFMPEG_SHA256_EXPECTED=%%H"
+echo [bean] Verifying FFmpeg checksum...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$expected='%FFMPEG_SHA256_EXPECTED%'.Trim().ToLowerInvariant(); $actual=(Get-FileHash -LiteralPath '%FFMPEG_ZIP%' -Algorithm SHA256).Hash.ToLowerInvariant(); if ($actual -ne $expected) { Write-Error ('Checksum mismatch for %FFMPEG_ZIP%: expected ' + $expected + ', got ' + $actual); exit 1 }"
+if errorlevel 1 exit /b 1
+
 echo [bean] Extracting FFmpeg...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path '%FFMPEG_ZIP%' -DestinationPath '%FFMPEG_TEMP%' -Force"
 if errorlevel 1 (
@@ -166,6 +189,7 @@ if errorlevel 1 (
 
 rmdir /S /Q "%FFMPEG_TEMP%" >nul 2>&1
 del /Q "%FFMPEG_ZIP%" >nul 2>&1
+del /Q "%FFMPEG_SHA256_FILE%" >nul 2>&1
 if not exist "tools\ffmpeg\bin\ffmpeg.exe" (
   echo [bean] FFmpeg acquisition completed without ffmpeg.exe.
   exit /b 1

@@ -14,11 +14,9 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
-
-      - name: Install FFmpeg
-        shell: powershell
-        run: choco install ffmpeg --no-progress --yes
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - name: Download Velopack SDK
         shell: cmd
@@ -26,7 +24,7 @@ jobs:
 
       - name: Install Velopack CLI
         shell: powershell
-        run: dotnet tool install --global vpk
+        run: dotnet tool install --global vpk --version 1.2.0
 
       - name: Build and package
         shell: powershell
