@@ -5,11 +5,14 @@
 #include "obs/IRecorderEngine.h"
 
 #include <commctrl.h>
+#include <gdiplus.h>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <sstream>
+
+#pragma comment(lib, "Gdiplus.lib")
 
 VisualTheme gTheme;
 
@@ -17,6 +20,16 @@ namespace {
 
 HWND gHoveredStyledButton = nullptr;
 HWND gHoveredHelpIcon = nullptr;
+ULONG_PTR gAlertGdiplusToken = 0;
+
+bool EnsureAlertGdiplus()
+{
+    if (gAlertGdiplusToken != 0) {
+        return true;
+    }
+    Gdiplus::GdiplusStartupInput startupInput;
+    return Gdiplus::GdiplusStartup(&gAlertGdiplusToken, &startupInput, nullptr) == Gdiplus::Ok;
+}
 
 bool IsStatusTabValid(const AppContext* ctx)
 {
@@ -399,6 +412,54 @@ void DrawUpdateAlertGlyph(HDC dc, const RECT& bounds)
     const int right = left + diameter;
     const int bottom = top + diameter;
 
+    if (EnsureAlertGdiplus()) {
+        Gdiplus::Graphics graphics(dc);
+        graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+
+        const Gdiplus::Color warningColor(
+            255,
+            GetRValue(kColorWarning),
+            GetGValue(kColorWarning),
+            GetBValue(kColorWarning));
+        const Gdiplus::Color glyphColor(
+            255,
+            GetRValue(kColorWindowTop),
+            GetGValue(kColorWindowTop),
+            GetBValue(kColorWindowTop));
+        Gdiplus::SolidBrush warningBrush(warningColor);
+        Gdiplus::Pen warningPen(warningColor, 1.0f);
+        graphics.FillEllipse(
+            &warningBrush,
+            static_cast<Gdiplus::REAL>(left),
+            static_cast<Gdiplus::REAL>(top),
+            static_cast<Gdiplus::REAL>(diameter - 1),
+            static_cast<Gdiplus::REAL>(diameter - 1));
+        graphics.DrawEllipse(
+            &warningPen,
+            static_cast<Gdiplus::REAL>(left) + 0.5f,
+            static_cast<Gdiplus::REAL>(top) + 0.5f,
+            static_cast<Gdiplus::REAL>(diameter - 2),
+            static_cast<Gdiplus::REAL>(diameter - 2));
+
+        Gdiplus::Pen glyphPen(glyphColor, 1.8f);
+        const Gdiplus::REAL centerX = static_cast<Gdiplus::REAL>(left + right) / 2.0f;
+        graphics.DrawLine(
+            &glyphPen,
+            centerX,
+            static_cast<Gdiplus::REAL>(top) + 3.0f,
+            centerX,
+            static_cast<Gdiplus::REAL>(bottom) - 5.0f);
+        Gdiplus::SolidBrush glyphBrush(glyphColor);
+        graphics.FillEllipse(
+            &glyphBrush,
+            centerX - 1.0f,
+            static_cast<Gdiplus::REAL>(bottom) - 4.0f,
+            2.0f,
+            2.0f);
+        return;
+    }
+
     HPEN borderPen = CreatePen(PS_SOLID, 1, kColorWarning);
     HBRUSH fillBrush = CreateSolidBrush(kColorWarning);
     HGDIOBJ oldPen = borderPen ? SelectObject(dc, borderPen) : nullptr;
@@ -531,6 +592,10 @@ void DestroyThemeResources()
     if (gTheme.failureBrush) { DeleteObject(gTheme.failureBrush); gTheme.failureBrush = nullptr; }
     if (gTheme.mutedDotBrush) { DeleteObject(gTheme.mutedDotBrush); gTheme.mutedDotBrush = nullptr; }
     if (gTheme.recordingDotBrush) { DeleteObject(gTheme.recordingDotBrush); gTheme.recordingDotBrush = nullptr; }
+    if (gAlertGdiplusToken != 0) {
+        Gdiplus::GdiplusShutdown(gAlertGdiplusToken);
+        gAlertGdiplusToken = 0;
+    }
 }
 
 void DestroyParticipantSpecIcons(AppContext* ctx)

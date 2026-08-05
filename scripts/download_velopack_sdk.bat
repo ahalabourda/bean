@@ -1,6 +1,6 @@
 @echo off
 setlocal
-pushd "%~dp0"
+pushd "%~dp0.."
 
 set "SDK_ROOT=tools\velopack-sdk"
 set "SDK_ZIP=tools\velopack_libc_1.2.0.zip"

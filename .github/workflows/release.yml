@@ -20,7 +20,7 @@ jobs:
 
       - name: Download Velopack SDK
         shell: cmd
-        run: download_velopack_sdk.bat
+        run: scripts\download_velopack_sdk.bat
 
       - name: Install Velopack CLI
         shell: powershell
@@ -32,7 +32,7 @@ jobs:
           BEAN_VELOPACK_UPDATE_URL: https://github.com/ahalabourda/bean/releases
         run: |
           $version = $env:GITHUB_REF_NAME.TrimStart('v')
-          cmd /c "build_and_package_velopack.bat $version"
+          cmd /c "scripts\build_and_package_velopack.bat $version"
 
       - name: Publish GitHub release
         shell: powershell

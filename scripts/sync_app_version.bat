@@ -1,6 +1,6 @@
 @echo off
 setlocal
-pushd "%~dp0"
+pushd "%~dp0.."
 
 set "FULL_VERSION=%~1"
 if not defined FULL_VERSION set "FULL_VERSION=%BEAN_VELOPACK_VERSION%"

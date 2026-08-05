@@ -1,6 +1,6 @@
 @echo off
 setlocal
-pushd "%~dp0"
+pushd "%~dp0.."
 
 set "DRY_RUN=0"
 set "VERSION="
@@ -55,7 +55,7 @@ if not errorlevel 1 (
 if "%DRY_RUN%"=="1" (
   echo [bean] Dry run mode enabled.
   echo [bean] Would run:
-  echo [bean]   sync_app_version.bat %VERSION%
+  echo [bean]   scripts\sync_app_version.bat %VERSION%
   echo [bean]   git add CMakeLists.txt src/app/bean_version.h.in
   echo [bean]   git commit -m "release: %VERSION%"
   echo [bean]   git push origin HEAD
@@ -65,7 +65,7 @@ if "%DRY_RUN%"=="1" (
 )
 
 echo [bean] Syncing app version to %VERSION%...
-call sync_app_version.bat "%VERSION%"
+call "%~dp0sync_app_version.bat" "%VERSION%"
 if errorlevel 1 goto :fail
 
 git add "CMakeLists.txt" "src/app/bean_version.h.in"

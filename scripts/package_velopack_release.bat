@@ -1,6 +1,6 @@
 @echo off
 setlocal
-pushd "%~dp0"
+pushd "%~dp0.."
 
 set "PACK_ID=%BEAN_VELOPACK_PACK_ID%"
 if not defined PACK_ID set "PACK_ID=gg.andrew.bean"
@@ -16,13 +16,13 @@ if not defined PACK_VERSION (
 set "PACK_DIR=dist\alpha-release"
 if not exist "%PACK_DIR%\bean.exe" (
   echo [bean] Velopack release payload not found at "%PACK_DIR%".
-  echo [bean] Run build_and_package_velopack.bat ^<semver-version^> instead.
+  echo [bean] Run scripts\build_and_package_velopack.bat ^<semver-version^> instead.
   goto :fail
 )
 if not exist "%PACK_DIR%\velopack_libc.dll" (
   echo [bean] Velopack runtime is missing from "%PACK_DIR%".
   echo [bean] Refusing to package a non-Velopack build.
-  echo [bean] Run build_and_package_velopack.bat ^<semver-version^> instead.
+  echo [bean] Run scripts\build_and_package_velopack.bat ^<semver-version^> instead.
   goto :fail
 )
 

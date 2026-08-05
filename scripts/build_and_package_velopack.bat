@@ -1,6 +1,6 @@
 @echo off
 setlocal
-pushd "%~dp0"
+pushd "%~dp0.."
 
 set "PACK_VERSION=%~1"
 if not defined PACK_VERSION set "PACK_VERSION=%BEAN_VELOPACK_VERSION%"
@@ -10,12 +10,12 @@ if not defined PACK_VERSION (
   goto :fail
 )
 
-if not exist "sync_app_version.bat" (
+if not exist "%~dp0sync_app_version.bat" (
   echo [bean] Missing helper script sync_app_version.bat.
   goto :fail
 )
 echo [bean] Syncing app version to %PACK_VERSION%...
-call sync_app_version.bat "%PACK_VERSION%"
+call "%~dp0sync_app_version.bat" "%PACK_VERSION%"
 if errorlevel 1 goto :fail
 
 set "SDK_DIR=%BEAN_VELOPACK_SDK_DIR%"
@@ -26,12 +26,12 @@ if not exist "%SDK_DIR%\include\Velopack.h" (
     echo [bean] Set BEAN_VELOPACK_SDK_DIR to a valid SDK path, then retry.
     goto :fail
   )
-  if not exist "download_velopack_sdk.bat" (
+  if not exist "%~dp0download_velopack_sdk.bat" (
     echo [bean] Missing helper script download_velopack_sdk.bat.
     goto :fail
   )
   echo [bean] Bootstrapping Velopack SDK...
-  call download_velopack_sdk.bat
+  call "%~dp0download_velopack_sdk.bat"
   if errorlevel 1 goto :fail
   if not exist "%SDK_DIR%\include\Velopack.h" (
     echo [bean] Velopack SDK bootstrap did not produce "%SDK_DIR%\include\Velopack.h".
@@ -48,11 +48,11 @@ if defined BEAN_VELOPACK_UPDATE_URL (
 )
 
 echo [bean] Building Velopack-enabled release...
-call build_release_app.bat
+call "%~dp0build_release_app.bat"
 if errorlevel 1 goto :fail
 
 echo [bean] Packaging Velopack release...
-call package_velopack_release.bat "%PACK_VERSION%"
+call "%~dp0package_velopack_release.bat" "%PACK_VERSION%"
 if errorlevel 1 goto :fail
 
 echo.

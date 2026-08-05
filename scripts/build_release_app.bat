@@ -1,6 +1,6 @@
 @echo off
 setlocal
-pushd "%~dp0"
+pushd "%~dp0.."
 
 set "BUILD_DIR=%BEAN_BUILD_DIR%"
 if not defined BUILD_DIR set "BUILD_DIR=build-release"
