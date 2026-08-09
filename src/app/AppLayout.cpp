@@ -69,11 +69,21 @@ void LayoutConfigurationPanel(AppContext* ctx, int panelWidth, int)
     y += LayoutMetrics::kRowSpacing;
 
     MoveControl(ctx->recorderPanel, IDC_AUDIO_SCOPE_LABEL, LayoutMetrics::kPanelInset, y, 120, LayoutMetrics::kRowHeight);
-    constexpr int audioScopeGap = 14;
-    const int audioScopeWidth = (std::max)(130, (panelWidth - xEdit - 30 - (audioScopeGap * 2)) / 3);
-    MoveControl(ctx->recorderPanel, IDC_AUDIO_SCOPE_CHECK, xEdit, y, audioScopeWidth, LayoutMetrics::kRowHeight);
-    MoveControl(ctx->recorderPanel, IDC_AUDIO_SCOPE_WOW_DISCORD_RADIO, xEdit + audioScopeWidth + audioScopeGap, y, audioScopeWidth, LayoutMetrics::kRowHeight);
-    MoveControl(ctx->recorderPanel, IDC_AUDIO_SCOPE_ALL_RADIO, xEdit + (audioScopeWidth + audioScopeGap) * 2, y, audioScopeWidth, LayoutMetrics::kRowHeight);
+    constexpr int audioScopeGap = 6;
+    constexpr int audioScopeWowOnlyWidth = 120;
+    constexpr int audioScopeWowDiscordWidth = 175;
+    const int audioScopeAvailableWidth = (std::max)(0, panelWidth - xEdit - 30);
+    const int audioScopeAllDesktopWidth = (std::max)(
+        190,
+        audioScopeAvailableWidth
+            - audioScopeWowOnlyWidth
+            - audioScopeWowDiscordWidth
+            - (audioScopeGap * 2));
+    const int audioScopeWowDiscordX = xEdit + audioScopeWowOnlyWidth + audioScopeGap;
+    const int audioScopeAllDesktopX = audioScopeWowDiscordX + audioScopeWowDiscordWidth + audioScopeGap;
+    MoveControl(ctx->recorderPanel, IDC_AUDIO_SCOPE_CHECK, xEdit, y, audioScopeWowOnlyWidth, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->recorderPanel, IDC_AUDIO_SCOPE_WOW_DISCORD_RADIO, audioScopeWowDiscordX, y, audioScopeWowDiscordWidth, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->recorderPanel, IDC_AUDIO_SCOPE_ALL_RADIO, audioScopeAllDesktopX, y, audioScopeAllDesktopWidth, LayoutMetrics::kRowHeight);
     y += LayoutMetrics::kRowSpacing;
     MoveControl(ctx->recorderPanel, IDC_MICROPHONE_CHECK, xEdit, y, 220, LayoutMetrics::kRowHeight);
     MoveControl(ctx->recorderPanel, IDC_MICROPHONE_NOISE_SUPPRESSION_CHECK, xEdit + 226, y, 220, LayoutMetrics::kRowHeight);

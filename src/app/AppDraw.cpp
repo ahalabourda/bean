@@ -224,7 +224,103 @@ void FillStyledButtonParentBackground(HDC hdc, HWND button, const RECT& buttonRc
     RestoreDC(hdc, savedDc);
 }
 
-void DrawModernToggle(HWND hwnd, HDC dc, const AppContext* ctx)
+void DrawModernRadioGlyph(
+    HDC dc,
+    const RECT& glyph,
+    COLORREF borderColor,
+    COLORREF fillColor,
+    bool checked)
+{
+    const int glyphWidth = glyph.right - glyph.left;
+    const int glyphHeight = glyph.bottom - glyph.top;
+    if (glyphWidth <= 0 || glyphHeight <= 0) {
+        return;
+    }
+
+    if (EnsureAlertGdiplus()) {
+        Gdiplus::Graphics graphics(dc);
+        graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+        graphics.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
+        if (graphics.GetLastStatus() == Gdiplus::Ok) {
+            const auto toGdiPlusColor = [](COLORREF color) {
+                return Gdiplus::Color(
+                    255,
+                    GetRValue(color),
+                    GetGValue(color),
+                    GetBValue(color));
+            };
+            const Gdiplus::RectF outerRect(
+                static_cast<Gdiplus::REAL>(glyph.left) + 0.5f,
+                static_cast<Gdiplus::REAL>(glyph.top) + 0.5f,
+                static_cast<Gdiplus::REAL>(glyphWidth - 1),
+                static_cast<Gdiplus::REAL>(glyphHeight - 1));
+            const Gdiplus::Color outerColor = toGdiPlusColor(fillColor);
+            const Gdiplus::Color ringColor = toGdiPlusColor(borderColor);
+            Gdiplus::SolidBrush outerBrush(outerColor);
+            Gdiplus::Pen ringPen(ringColor, 1.0f);
+            graphics.FillEllipse(&outerBrush, outerRect);
+            graphics.DrawEllipse(&ringPen, outerRect);
+
+            if (checked) {
+                constexpr Gdiplus::REAL dotDiameter = 6.0f;
+                const Gdiplus::RectF dotRect(
+                    static_cast<Gdiplus::REAL>(glyph.left) + (glyphWidth - dotDiameter) / 2.0f,
+                    static_cast<Gdiplus::REAL>(glyph.top) + (glyphHeight - dotDiameter) / 2.0f,
+                    dotDiameter,
+                    dotDiameter);
+                Gdiplus::SolidBrush dotBrush(toGdiPlusColor(kColorButtonText));
+                graphics.FillEllipse(&dotBrush, dotRect);
+            }
+            return;
+        }
+    }
+
+    HPEN borderPen = CreatePen(PS_SOLID, 1, borderColor);
+    HBRUSH fillBrush = CreateSolidBrush(fillColor);
+    HGDIOBJ oldPen = borderPen ? SelectObject(dc, borderPen) : nullptr;
+    HGDIOBJ oldBrush = fillBrush ? SelectObject(dc, fillBrush) : nullptr;
+    Ellipse(dc, glyph.left, glyph.top, glyph.right, glyph.bottom);
+    if (oldBrush) {
+        SelectObject(dc, oldBrush);
+    }
+    if (oldPen) {
+        SelectObject(dc, oldPen);
+    }
+    if (fillBrush) {
+        DeleteObject(fillBrush);
+    }
+    if (borderPen) {
+        DeleteObject(borderPen);
+    }
+    if (checked) {
+        const int dotSize = 6;
+        const int dotCenterX = (glyph.left + glyph.right) / 2;
+        const int dotCenterY = (glyph.top + glyph.bottom) / 2;
+        HBRUSH dotBrush = CreateSolidBrush(kColorButtonText);
+        if (dotBrush) {
+            HGDIOBJ oldDotBrush = SelectObject(dc, dotBrush);
+            HPEN dotPen = CreatePen(PS_SOLID, 1, kColorButtonText);
+            HGDIOBJ oldDotPen = dotPen ? SelectObject(dc, dotPen) : nullptr;
+            Ellipse(
+                dc,
+                dotCenterX - dotSize / 2,
+                dotCenterY - dotSize / 2,
+                dotCenterX + dotSize / 2,
+                dotCenterY + dotSize / 2);
+            if (oldDotPen) {
+                SelectObject(dc, oldDotPen);
+            }
+            if (dotPen) {
+                DeleteObject(dotPen);
+            }
+            SelectObject(dc, oldDotBrush);
+            DeleteObject(dotBrush);
+        }
+    }
+}
+
+void DrawModernToggleContent(HWND hwnd, HDC dc, const AppContext* ctx)
 {
     if (!hwnd || !dc) {
         return;
@@ -261,49 +357,27 @@ void DrawModernToggle(HWND hwnd, HDC dc, const AppContext* ctx)
     const int glyphTop = centerY - glyphSize / 2;
     RECT glyph{glyphLeft, glyphTop, glyphLeft + glyphSize, glyphTop + glyphSize};
 
-    HPEN borderPen = CreatePen(PS_SOLID, focused ? 2 : 1, borderColor);
-    HBRUSH fillBrush = CreateSolidBrush(fillColor);
-    HGDIOBJ oldPen = borderPen ? SelectObject(dc, borderPen) : nullptr;
-    HGDIOBJ oldBrush = fillBrush ? SelectObject(dc, fillBrush) : nullptr;
     if (isRadio) {
-        Ellipse(dc, glyph.left, glyph.top, glyph.right, glyph.bottom);
+        DrawModernRadioGlyph(dc, glyph, borderColor, fillColor, checked);
     } else {
+        HPEN borderPen = CreatePen(PS_SOLID, focused ? 2 : 1, borderColor);
+        HBRUSH fillBrush = CreateSolidBrush(fillColor);
+        HGDIOBJ oldPen = borderPen ? SelectObject(dc, borderPen) : nullptr;
+        HGDIOBJ oldBrush = fillBrush ? SelectObject(dc, fillBrush) : nullptr;
         Rectangle(dc, glyph.left, glyph.top, glyph.right, glyph.bottom);
-    }
-    if (oldBrush) {
-        SelectObject(dc, oldBrush);
-    }
-    if (oldPen) {
-        SelectObject(dc, oldPen);
-    }
-    if (fillBrush) {
-        DeleteObject(fillBrush);
-    }
-    if (borderPen) {
-        DeleteObject(borderPen);
-    }
-
-    if (checked) {
-        if (isRadio) {
-            const int dotSize = 6;
-            const int dotCenterX = (glyph.left + glyph.right) / 2;
-            const int dotLeft = dotCenterX - dotSize / 2;
-            HBRUSH dotBrush = CreateSolidBrush(kColorButtonText);
-            if (dotBrush) {
-                HGDIOBJ oldDotBrush = SelectObject(dc, dotBrush);
-                HPEN dotPen = CreatePen(PS_SOLID, 1, kColorButtonText);
-                HGDIOBJ oldDotPen = dotPen ? SelectObject(dc, dotPen) : nullptr;
-                Ellipse(dc, dotLeft, centerY - dotSize / 2, dotLeft + dotSize, centerY + dotSize / 2);
-                if (oldDotPen) {
-                    SelectObject(dc, oldDotPen);
-                }
-                if (dotPen) {
-                    DeleteObject(dotPen);
-                }
-                SelectObject(dc, oldDotBrush);
-                DeleteObject(dotBrush);
-            }
-        } else {
+        if (oldBrush) {
+            SelectObject(dc, oldBrush);
+        }
+        if (oldPen) {
+            SelectObject(dc, oldPen);
+        }
+        if (fillBrush) {
+            DeleteObject(fillBrush);
+        }
+        if (borderPen) {
+            DeleteObject(borderPen);
+        }
+        if (checked) {
             HPEN checkPen = CreatePen(PS_SOLID, 2, kColorButtonText);
             HGDIOBJ oldCheckPen = checkPen ? SelectObject(dc, checkPen) : nullptr;
             MoveToEx(dc, glyph.left + 3, centerY, nullptr);
@@ -331,21 +405,40 @@ void DrawModernToggle(HWND hwnd, HDC dc, const AppContext* ctx)
         SelectObject(dc, oldFont);
     }
 
-    if (focused) {
-        HPEN focusPen = CreatePen(PS_SOLID, 1, kThemeColors.accentBright);
-        HGDIOBJ oldFocusPen = focusPen ? SelectObject(dc, focusPen) : nullptr;
-        HGDIOBJ oldFocusBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
-        Rectangle(dc, rc.left + 2, rc.top + 2, rc.right - 2, rc.bottom - 2);
-        if (oldFocusBrush) {
-            SelectObject(dc, oldFocusBrush);
-        }
-        if (oldFocusPen) {
-            SelectObject(dc, oldFocusPen);
-        }
-        if (focusPen) {
-            DeleteObject(focusPen);
-        }
+}
+
+void DrawModernToggle(HWND hwnd, HDC dc, const AppContext* ctx)
+{
+    if (!hwnd || !dc) {
+        return;
     }
+
+    RECT rc{};
+    GetClientRect(hwnd, &rc);
+    const int width = rc.right - rc.left;
+    const int height = rc.bottom - rc.top;
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+
+    HDC bufferDc = CreateCompatibleDC(dc);
+    HBITMAP bufferBitmap = bufferDc ? CreateCompatibleBitmap(dc, width, height) : nullptr;
+    if (!bufferDc || !bufferBitmap) {
+        if (bufferDc) {
+            DeleteDC(bufferDc);
+        }
+        DrawModernToggleContent(hwnd, dc, ctx);
+        return;
+    }
+
+    HGDIOBJ oldBitmap = SelectObject(bufferDc, bufferBitmap);
+    DrawModernToggleContent(hwnd, bufferDc, ctx);
+    BitBlt(dc, 0, 0, width, height, bufferDc, 0, 0, SRCCOPY);
+    if (oldBitmap) {
+        SelectObject(bufferDc, oldBitmap);
+    }
+    DeleteObject(bufferBitmap);
+    DeleteDC(bufferDc);
 }
 
 void DrawModernComboChrome(HWND hwnd, HDC dc)
@@ -475,6 +568,7 @@ LRESULT CALLBACK ModernToggleSubclassProc(HWND hwnd, UINT message, WPARAM wParam
     case BM_SETCHECK:
     case WM_LBUTTONDOWN:
     case WM_LBUTTONUP:
+    case WM_LBUTTONDBLCLK:
     case WM_CAPTURECHANGED: {
         LRESULT result = DefSubclassProc(hwnd, message, wParam, lParam);
         InvalidateRect(hwnd, nullptr, FALSE);
