@@ -240,7 +240,7 @@ void DrawClipsSlider(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx, bool
         return;
     }
 
-    HBRUSH trackBrush = CreateSolidBrush(RGB(13, 18, 29));
+    HBRUSH trackBrush = CreateSolidBrush(kThemeColors.sliderTrack);
     if (trackBrush) {
         FillRect(drawInfo->hDC, &track, trackBrush);
         DeleteObject(trackBrush);
@@ -275,14 +275,14 @@ void DrawClipsSlider(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx, bool
                     (std::clamp)(selectedRight, trackLeft, trackRight),
                     track.bottom - 1};
                 if (selectedRect.right > selectedRect.left) {
-                    HBRUSH selectedBrush = CreateSolidBrush(RGB(73, 103, 166));
+                    HBRUSH selectedBrush = CreateSolidBrush(kThemeColors.sliderSelection);
                     if (selectedBrush) {
                         FillRect(drawInfo->hDC, &selectedRect, selectedBrush);
                         DeleteObject(selectedBrush);
                     }
                 }
 
-                HPEN markerPen = CreatePen(PS_SOLID, 1, RGB(189, 214, 255));
+                HPEN markerPen = CreatePen(PS_SOLID, 1, kThemeColors.sliderMarker);
                 HGDIOBJ oldMarkerPen = markerPen ? SelectObject(drawInfo->hDC, markerPen) : nullptr;
                 const int markerTop = track.top - 2;
                 const int markerBottom = track.bottom + 2;
@@ -310,7 +310,7 @@ void DrawClipsSlider(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx, bool
     const int thumbCenter = minCenter + static_cast<int>((static_cast<long long>(sliderValue) * (maxCenter - minCenter)) / (std::max)(1, sliderMax));
     const int thumbLeft = thumbCenter - (thumbWidth / 2);
     RECT thumb{thumbLeft, track.top - 2, thumbLeft + thumbWidth, track.bottom + 2};
-    HBRUSH thumbBrush = CreateSolidBrush(RGB(233, 239, 251));
+    HBRUSH thumbBrush = CreateSolidBrush(kThemeColors.sliderThumb);
     if (thumbBrush) {
         FillRect(drawInfo->hDC, &thumb, thumbBrush);
         DeleteObject(thumbBrush);
@@ -2231,7 +2231,7 @@ void DrawChatPrivacyPreview(const DRAWITEMSTRUCT* drawInfo, AppContext* ctx)
         content.top + (contentHeight - previewHeight) / 2 + previewHeight};
 
     if (previewPausedDuringRecording) {
-        HBRUSH pausedBrush = CreateSolidBrush(RGB(24, 30, 44));
+        HBRUSH pausedBrush = CreateSolidBrush(kThemeColors.controlDisabledBackground);
         if (pausedBrush) {
             FillRect(paintDc, &previewRect, pausedBrush);
             DeleteObject(pausedBrush);
@@ -2268,7 +2268,7 @@ void DrawChatPrivacyPreview(const DRAWITEMSTRUCT* drawInfo, AppContext* ctx)
     }
 
     if (!drewPreview) {
-        HBRUSH fallbackBrush = CreateSolidBrush(RGB(24, 30, 44));
+        HBRUSH fallbackBrush = CreateSolidBrush(kThemeColors.controlDisabledBackground);
         if (fallbackBrush) {
             FillRect(paintDc, &previewRect, fallbackBrush);
             DeleteObject(fallbackBrush);
@@ -4772,7 +4772,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         y += rowSpacing;
 
         CreateWindowW(L"STATIC", L"Video Encoder:", WS_VISIBLE | WS_CHILD, xLabel, y, labelWidth, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_ENCODER_LABEL), nullptr, nullptr);
-        ctx->encoderCombo = CreateWindowW(L"COMBOBOX", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | WS_TABSTOP, xEdit, y, 230, 140, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_ENCODER_COMBO), nullptr, nullptr);
+        ctx->encoderCombo = CreateWindowW(L"COMBOBOX", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP, xEdit, y, 230, 140, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_ENCODER_COMBO), nullptr, nullptr);
         SendMessageW(ctx->encoderCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"GPU (Auto)"));
         SendMessageW(ctx->encoderCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"NVIDIA NVENC"));
         SendMessageW(ctx->encoderCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"AMD AMF"));
@@ -4781,7 +4781,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         y += rowSpacing;
 
         CreateWindowW(L"STATIC", L"Video Quality:", WS_VISIBLE | WS_CHILD, xLabel, y, labelWidth, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_PRESET_LABEL), nullptr, nullptr);
-        ctx->presetCombo = CreateWindowW(L"COMBOBOX", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | WS_TABSTOP, xEdit, y, 180, 180, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_PRESET_COMBO), nullptr, nullptr);
+        ctx->presetCombo = CreateWindowW(L"COMBOBOX", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP, xEdit, y, 180, 180, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_PRESET_COMBO), nullptr, nullptr);
         SendMessageW(ctx->presetCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Ultra"));
         SendMessageW(ctx->presetCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"High"));
         SendMessageW(ctx->presetCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Medium"));
@@ -4801,7 +4801,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             nullptr);
         SetWindowSubclass(ctx->presetHelpIcon, HoverTooltipSubclassProc, 1, reinterpret_cast<DWORD_PTR>(ctx));
         CreateWindowW(L"STATIC", L"Container:", WS_VISIBLE | WS_CHILD, xLabel + 260, y, 80, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_CONTAINER_LABEL), nullptr, nullptr);
-        ctx->containerCombo = CreateWindowW(L"COMBOBOX", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | WS_TABSTOP, xLabel + 346, y, 120, 120, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_CONTAINER_COMBO), nullptr, nullptr);
+        ctx->containerCombo = CreateWindowW(L"COMBOBOX", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP, xLabel + 346, y, 120, 120, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_CONTAINER_COMBO), nullptr, nullptr);
         SendMessageW(ctx->containerCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"mkv"));
         SendMessageW(ctx->containerCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"mp4"));
         y += rowSpacing;
@@ -4874,7 +4874,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ctx->microphoneCombo = CreateWindowW(
             L"COMBOBOX",
             L"",
-            WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | WS_TABSTOP,
+            WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP,
             xEdit,
             y,
             486,
@@ -4888,7 +4888,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ctx->recordingResolutionCombo = CreateWindowW(
             L"COMBOBOX",
             L"",
-            WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | WS_TABSTOP,
+            WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP,
             xLabel + 130,
             y,
             290,
@@ -5152,7 +5152,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ctx->chatBlockerImageCombo = CreateWindowW(
             L"COMBOBOX",
             L"",
-            WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | WS_TABSTOP,
+            WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP,
             134,
             88,
             464,
@@ -5168,7 +5168,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ctx->chatBlockerHeightEdit = CreateWindowW(L"EDIT", L"300", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER | WS_TABSTOP, 352, 122, 90, rowHeight, ctx->chatPrivacyPanel, reinterpret_cast<HMENU>(IDC_CHAT_BLOCKER_HEIGHT_EDIT), nullptr, nullptr);
         EnableCtrlASelectAll(ctx->chatBlockerHeightEdit);
         CreateWindowW(L"STATIC", L"Anchor Corner:", WS_VISIBLE | WS_CHILD, 20, 156, 110, rowHeight, ctx->chatPrivacyPanel, reinterpret_cast<HMENU>(IDC_CHAT_BLOCKER_ANCHOR_LABEL), nullptr, nullptr);
-        ctx->chatBlockerAnchorCombo = CreateWindowW(L"COMBOBOX", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | WS_TABSTOP, 134, 156, 180, 120, ctx->chatPrivacyPanel, reinterpret_cast<HMENU>(IDC_CHAT_BLOCKER_ANCHOR_COMBO), nullptr, nullptr);
+        ctx->chatBlockerAnchorCombo = CreateWindowW(L"COMBOBOX", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP, 134, 156, 180, 120, ctx->chatPrivacyPanel, reinterpret_cast<HMENU>(IDC_CHAT_BLOCKER_ANCHOR_COMBO), nullptr, nullptr);
         SendMessageW(ctx->chatBlockerAnchorCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Bottom Left"));
         SendMessageW(ctx->chatBlockerAnchorCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Bottom Right"));
         SendMessageW(ctx->chatBlockerAnchorCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Top Left"));
@@ -5307,7 +5307,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ctx->youtubeTitleEdit = CreateWindowW(L"EDIT", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL, 150, 20, 370, rowHeight, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_TITLE_EDIT), nullptr, nullptr);
         EnableCtrlASelectAll(ctx->youtubeTitleEdit);
         CreateWindowW(L"STATIC", L"Visibility:", WS_VISIBLE | WS_CHILD, 540, 20, 70, rowHeight, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_PRIVACY_LABEL), nullptr, nullptr);
-        ctx->youtubePrivacyCombo = CreateWindowW(L"COMBOBOX", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST, 612, 20, 148, 120, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_PRIVACY_COMBO), nullptr, nullptr);
+        ctx->youtubePrivacyCombo = CreateWindowW(L"COMBOBOX", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS, 612, 20, 148, 120, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_PRIVACY_COMBO), nullptr, nullptr);
         SendMessageW(ctx->youtubePrivacyCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"private"));
         SendMessageW(ctx->youtubePrivacyCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"unlisted"));
         SendMessageW(ctx->youtubePrivacyCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"public"));
@@ -5335,7 +5335,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ctx->clipsSourceCombo = CreateWindowW(
             L"COMBOBOX",
             L"",
-            WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP,
+            WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP,
             134,
             20,
             520,
@@ -5482,6 +5482,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         CreateWindowW(L"STATIC", kAboutFlavorText, WS_VISIBLE | WS_CHILD | SS_CENTER, 20, 290, 740, rowHeight, ctx->aboutPanel, reinterpret_cast<HMENU>(IDC_ABOUT_FLAVOR_TEXT), nullptr, nullptr);
 
         ConfigureStyledButtons(ctx);
+        ConfigureModernControls(ctx);
         ApplyUiFonts(hwnd);
         ApplyRecordingsFonts(ctx);
         HWND autoSaveHint = GetDlgItem(ctx->recorderPanel, IDC_CONFIGURATION_AUTOSAVE_HINT);
@@ -5560,6 +5561,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         }
         break;
     case WM_COMMAND:
+        if (ctx
+            && (HIWORD(wParam) == CBN_SELCHANGE || HIWORD(wParam) == CBN_CLOSEUP)
+            && IsStyledComboId(static_cast<int>(LOWORD(wParam)))) {
+            // Let the native combo finish its selection transaction first,
+            // then repaint the custom closed-state item from the queue.
+            ScheduleModernComboRedraw(reinterpret_cast<HWND>(lParam));
+        }
         if (HIWORD(wParam) == EN_CHANGE && (LOWORD(wParam) == IDC_OUTPUT_EDIT || LOWORD(wParam) == IDC_LOG_EDIT)) {
             RefreshFolderAvailability(ctx);
             if (ctx) {
@@ -5809,6 +5817,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         if (!drawInfo) {
             break;
         }
+        if (drawInfo->CtlType == ODT_COMBOBOX && IsStyledComboId(static_cast<int>(drawInfo->CtlID))) {
+            DrawStyledComboItem(drawInfo);
+            return TRUE;
+        }
         if (drawInfo->CtlType == ODT_BUTTON && IsStyledButtonId(static_cast<int>(drawInfo->CtlID))) {
             DrawStyledButton(drawInfo, ctx);
             return TRUE;
@@ -5925,7 +5937,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             return reinterpret_cast<LRESULT>(gTheme.panelSolidBrush ? gTheme.panelSolidBrush : reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
         }
         // Owner-draw styled buttons paint their own background from the parent
-        // gradient; avoid a solid buttonBrush flash behind the rounded rect.
+        // gradient; avoid a solid buttonBrush flash behind the rectangular button.
         if (IsStyledButtonId(id)) {
             SetBkMode(dc, TRANSPARENT);
             return reinterpret_cast<LRESULT>(GetStockObject(NULL_BRUSH));

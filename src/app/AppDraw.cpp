@@ -6,11 +6,13 @@
 
 #include <commctrl.h>
 #include <gdiplus.h>
+#include <uxtheme.h>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <sstream>
+#include <utility>
 
 #pragma comment(lib, "Gdiplus.lib")
 
@@ -19,8 +21,11 @@ VisualTheme gTheme;
 namespace {
 
 HWND gHoveredStyledButton = nullptr;
+HWND gHoveredModernToggle = nullptr;
+HWND gHoveredModernCombo = nullptr;
 HWND gHoveredHelpIcon = nullptr;
 ULONG_PTR gAlertGdiplusToken = 0;
+constexpr UINT kRefreshModernComboMessage = WM_APP + 120;
 
 bool EnsureAlertGdiplus()
 {
@@ -152,8 +157,8 @@ COLORREF LerpColor(COLORREF a, COLORREF b, float t)
         lerpChannel(GetBValue(a), GetBValue(b)));
 }
 
-// Clears the square behind rounded buttons using the same vertical gradient as the
-// parent (window or panel), so corner pixels match the surrounding background.
+// Clears the square behind custom buttons using the same vertical gradient as the
+// parent (window or panel), so the button background matches its surroundings.
 void FillStyledButtonParentBackground(HDC hdc, HWND button, const RECT& buttonRc, HWND mainWindow)
 {
     if (!hdc || !button) {
@@ -217,6 +222,343 @@ void FillStyledButtonParentBackground(HDC hdc, HWND button, const RECT& buttonRc
     }
 
     RestoreDC(hdc, savedDc);
+}
+
+void DrawModernToggle(HWND hwnd, HDC dc, const AppContext* ctx)
+{
+    if (!hwnd || !dc) {
+        return;
+    }
+
+    RECT rc{};
+    GetClientRect(hwnd, &rc);
+    FillStyledButtonParentBackground(dc, hwnd, rc, ctx ? ctx->mainWindow : nullptr);
+
+    const int controlId = GetDlgCtrlID(hwnd);
+    const bool isRadio = controlId == IDC_AUDIO_SCOPE_CHECK
+        || controlId == IDC_AUDIO_SCOPE_WOW_DISCORD_RADIO
+        || controlId == IDC_AUDIO_SCOPE_ALL_RADIO
+        || controlId == IDC_CHAT_BLOCKER_IMAGE_BLANK_RADIO
+        || controlId == IDC_CHAT_BLOCKER_IMAGE_CUSTOM_RADIO;
+    const bool checked = SendMessageW(hwnd, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    const bool pressed = (SendMessageW(hwnd, BM_GETSTATE, 0, 0) & BST_PUSHED) != 0;
+    const bool enabled = IsWindowEnabled(hwnd) != FALSE;
+    const bool hovered = gHoveredModernToggle == hwnd;
+    const bool focused = GetFocus() == hwnd;
+
+    const COLORREF borderColor = !enabled
+        ? kThemeColors.controlDisabledBorder
+        : (focused ? kThemeColors.accentBright : (hovered ? kThemeColors.controlHoverBorder : kColorInputBorder));
+    const COLORREF fillColor = !enabled
+        ? kThemeColors.controlDisabledBackground
+        : (checked ? (pressed ? kThemeColors.controlPressedBackground : kThemeColors.accent)
+                   : (pressed ? kThemeColors.controlHoverBackground : kColorInputBg));
+    const COLORREF textColor = !enabled ? kThemeColors.controlDisabledText : kColorTextPrimary;
+
+    const int centerY = (rc.top + rc.bottom) / 2;
+    const int glyphSize = isRadio ? 16 : 15;
+    const int glyphLeft = 7;
+    const int glyphTop = centerY - glyphSize / 2;
+    RECT glyph{glyphLeft, glyphTop, glyphLeft + glyphSize, glyphTop + glyphSize};
+
+    HPEN borderPen = CreatePen(PS_SOLID, focused ? 2 : 1, borderColor);
+    HBRUSH fillBrush = CreateSolidBrush(fillColor);
+    HGDIOBJ oldPen = borderPen ? SelectObject(dc, borderPen) : nullptr;
+    HGDIOBJ oldBrush = fillBrush ? SelectObject(dc, fillBrush) : nullptr;
+    if (isRadio) {
+        Ellipse(dc, glyph.left, glyph.top, glyph.right, glyph.bottom);
+    } else {
+        Rectangle(dc, glyph.left, glyph.top, glyph.right, glyph.bottom);
+    }
+    if (oldBrush) {
+        SelectObject(dc, oldBrush);
+    }
+    if (oldPen) {
+        SelectObject(dc, oldPen);
+    }
+    if (fillBrush) {
+        DeleteObject(fillBrush);
+    }
+    if (borderPen) {
+        DeleteObject(borderPen);
+    }
+
+    if (checked) {
+        if (isRadio) {
+            const int dotSize = 6;
+            const int dotCenterX = (glyph.left + glyph.right) / 2;
+            const int dotLeft = dotCenterX - dotSize / 2;
+            HBRUSH dotBrush = CreateSolidBrush(kColorButtonText);
+            if (dotBrush) {
+                HGDIOBJ oldDotBrush = SelectObject(dc, dotBrush);
+                HPEN dotPen = CreatePen(PS_SOLID, 1, kColorButtonText);
+                HGDIOBJ oldDotPen = dotPen ? SelectObject(dc, dotPen) : nullptr;
+                Ellipse(dc, dotLeft, centerY - dotSize / 2, dotLeft + dotSize, centerY + dotSize / 2);
+                if (oldDotPen) {
+                    SelectObject(dc, oldDotPen);
+                }
+                if (dotPen) {
+                    DeleteObject(dotPen);
+                }
+                SelectObject(dc, oldDotBrush);
+                DeleteObject(dotBrush);
+            }
+        } else {
+            HPEN checkPen = CreatePen(PS_SOLID, 2, kColorButtonText);
+            HGDIOBJ oldCheckPen = checkPen ? SelectObject(dc, checkPen) : nullptr;
+            MoveToEx(dc, glyph.left + 3, centerY, nullptr);
+            LineTo(dc, glyph.left + 6, glyph.bottom - 3);
+            LineTo(dc, glyph.right - 3, glyph.top + 3);
+            if (oldCheckPen) {
+                SelectObject(dc, oldCheckPen);
+            }
+            if (checkPen) {
+                DeleteObject(checkPen);
+            }
+        }
+    }
+
+    wchar_t textBuffer[256] = {};
+    GetWindowTextW(hwnd, textBuffer, static_cast<int>(std::size(textBuffer)));
+    RECT textRect = rc;
+    textRect.left = glyph.right + 7;
+    textRect.right -= 4;
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, textColor);
+    HGDIOBJ oldFont = gTheme.uiFont ? SelectObject(dc, gTheme.uiFont) : nullptr;
+    DrawTextW(dc, textBuffer, -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    if (oldFont) {
+        SelectObject(dc, oldFont);
+    }
+
+    if (focused) {
+        HPEN focusPen = CreatePen(PS_SOLID, 1, kThemeColors.accentBright);
+        HGDIOBJ oldFocusPen = focusPen ? SelectObject(dc, focusPen) : nullptr;
+        HGDIOBJ oldFocusBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+        Rectangle(dc, rc.left + 2, rc.top + 2, rc.right - 2, rc.bottom - 2);
+        if (oldFocusBrush) {
+            SelectObject(dc, oldFocusBrush);
+        }
+        if (oldFocusPen) {
+            SelectObject(dc, oldFocusPen);
+        }
+        if (focusPen) {
+            DeleteObject(focusPen);
+        }
+    }
+}
+
+void DrawModernComboChrome(HWND hwnd, HDC dc)
+{
+    if (!hwnd || !dc) {
+        return;
+    }
+
+    RECT rc{};
+    GetClientRect(hwnd, &rc);
+    if (rc.right <= rc.left || rc.bottom <= rc.top) {
+        return;
+    }
+    const bool enabled = IsWindowEnabled(hwnd) != FALSE;
+    const bool hovered = gHoveredModernCombo == hwnd;
+    const bool focused = GetFocus() == hwnd;
+    const int arrowWidth = 27;
+    RECT arrowRect{(std::max)(rc.left, rc.right - arrowWidth), rc.top + 1, rc.right - 1, rc.bottom - 1};
+
+    HBRUSH arrowBrush = CreateSolidBrush(enabled ? kColorInputBg : kThemeColors.controlDisabledBackground);
+    if (arrowBrush) {
+        FillRect(dc, &arrowRect, arrowBrush);
+        DeleteObject(arrowBrush);
+    }
+
+    const COLORREF borderColor = !enabled
+        ? kThemeColors.controlDisabledBorder
+        : (focused ? kThemeColors.accentBright : (hovered ? kThemeColors.controlHoverBorder : kColorInputBorder));
+    const int borderThickness = focused ? 2 : 1;
+    HBRUSH borderBrush = CreateSolidBrush(borderColor);
+    if (borderBrush) {
+        RECT topBorder{rc.left, rc.top, rc.right, rc.top + borderThickness};
+        RECT bottomBorder{rc.left, rc.bottom - borderThickness, rc.right, rc.bottom};
+        RECT leftBorder{rc.left, rc.top + borderThickness, rc.left + borderThickness, rc.bottom - borderThickness};
+        RECT rightBorder{rc.right - borderThickness, rc.top + borderThickness, rc.right, rc.bottom - borderThickness};
+        FillRect(dc, &topBorder, borderBrush);
+        FillRect(dc, &bottomBorder, borderBrush);
+        FillRect(dc, &leftBorder, borderBrush);
+        FillRect(dc, &rightBorder, borderBrush);
+        DeleteObject(borderBrush);
+    }
+
+    const int centerX = (arrowRect.left + arrowRect.right) / 2;
+    const int centerY = (arrowRect.top + arrowRect.bottom) / 2;
+    HPEN arrowPen = CreatePen(PS_SOLID, 2, enabled ? kThemeColors.accentBright : kThemeColors.controlDisabledText);
+    HGDIOBJ oldArrowPen = arrowPen ? SelectObject(dc, arrowPen) : nullptr;
+    MoveToEx(dc, centerX - 5, centerY - 2, nullptr);
+    LineTo(dc, centerX, centerY + 3);
+    LineTo(dc, centerX + 5, centerY - 2);
+    if (oldArrowPen) {
+        SelectObject(dc, oldArrowPen);
+    }
+    if (arrowPen) {
+        DeleteObject(arrowPen);
+    }
+}
+
+void DrawModernCombo(HWND hwnd, HDC dc)
+{
+    if (!hwnd || !dc) {
+        return;
+    }
+
+    RECT rc{};
+    GetClientRect(hwnd, &rc);
+    DRAWITEMSTRUCT drawInfo{};
+    drawInfo.CtlType = ODT_COMBOBOX;
+    drawInfo.hDC = dc;
+    drawInfo.hwndItem = hwnd;
+    drawInfo.itemID = static_cast<UINT>(SendMessageW(hwnd, CB_GETCURSEL, 0, 0));
+    drawInfo.itemState = ODS_COMBOBOXEDIT;
+    drawInfo.rcItem = rc;
+    DrawStyledComboItem(&drawInfo);
+    DrawModernComboChrome(hwnd, dc);
+}
+
+void RefreshModernCombo(HWND hwnd)
+{
+    if (!hwnd) {
+        return;
+    }
+    RedrawWindow(hwnd, nullptr, nullptr,
+        RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_UPDATENOW);
+}
+
+LRESULT CALLBACK ModernToggleSubclassProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR refData)
+{
+    auto* ctx = reinterpret_cast<AppContext*>(refData);
+    switch (message) {
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(hwnd, &paint);
+        DrawModernToggle(hwnd, dc, ctx);
+        EndPaint(hwnd, &paint);
+        return 0;
+    }
+    case WM_PRINTCLIENT:
+        DrawModernToggle(hwnd, reinterpret_cast<HDC>(wParam), ctx);
+        return 0;
+    case WM_MOUSEMOVE: {
+        if (gHoveredModernToggle != hwnd) {
+            HWND previous = gHoveredModernToggle;
+            gHoveredModernToggle = hwnd;
+            if (previous && IsWindow(previous)) {
+                InvalidateRect(previous, nullptr, FALSE);
+            }
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        TRACKMOUSEEVENT track{};
+        track.cbSize = sizeof(track);
+        track.dwFlags = TME_LEAVE;
+        track.hwndTrack = hwnd;
+        TrackMouseEvent(&track);
+        break;
+    }
+    case WM_MOUSELEAVE:
+        if (gHoveredModernToggle == hwnd) {
+            gHoveredModernToggle = nullptr;
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        break;
+    case WM_SETFOCUS:
+    case WM_KILLFOCUS:
+    case WM_ENABLE:
+    case BM_SETCHECK:
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP:
+    case WM_CAPTURECHANGED: {
+        LRESULT result = DefSubclassProc(hwnd, message, wParam, lParam);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        UpdateWindow(hwnd);
+        return result;
+    }
+    case WM_NCDESTROY:
+        if (gHoveredModernToggle == hwnd) {
+            gHoveredModernToggle = nullptr;
+        }
+        RemoveWindowSubclass(hwnd, ModernToggleSubclassProc, 1);
+        break;
+    default:
+        break;
+    }
+    return DefSubclassProc(hwnd, message, wParam, lParam);
+}
+
+LRESULT CALLBACK ModernComboSubclassProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR)
+{
+    switch (message) {
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(hwnd, &paint);
+        DrawModernCombo(hwnd, dc);
+        EndPaint(hwnd, &paint);
+        return 0;
+    }
+    case WM_PRINTCLIENT:
+        DrawModernCombo(hwnd, reinterpret_cast<HDC>(wParam));
+        return 0;
+    case WM_NCPAINT:
+        return 0;
+    case kRefreshModernComboMessage:
+        RefreshModernCombo(hwnd);
+        return 0;
+    case WM_MOUSEMOVE: {
+        if (gHoveredModernCombo != hwnd) {
+            HWND previous = gHoveredModernCombo;
+            gHoveredModernCombo = hwnd;
+            if (previous && IsWindow(previous)) {
+                InvalidateRect(previous, nullptr, FALSE);
+            }
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        TRACKMOUSEEVENT track{};
+        track.cbSize = sizeof(track);
+        track.dwFlags = TME_LEAVE;
+        track.hwndTrack = hwnd;
+        TrackMouseEvent(&track);
+        break;
+    }
+    case WM_MOUSELEAVE:
+        if (gHoveredModernCombo == hwnd) {
+            gHoveredModernCombo = nullptr;
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        break;
+    case WM_SETFOCUS:
+    case WM_KILLFOCUS:
+    case WM_ENABLE:
+    case CB_SETCURSEL: {
+        LRESULT result = DefSubclassProc(hwnd, message, wParam, lParam);
+        RefreshModernCombo(hwnd);
+        return result;
+    }
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP: {
+        LRESULT result = DefSubclassProc(hwnd, message, wParam, lParam);
+        RefreshModernCombo(hwnd);
+        return result;
+    }
+    case WM_NCDESTROY:
+        if (gHoveredModernCombo == hwnd) {
+            gHoveredModernCombo = nullptr;
+        }
+        RemoveWindowSubclass(hwnd, ModernComboSubclassProc, 1);
+        break;
+    default:
+        break;
+    }
+    return DefSubclassProc(hwnd, message, wParam, lParam);
 }
 
 const wchar_t* GetHelpTooltipTextForControl(const AppContext* ctx, HWND control)
@@ -373,6 +715,13 @@ void PaintRecordingsHeader(HWND header, HDC hdc)
 }
 
 } // namespace
+
+void ScheduleModernComboRedraw(HWND combo)
+{
+    if (combo) {
+        PostMessageW(combo, kRefreshModernComboMessage, 0, 0);
+    }
+}
 
 namespace {
 
@@ -550,10 +899,10 @@ void EnsureThemeResources()
         gTheme.listGridPen = CreatePen(PS_SOLID, 1, kColorListGrid);
     }
     if (!gTheme.mutedDotPen) {
-        gTheme.mutedDotPen = CreatePen(PS_SOLID, 1, RGB(138, 151, 183));
+        gTheme.mutedDotPen = CreatePen(PS_SOLID, 1, kThemeColors.mutedDot);
     }
     if (!gTheme.recordingDotPen) {
-        gTheme.recordingDotPen = CreatePen(PS_SOLID, 1, RGB(255, 112, 130));
+        gTheme.recordingDotPen = CreatePen(PS_SOLID, 1, kThemeColors.recordingDot);
     }
     if (!gTheme.successBrush) {
         gTheme.successBrush = CreateSolidBrush(kColorSuccess);
@@ -562,10 +911,10 @@ void EnsureThemeResources()
         gTheme.failureBrush = CreateSolidBrush(kColorFailure);
     }
     if (!gTheme.mutedDotBrush) {
-        gTheme.mutedDotBrush = CreateSolidBrush(RGB(45, 53, 76));
+        gTheme.mutedDotBrush = CreateSolidBrush(kThemeColors.controlTabBorder);
     }
     if (!gTheme.recordingDotBrush) {
-        gTheme.recordingDotBrush = CreateSolidBrush(RGB(255, 112, 130));
+        gTheme.recordingDotBrush = CreateSolidBrush(kThemeColors.recordingDot);
     }
 }
 
@@ -730,6 +1079,24 @@ bool IsStyledButtonId(int controlId)
     }
 }
 
+bool IsStyledComboId(int controlId)
+{
+    switch (controlId) {
+    case IDC_ENCODER_COMBO:
+    case IDC_PRESET_COMBO:
+    case IDC_CONTAINER_COMBO:
+    case IDC_MICROPHONE_COMBO:
+    case IDC_RECORDING_RESOLUTION_COMBO:
+    case IDC_CHAT_BLOCKER_IMAGE_COMBO:
+    case IDC_CHAT_BLOCKER_ANCHOR_COMBO:
+    case IDC_YOUTUBE_PRIVACY_COMBO:
+    case IDC_CLIPS_SOURCE_COMBO:
+        return true;
+    default:
+        return false;
+    }
+}
+
 bool IsStatusLightId(int controlId)
 {
     return controlId == IDC_MONITOR_ICON
@@ -810,6 +1177,119 @@ void ConfigureStyledButtons(AppContext* ctx)
     }
 }
 
+void ConfigureModernControls(AppContext* ctx)
+{
+    if (!ctx) {
+        return;
+    }
+
+    const std::array<std::pair<HWND, int>, 8> toggleControls = {{
+        {ctx->recorderPanel, IDC_AUDIO_SCOPE_CHECK},
+        {ctx->recorderPanel, IDC_AUDIO_SCOPE_WOW_DISCORD_RADIO},
+        {ctx->recorderPanel, IDC_AUDIO_SCOPE_ALL_RADIO},
+        {ctx->recorderPanel, IDC_MICROPHONE_CHECK},
+        {ctx->recorderPanel, IDC_MICROPHONE_NOISE_SUPPRESSION_CHECK},
+        {ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_ENABLED_CHECK},
+        {ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_BLANK_RADIO},
+        {ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_CUSTOM_RADIO},
+    }};
+    for (const auto& [parent, controlId] : toggleControls) {
+        if (parent) {
+            HWND control = GetDlgItem(parent, controlId);
+            if (control) {
+                SetWindowSubclass(control, ModernToggleSubclassProc, 1, reinterpret_cast<DWORD_PTR>(ctx));
+            }
+        }
+    }
+
+    const std::array<std::pair<HWND, int>, 9> comboControls = {{
+        {ctx->recorderPanel, IDC_ENCODER_COMBO},
+        {ctx->recorderPanel, IDC_PRESET_COMBO},
+        {ctx->recorderPanel, IDC_CONTAINER_COMBO},
+        {ctx->recorderPanel, IDC_MICROPHONE_COMBO},
+        {ctx->recorderPanel, IDC_RECORDING_RESOLUTION_COMBO},
+        {ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_COMBO},
+        {ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_ANCHOR_COMBO},
+        {ctx->youtubePanel, IDC_YOUTUBE_PRIVACY_COMBO},
+        {ctx->clipsPanel, IDC_CLIPS_SOURCE_COMBO},
+    }};
+    for (const auto& [parent, controlId] : comboControls) {
+        if (!parent) {
+            continue;
+        }
+        HWND combo = GetDlgItem(parent, controlId);
+        if (!combo) {
+            continue;
+        }
+        LONG_PTR style = GetWindowLongPtrW(combo, GWL_STYLE);
+        style = (style & ~WS_BORDER) | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS;
+        SetWindowLongPtrW(combo, GWL_STYLE, style);
+        SetWindowPos(combo, nullptr, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        SendMessageW(combo, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), 24);
+        SendMessageW(combo, CB_SETITEMHEIGHT, 0, 28);
+        SetWindowTheme(combo, L"", L"");
+        SetWindowSubclass(combo, ModernComboSubclassProc, 1, reinterpret_cast<DWORD_PTR>(ctx));
+    }
+}
+
+void DrawStyledComboItem(const DRAWITEMSTRUCT* drawInfo)
+{
+    if (!drawInfo || !drawInfo->hwndItem) {
+        return;
+    }
+
+    const bool isEditItem = (drawInfo->itemState & ODS_COMBOBOXEDIT) != 0;
+    const bool isSelected = !isEditItem && (drawInfo->itemState & ODS_SELECTED) != 0;
+    const bool enabled = IsWindowEnabled(drawInfo->hwndItem) != FALSE;
+    const COLORREF background = !enabled
+        ? kThemeColors.controlDisabledBackground
+        : (isSelected ? kThemeColors.dropdownHoverBackground : kColorInputBg);
+    const COLORREF textColor = !enabled ? kThemeColors.controlDisabledText : kColorTextPrimary;
+
+    HBRUSH backgroundBrush = CreateSolidBrush(background);
+    if (backgroundBrush) {
+        FillRect(drawInfo->hDC, &drawInfo->rcItem, backgroundBrush);
+        DeleteObject(backgroundBrush);
+    }
+
+    std::wstring text;
+    if (drawInfo->itemID == static_cast<UINT>(-1)) {
+        const int textLength = GetWindowTextLengthW(drawInfo->hwndItem);
+        text.resize(static_cast<size_t>((std::max)(0, textLength)) + 1);
+        if (textLength > 0) {
+            GetWindowTextW(drawInfo->hwndItem, text.data(), textLength + 1);
+        }
+        text.resize(static_cast<size_t>((std::max)(0, textLength)));
+    } else {
+        const int textLength = static_cast<int>(SendMessageW(
+            drawInfo->hwndItem, CB_GETLBTEXTLEN, drawInfo->itemID, 0));
+        if (textLength >= 0) {
+            text.resize(static_cast<size_t>(textLength) + 1);
+            if (textLength > 0) {
+                SendMessageW(
+                    drawInfo->hwndItem,
+                    CB_GETLBTEXT,
+                    drawInfo->itemID,
+                    reinterpret_cast<LPARAM>(text.data()));
+            }
+            text.resize(static_cast<size_t>(textLength));
+        }
+    }
+
+    RECT textRect = drawInfo->rcItem;
+    textRect.left += 10;
+    textRect.right -= isEditItem ? 32 : 10;
+    SetBkMode(drawInfo->hDC, TRANSPARENT);
+    SetTextColor(drawInfo->hDC, textColor);
+    HGDIOBJ oldFont = gTheme.uiFont ? SelectObject(drawInfo->hDC, gTheme.uiFont) : nullptr;
+    DrawTextW(drawInfo->hDC, text.c_str(), -1, &textRect,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    if (oldFont) {
+        SelectObject(drawInfo->hDC, oldFont);
+    }
+}
+
 void DrawStyledButton(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
 {
     if (!drawInfo) {
@@ -836,32 +1316,31 @@ void DrawStyledButton(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
             || (drawInfo->CtlID == IDC_TAB_CLIPS && ctx->activeTab == AppContext::MainTab::Clips)
             || (drawInfo->CtlID == IDC_TAB_KEYBINDS && ctx->activeTab == AppContext::MainTab::Keybinds)
             || (drawInfo->CtlID == IDC_TAB_ABOUT && ctx->activeTab == AppContext::MainTab::About));
-    COLORREF fill = isLinkDisplay ? kColorInputBg : RGB(47, 60, 89);
-    COLORREF border = isLinkDisplay ? kColorInputBorder : RGB(91, 114, 167);
-    COLORREF text = isTab ? (isActiveTab ? RGB(255, 255, 255) : kColorTextMuted) : kColorButtonText;
+    COLORREF fill = isLinkDisplay ? kColorInputBg : kThemeColors.buttonBackground;
+    COLORREF border = isLinkDisplay ? kColorInputBorder : kThemeColors.controlHoverBorder;
+    COLORREF text = isTab ? (isActiveTab ? kColorButtonText : kColorTextMuted) : kColorButtonText;
     // The active tab is disabled only to prevent a redundant click; it should
     // still receive the active visual treatment below.
     if (isDisabled && !isActiveTab) {
         if (isLinkDisplay) { fill = kColorInputBg; border = kColorInputBorder; text = kColorTextMuted; }
-        else { fill = RGB(32, 38, 55); border = RGB(56, 67, 95); text = RGB(127, 139, 167); }
-    } else if (isPressed) { fill = RGB(73, 103, 166); border = RGB(118, 148, 212); }
+        else { fill = kThemeColors.controlDisabledBackground; border = kThemeColors.controlDisabledBorder; text = kThemeColors.controlDisabledText; }
+    } else if (isPressed) { fill = kThemeColors.controlPressedBackground; border = kThemeColors.controlPressedBorder; }
     else if (isActiveTab) {
         // Let the selected tab stand out through clean, high-contrast text.
-        fill = RGB(59, 77, 119);
-        border = RGB(190, 216, 255);
+        fill = kThemeColors.controlActiveBackground;
+        border = kThemeColors.controlActiveBorder;
     }
-    else if (isHovered && isTab) { fill = RGB(41, 50, 74); border = RGB(97, 122, 174); }
-    else if (isHovered) { fill = RGB(58, 72, 104); border = RGB(104, 129, 183); }
-    else if (isTab) { fill = RGB(32, 38, 56); border = RGB(76, 94, 136); }
+    else if (isHovered && isTab) { fill = kThemeColors.controlHoverBackground; border = kThemeColors.controlHoverBorder; }
+    else if (isHovered) { fill = kThemeColors.controlHoverBackground; border = kThemeColors.controlHoverBorder; }
+    else if (isTab) { fill = kThemeColors.controlTabBackground; border = kThemeColors.controlTabBorder; }
 
     SetBkMode(drawInfo->hDC, TRANSPARENT);
     FillStyledButtonParentBackground(drawInfo->hDC, drawInfo->hwndItem, rc, ctx ? ctx->mainWindow : nullptr);
-    const int cornerRadius = isTab ? 12 : (isLinkDisplay ? 6 : 9);
     HPEN borderPen = CreatePen(PS_SOLID, isActiveTab ? 2 : 1, border);
     HBRUSH fillBrush = CreateSolidBrush(fill);
     HGDIOBJ oldPen = borderPen ? SelectObject(drawInfo->hDC, borderPen) : nullptr;
     HGDIOBJ oldBrush = fillBrush ? SelectObject(drawInfo->hDC, fillBrush) : nullptr;
-    RoundRect(drawInfo->hDC, rc.left + 1, rc.top + 1, rc.right - 1, rc.bottom - 1, cornerRadius, cornerRadius);
+    Rectangle(drawInfo->hDC, rc.left + 1, rc.top + 1, rc.right - 1, rc.bottom - 1);
     if (oldBrush) SelectObject(drawInfo->hDC, oldBrush);
     if (oldPen) SelectObject(drawInfo->hDC, oldPen);
     if (fillBrush) DeleteObject(fillBrush);
@@ -1014,8 +1493,8 @@ void DrawHelpIcon(const DRAWITEMSTRUCT* drawInfo)
     const int top = rc.top + (height - diameter) / 2;
     const int right = left + diameter;
     const int bottom = top + diameter;
-    HPEN borderPen = CreatePen(PS_SOLID, 1, RGB(129, 147, 188));
-    HBRUSH fillBrush = CreateSolidBrush(RGB(35, 44, 64));
+    HPEN borderPen = CreatePen(PS_SOLID, 1, kThemeColors.controlHoverBorder);
+    HBRUSH fillBrush = CreateSolidBrush(kThemeColors.controlTabBackground);
     HGDIOBJ oldPen = borderPen ? SelectObject(drawInfo->hDC, borderPen) : nullptr;
     HGDIOBJ oldBrush = fillBrush ? SelectObject(drawInfo->hDC, fillBrush) : nullptr;
     Ellipse(drawInfo->hDC, left, top, right, bottom);
@@ -1025,7 +1504,7 @@ void DrawHelpIcon(const DRAWITEMSTRUCT* drawInfo)
     if (borderPen) DeleteObject(borderPen);
     RECT textRect{left, top, right, bottom};
     SetBkMode(drawInfo->hDC, TRANSPARENT);
-    SetTextColor(drawInfo->hDC, RGB(225, 234, 252));
+    SetTextColor(drawInfo->hDC, kColorTooltipText);
     if (gTheme.uiFont) {
         SelectObject(drawInfo->hDC, gTheme.uiFont);
     }
@@ -1040,7 +1519,7 @@ void DrawConfigurationTooltip(const DRAWITEMSTRUCT* drawInfo)
     RECT rc = drawInfo->rcItem;
     HBRUSH bgBrush = gTheme.tooltipBrush ? gTheme.tooltipBrush : reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
     FillRect(drawInfo->hDC, &rc, bgBrush);
-    HPEN borderPen = CreatePen(PS_SOLID, 1, RGB(84, 97, 132));
+    HPEN borderPen = CreatePen(PS_SOLID, 1, kThemeColors.controlTabBorder);
     HGDIOBJ oldPen = borderPen ? SelectObject(drawInfo->hDC, borderPen) : nullptr;
     HGDIOBJ oldBrush = SelectObject(drawInfo->hDC, GetStockObject(HOLLOW_BRUSH));
     Rectangle(drawInfo->hDC, rc.left, rc.top, rc.right, rc.bottom);
@@ -1268,7 +1747,7 @@ void DrawYouTubeUploadStatus(const DRAWITEMSTRUCT* drawInfo, AppContext* ctx)
         if (linkFont) {
             SelectObject(drawInfo->hDC, linkFont);
         }
-        SetTextColor(drawInfo->hDC, RGB(111, 183, 255));
+        SetTextColor(drawInfo->hDC, kThemeColors.accentBright);
         SIZE linkTextSize{};
         GetTextExtentPoint32W(drawInfo->hDC, L"View.", 5, &linkTextSize);
         DrawTextW(drawInfo->hDC, L"View.", -1, &linkRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);

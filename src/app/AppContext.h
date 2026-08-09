@@ -66,27 +66,121 @@ inline constexpr auto kObsInstallPollInterval = std::chrono::seconds(2);
 inline constexpr auto kMonitoringRetryInterval = std::chrono::seconds(5);
 inline constexpr auto kWarcraftRecorderPollInterval = std::chrono::seconds(30);
 inline constexpr size_t kStatusMaxLines = 300;
-inline constexpr COLORREF kColorWindowTop = RGB(11, 14, 23);
-inline constexpr COLORREF kColorWindowBottom = RGB(5, 7, 14);
-inline constexpr COLORREF kColorPanelTop = RGB(31, 36, 52);
-inline constexpr COLORREF kColorPanelBottom = RGB(18, 21, 34);
-inline constexpr COLORREF kColorPanelBorder = RGB(72, 86, 122);
-inline constexpr COLORREF kColorTextPrimary = RGB(228, 234, 246);
-inline constexpr COLORREF kColorTextMuted = RGB(165, 176, 203);
-inline constexpr COLORREF kColorInputBg = RGB(17, 21, 33);
-inline constexpr COLORREF kColorYouTubeInputBg = RGB(31, 39, 59);
-inline constexpr COLORREF kColorInputBorder = RGB(66, 79, 113);
-inline constexpr COLORREF kColorButtonBg = RGB(48, 59, 86);
-inline constexpr COLORREF kColorButtonText = RGB(235, 241, 255);
-inline constexpr COLORREF kColorTooltipBg = RGB(22, 27, 40);
-inline constexpr COLORREF kColorTooltipText = RGB(233, 239, 251);
-inline constexpr COLORREF kColorListSelection = RGB(55, 76, 124);
-inline constexpr COLORREF kColorListRow = RGB(12, 16, 25);
-inline constexpr COLORREF kColorListRowAlt = RGB(16, 21, 32);
-inline constexpr COLORREF kColorListGrid = RGB(41, 50, 71);
-inline constexpr COLORREF kColorSuccess = RGB(80, 214, 142);
-inline constexpr COLORREF kColorFailure = RGB(241, 100, 125);
-inline constexpr COLORREF kColorWarning = RGB(241, 204, 96);
+// Keep the visual palette in one place. Layout code should only depend on
+// geometry constants, while drawing code should consume these named tokens.
+// This makes a future theme/settings editor a palette change rather than a
+// control-by-control rewrite.
+struct ThemeColors {
+    COLORREF windowTop;
+    COLORREF windowBottom;
+    COLORREF panelTop;
+    COLORREF panelBottom;
+    COLORREF panelBorder;
+    COLORREF textPrimary;
+    COLORREF textMuted;
+    COLORREF inputBackground;
+    COLORREF youtubeInputBackground;
+    COLORREF inputBorder;
+    COLORREF buttonBackground;
+    COLORREF buttonText;
+    COLORREF tooltipBackground;
+    COLORREF tooltipText;
+    COLORREF listSelection;
+    COLORREF listRow;
+    COLORREF listRowAlternate;
+    COLORREF listGrid;
+    COLORREF success;
+    COLORREF failure;
+    COLORREF warning;
+    COLORREF accent;
+    COLORREF accentBright;
+    COLORREF controlHoverBackground;
+    COLORREF controlHoverBorder;
+    COLORREF controlPressedBackground;
+    COLORREF controlPressedBorder;
+    COLORREF controlActiveBackground;
+    COLORREF controlActiveBorder;
+    COLORREF controlTabBackground;
+    COLORREF controlTabBorder;
+    COLORREF controlDisabledBackground;
+    COLORREF controlDisabledBorder;
+    COLORREF controlDisabledText;
+    COLORREF dropdownHoverBackground;
+    COLORREF sliderTrack;
+    COLORREF sliderSelection;
+    COLORREF sliderMarker;
+    COLORREF sliderThumb;
+    COLORREF mutedDot;
+    COLORREF recordingDot;
+};
+
+inline constexpr ThemeColors kThemeColors{
+    RGB(11, 14, 23),
+    RGB(5, 7, 14),
+    RGB(31, 36, 52),
+    RGB(18, 21, 34),
+    RGB(72, 86, 122),
+    RGB(228, 234, 246),
+    RGB(165, 176, 203),
+    RGB(17, 21, 33),
+    RGB(31, 39, 59),
+    RGB(66, 79, 113),
+    RGB(48, 59, 86),
+    RGB(235, 241, 255),
+    RGB(22, 27, 40),
+    RGB(233, 239, 251),
+    RGB(55, 76, 124),
+    RGB(12, 16, 25),
+    RGB(16, 21, 32),
+    RGB(41, 50, 71),
+    RGB(80, 214, 142),
+    RGB(241, 100, 125),
+    RGB(241, 204, 96),
+    RGB(91, 148, 255),
+    RGB(190, 216, 255),
+    RGB(58, 72, 104),
+    RGB(104, 129, 183),
+    RGB(73, 103, 166),
+    RGB(118, 148, 212),
+    RGB(59, 77, 119),
+    RGB(190, 216, 255),
+    RGB(32, 38, 56),
+    RGB(76, 94, 136),
+    RGB(32, 38, 55),
+    RGB(56, 67, 95),
+    RGB(127, 139, 167),
+    RGB(55, 76, 124),
+    RGB(13, 18, 29),
+    RGB(73, 103, 166),
+    RGB(189, 214, 255),
+    RGB(233, 239, 251),
+    RGB(138, 151, 183),
+    RGB(255, 112, 130),
+};
+
+// Compatibility aliases keep existing drawing code readable while ensuring
+// the actual values above remain centralized.
+inline constexpr COLORREF kColorWindowTop = kThemeColors.windowTop;
+inline constexpr COLORREF kColorWindowBottom = kThemeColors.windowBottom;
+inline constexpr COLORREF kColorPanelTop = kThemeColors.panelTop;
+inline constexpr COLORREF kColorPanelBottom = kThemeColors.panelBottom;
+inline constexpr COLORREF kColorPanelBorder = kThemeColors.panelBorder;
+inline constexpr COLORREF kColorTextPrimary = kThemeColors.textPrimary;
+inline constexpr COLORREF kColorTextMuted = kThemeColors.textMuted;
+inline constexpr COLORREF kColorInputBg = kThemeColors.inputBackground;
+inline constexpr COLORREF kColorYouTubeInputBg = kThemeColors.youtubeInputBackground;
+inline constexpr COLORREF kColorInputBorder = kThemeColors.inputBorder;
+inline constexpr COLORREF kColorButtonBg = kThemeColors.buttonBackground;
+inline constexpr COLORREF kColorButtonText = kThemeColors.buttonText;
+inline constexpr COLORREF kColorTooltipBg = kThemeColors.tooltipBackground;
+inline constexpr COLORREF kColorTooltipText = kThemeColors.tooltipText;
+inline constexpr COLORREF kColorListSelection = kThemeColors.listSelection;
+inline constexpr COLORREF kColorListRow = kThemeColors.listRow;
+inline constexpr COLORREF kColorListRowAlt = kThemeColors.listRowAlternate;
+inline constexpr COLORREF kColorListGrid = kThemeColors.listGrid;
+inline constexpr COLORREF kColorSuccess = kThemeColors.success;
+inline constexpr COLORREF kColorFailure = kThemeColors.failure;
+inline constexpr COLORREF kColorWarning = kThemeColors.warning;
 inline constexpr int kMinClientWidth = 930;
 inline constexpr int kMinClientHeight = 560;
 inline constexpr int kSpecIconSizePx = 16;

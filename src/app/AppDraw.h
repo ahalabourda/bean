@@ -16,10 +16,14 @@ void ApplyUiFonts(HWND root);
 void ApplyRecordingsFonts(AppContext* ctx);
 
 bool IsStyledButtonId(int controlId);
+bool IsStyledComboId(int controlId);
 bool IsStatusLightId(int controlId);
 bool IsOwnerDrawStaticId(int controlId);
 void ConfigureStyledButtons(AppContext* ctx);
+void ConfigureModernControls(AppContext* ctx);
+void ScheduleModernComboRedraw(HWND combo);
 void DrawStyledButton(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx);
+void DrawStyledComboItem(const DRAWITEMSTRUCT* drawInfo);
 void DrawStatusLight(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx);
 void DrawLengthValue(const DRAWITEMSTRUCT* drawInfo);
 void DrawHelpIcon(const DRAWITEMSTRUCT* drawInfo);
