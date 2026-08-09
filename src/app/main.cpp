@@ -6206,6 +6206,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         delete result;
         return 0;
     }
+    case WM_CLOSE:
+        if (MessageBoxW(
+                hwnd,
+                L"Are you sure you want to close Bean?\nYour runs will no longer be recorded.",
+                L"Exit Bean",
+                MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES) {
+            DestroyWindow(hwnd);
+        }
+        return 0;
     case WM_DESTROY:
         FlushPendingAutoSaves(ctx);
         bean::integrations::YouTubeUploader::RequestCancel();
