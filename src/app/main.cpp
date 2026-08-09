@@ -3340,12 +3340,6 @@ void RefreshLiveStatus(AppContext* ctx)
             : L"Unavailable - WoW not detected";
         UpdateTransparentStaticText(ctx->gameResolutionText, gameResolutionText.c_str());
     }
-    if (ctx->chatPreviewStatus) {
-        const wchar_t* previewText = ctx->wowWindowDetected
-            ? L"Preview targets WoW's client area (exclusive fullscreen may limit capture)."
-            : L"WoW not detected; preview uses a placeholder.";
-        UpdateTransparentStaticText(ctx->chatPreviewStatus, previewText);
-    }
     if (recordingStateChanged
         || wowStatusRefreshed
         || wowWasWidth != ctx->detectedWowClientWidth
@@ -5182,7 +5176,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         SendMessageW(ctx->chatBlockerAnchorCombo, CB_SETCURSEL, 0, 0);
         CreateWindowW(L"STATIC", L"WoW Live Preview (overlay area marks chat blocker):", WS_VISIBLE | WS_CHILD, 20, 194, 720, rowHeight, ctx->chatPrivacyPanel, reinterpret_cast<HMENU>(IDC_CHAT_PREVIEW_LABEL), nullptr, nullptr);
         ctx->chatPreview = CreateWindowW(L"STATIC", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | SS_OWNERDRAW, 20, 222, 740, 222, ctx->chatPrivacyPanel, reinterpret_cast<HMENU>(IDC_CHAT_PREVIEW), nullptr, nullptr);
-        ctx->chatPreviewStatus = CreateWindowW(L"STATIC", L"WoW not detected; preview uses a placeholder.", WS_VISIBLE | WS_CHILD, 20, 454, 740, rowHeight, ctx->chatPrivacyPanel, reinterpret_cast<HMENU>(IDC_CHAT_PREVIEW_STATUS), nullptr, nullptr);
         RefreshChatBlockerImageCombo(ctx, {});
         RefreshChatBlockerImageControls(ctx);
 
@@ -5895,7 +5888,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         SetTextColor(dc, kColorTextPrimary);
         if (control != ctx->outputStatus && control != ctx->wowLogStatus) {
             const int id = GetDlgCtrlID(control);
-            if (id == IDC_RECORDINGS_LABEL || id == IDC_YOUTUBE_LABEL || id == IDC_YOUTUBE_UPLOAD_STATUS || id == IDC_ABOUT_BUILD_TEXT || id == IDC_ABOUT_FLAVOR_TEXT || id == IDC_YOUTUBE_UNLINK_CONFIRM_LABEL || id == IDC_CHAT_PREVIEW_STATUS || id == IDC_CONFIGURATION_AUTOSAVE_HINT || id == IDC_KEYBINDS_AUTOSAVE_HINT) {
+            if (id == IDC_RECORDINGS_LABEL || id == IDC_YOUTUBE_LABEL || id == IDC_YOUTUBE_UPLOAD_STATUS || id == IDC_ABOUT_BUILD_TEXT || id == IDC_ABOUT_FLAVOR_TEXT || id == IDC_YOUTUBE_UNLINK_CONFIRM_LABEL || id == IDC_CONFIGURATION_AUTOSAVE_HINT || id == IDC_KEYBINDS_AUTOSAVE_HINT) {
                 SetTextColor(dc, kColorTextMuted);
             }
         }

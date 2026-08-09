@@ -7,6 +7,15 @@
 
 namespace {
 
+namespace LayoutMetrics {
+constexpr int kPanelInset = 20;
+constexpr int kRowHeight = 24;
+constexpr int kButtonHeight = kRowHeight + 4;
+constexpr int kRowSpacing = 40;
+constexpr int kHelpIconSize = 16;
+constexpr int kHelpIconGap = 6;
+}
+
 void MoveControl(HWND parent, int controlId, int x, int y, int width, int height)
 {
     if (!parent) {
@@ -25,72 +34,67 @@ void LayoutConfigurationPanel(AppContext* ctx, int panelWidth, int)
         return;
     }
 
-    const int rowHeight = 24;
-    const int rowSpacing = 40;
-    const int sectionSpacing = 48;
-    const int xLabel = 20;
-    const int xEdit = 150;
+    constexpr int sectionSpacing = 48;
+    constexpr int xEdit = 150;
     const int xStatus = panelWidth - 58;
     const int xButton = xStatus - 108;
     const int editWidth = (std::max)(160, xButton - xEdit - 8);
     int y = 20;
 
-    MoveControl(ctx->recorderPanel, IDC_OUTPUT_LABEL, xLabel, y, 120, rowHeight);
-    MoveControl(ctx->recorderPanel, IDC_OUTPUT_EDIT, xEdit, y, editWidth, rowHeight);
-    MoveControl(ctx->recorderPanel, IDC_OUTPUT_BROWSE, xButton, y, 100, rowHeight);
-    MoveControl(ctx->recorderPanel, IDC_OUTPUT_STATUS, xStatus, y, 40, rowHeight);
-    y += rowSpacing;
+    MoveControl(ctx->recorderPanel, IDC_OUTPUT_LABEL, LayoutMetrics::kPanelInset, y, 120, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->recorderPanel, IDC_OUTPUT_EDIT, xEdit, y, editWidth, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->recorderPanel, IDC_OUTPUT_BROWSE, xButton, y, 100, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->recorderPanel, IDC_OUTPUT_STATUS, xStatus, y, 40, LayoutMetrics::kRowHeight);
+    y += LayoutMetrics::kRowSpacing;
 
-    MoveControl(ctx->recorderPanel, IDC_LOG_LABEL, xLabel, y, 120, rowHeight);
-    MoveControl(ctx->recorderPanel, IDC_LOG_EDIT, xEdit, y, editWidth, rowHeight);
-    MoveControl(ctx->recorderPanel, IDC_LOG_BROWSE, xButton, y, 100, rowHeight);
-    MoveControl(ctx->recorderPanel, IDC_LOG_STATUS, xStatus, y, 40, rowHeight);
-    y += rowSpacing;
+    MoveControl(ctx->recorderPanel, IDC_LOG_LABEL, LayoutMetrics::kPanelInset, y, 120, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->recorderPanel, IDC_LOG_EDIT, xEdit, y, editWidth, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->recorderPanel, IDC_LOG_BROWSE, xButton, y, 100, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->recorderPanel, IDC_LOG_STATUS, xStatus, y, 40, LayoutMetrics::kRowHeight);
+    y += LayoutMetrics::kRowSpacing;
 
     const int comboWidth = (std::max)(190, panelWidth - xEdit - 30);
-    MoveControl(ctx->recorderPanel, IDC_ENCODER_LABEL, xLabel, y, 120, rowHeight);
+    MoveControl(ctx->recorderPanel, IDC_ENCODER_LABEL, LayoutMetrics::kPanelInset, y, 120, LayoutMetrics::kRowHeight);
     MoveControl(ctx->recorderPanel, IDC_ENCODER_COMBO, xEdit, y, comboWidth, 150);
-    y += rowSpacing;
+    y += LayoutMetrics::kRowSpacing;
 
     const int rightContentStart = panelWidth - 220;
     const int containerX = (std::max)(380, rightContentStart - 90);
-    const int presetHelpIconSize = 16;
-    const int presetHelpGap = 6;
-    const int presetWidth = (std::max)(130, containerX - xEdit - (presetHelpIconSize + presetHelpGap + 10));
-    MoveControl(ctx->recorderPanel, IDC_PRESET_LABEL, xLabel, y, 120, rowHeight);
+    const int presetWidth = (std::max)(130, containerX - xEdit - (LayoutMetrics::kHelpIconSize + LayoutMetrics::kHelpIconGap + 10));
+    MoveControl(ctx->recorderPanel, IDC_PRESET_LABEL, LayoutMetrics::kPanelInset, y, 120, LayoutMetrics::kRowHeight);
     MoveControl(ctx->recorderPanel, IDC_PRESET_COMBO, xEdit, y, presetWidth, 180);
-    MoveControl(ctx->recorderPanel, IDC_PRESET_HELP, xEdit + presetWidth + presetHelpGap, y + 4, presetHelpIconSize, presetHelpIconSize);
-    MoveControl(ctx->recorderPanel, IDC_CONTAINER_LABEL, containerX, y, 80, rowHeight);
+    MoveControl(ctx->recorderPanel, IDC_PRESET_HELP, xEdit + presetWidth + LayoutMetrics::kHelpIconGap, y + 4, LayoutMetrics::kHelpIconSize, LayoutMetrics::kHelpIconSize);
+    MoveControl(ctx->recorderPanel, IDC_CONTAINER_LABEL, containerX, y, 80, LayoutMetrics::kRowHeight);
     MoveControl(ctx->recorderPanel, IDC_CONTAINER_COMBO, containerX + 86, y, 120, 140);
-    y += rowSpacing;
+    y += LayoutMetrics::kRowSpacing;
 
-    MoveControl(ctx->recorderPanel, IDC_AUDIO_SCOPE_LABEL, xLabel, y, 120, rowHeight);
-    const int audioScopeGap = 14;
+    MoveControl(ctx->recorderPanel, IDC_AUDIO_SCOPE_LABEL, LayoutMetrics::kPanelInset, y, 120, LayoutMetrics::kRowHeight);
+    constexpr int audioScopeGap = 14;
     const int audioScopeWidth = (std::max)(130, (panelWidth - xEdit - 30 - (audioScopeGap * 2)) / 3);
-    MoveControl(ctx->recorderPanel, IDC_AUDIO_SCOPE_CHECK, xEdit, y, audioScopeWidth, rowHeight);
-    MoveControl(ctx->recorderPanel, IDC_AUDIO_SCOPE_WOW_DISCORD_RADIO, xEdit + audioScopeWidth + audioScopeGap, y, audioScopeWidth, rowHeight);
-    MoveControl(ctx->recorderPanel, IDC_AUDIO_SCOPE_ALL_RADIO, xEdit + (audioScopeWidth + audioScopeGap) * 2, y, audioScopeWidth, rowHeight);
-    y += rowSpacing;
-    MoveControl(ctx->recorderPanel, IDC_MICROPHONE_CHECK, xEdit, y, 220, rowHeight);
-    MoveControl(ctx->recorderPanel, IDC_MICROPHONE_NOISE_SUPPRESSION_CHECK, xEdit + 226, y, 220, rowHeight);
-    y += rowSpacing;
+    MoveControl(ctx->recorderPanel, IDC_AUDIO_SCOPE_CHECK, xEdit, y, audioScopeWidth, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->recorderPanel, IDC_AUDIO_SCOPE_WOW_DISCORD_RADIO, xEdit + audioScopeWidth + audioScopeGap, y, audioScopeWidth, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->recorderPanel, IDC_AUDIO_SCOPE_ALL_RADIO, xEdit + (audioScopeWidth + audioScopeGap) * 2, y, audioScopeWidth, LayoutMetrics::kRowHeight);
+    y += LayoutMetrics::kRowSpacing;
+    MoveControl(ctx->recorderPanel, IDC_MICROPHONE_CHECK, xEdit, y, 220, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->recorderPanel, IDC_MICROPHONE_NOISE_SUPPRESSION_CHECK, xEdit + 226, y, 220, LayoutMetrics::kRowHeight);
+    y += LayoutMetrics::kRowSpacing;
     MoveControl(ctx->recorderPanel, IDC_MICROPHONE_COMBO, xEdit, y, panelWidth - xEdit - 30, 160);
-    y += rowSpacing;
+    y += LayoutMetrics::kRowSpacing;
 
-    MoveControl(ctx->recorderPanel, IDC_RECORDING_RESOLUTION_LABEL, xLabel, y, 120, rowHeight);
+    MoveControl(ctx->recorderPanel, IDC_RECORDING_RESOLUTION_LABEL, LayoutMetrics::kPanelInset, y, 120, LayoutMetrics::kRowHeight);
     MoveControl(ctx->recorderPanel, IDC_RECORDING_RESOLUTION_COMBO, xEdit, y, 290, 180);
-    y += rowSpacing;
-    MoveControl(ctx->recorderPanel, IDC_FPS_LABEL, xLabel, y, 40, rowHeight);
-    MoveControl(ctx->recorderPanel, IDC_FPS_EDIT, xLabel + 46, y, 60, rowHeight);
-    y += rowSpacing;
+    y += LayoutMetrics::kRowSpacing;
+    MoveControl(ctx->recorderPanel, IDC_FPS_LABEL, LayoutMetrics::kPanelInset, y, 40, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->recorderPanel, IDC_FPS_EDIT, LayoutMetrics::kPanelInset + 46, y, 60, LayoutMetrics::kRowHeight);
+    y += LayoutMetrics::kRowSpacing;
 
-    MoveControl(ctx->recorderPanel, IDC_POST_RUN_DELAY_LABEL, xLabel, y, 104, rowHeight);
-    MoveControl(ctx->recorderPanel, IDC_POST_RUN_DELAY_HELP, xLabel + 104, y + 4, 16, 16);
-    MoveControl(ctx->recorderPanel, IDC_POST_RUN_DELAY_EDIT, xLabel + 120, y, 70, rowHeight);
-    MoveControl(ctx->recorderPanel, IDC_CLIP_DURATION_LABEL, xLabel + 230, y, 116, rowHeight);
-    MoveControl(ctx->recorderPanel, IDC_CLIP_DURATION_EDIT, xLabel + 350, y, 70, rowHeight);
+    MoveControl(ctx->recorderPanel, IDC_POST_RUN_DELAY_LABEL, LayoutMetrics::kPanelInset, y, 104, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->recorderPanel, IDC_POST_RUN_DELAY_HELP, LayoutMetrics::kPanelInset + 104, y + 4, LayoutMetrics::kHelpIconSize, LayoutMetrics::kHelpIconSize);
+    MoveControl(ctx->recorderPanel, IDC_POST_RUN_DELAY_EDIT, LayoutMetrics::kPanelInset + 120, y, 70, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->recorderPanel, IDC_CLIP_DURATION_LABEL, LayoutMetrics::kPanelInset + 230, y, 116, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->recorderPanel, IDC_CLIP_DURATION_EDIT, LayoutMetrics::kPanelInset + 350, y, 70, LayoutMetrics::kRowHeight);
     y += sectionSpacing;
-    MoveControl(ctx->recorderPanel, IDC_CONFIGURATION_AUTOSAVE_HINT, xLabel, y, panelWidth - (xLabel * 2), rowHeight);
+    MoveControl(ctx->recorderPanel, IDC_CONFIGURATION_AUTOSAVE_HINT, LayoutMetrics::kPanelInset, y, panelWidth - (LayoutMetrics::kPanelInset * 2), LayoutMetrics::kRowHeight);
 }
 
 void LayoutStatusPanel(AppContext* ctx, int panelWidth, int panelHeight)
@@ -99,25 +103,23 @@ void LayoutStatusPanel(AppContext* ctx, int panelWidth, int panelHeight)
         return;
     }
 
-    const int rowHeight = 24;
-    const int xLabel = 20;
     int y = 20;
 
-    const int commandButtonWidth = (std::max)(110, (panelWidth - 2 * xLabel - 8) / 2);
-    MoveControl(ctx->statusPanel, IDC_RECORD_START, xLabel, y, commandButtonWidth, rowHeight + 4);
-    MoveControl(ctx->statusPanel, IDC_RECORD_STOP, xLabel + commandButtonWidth + 8, y, commandButtonWidth, rowHeight + 4);
+    const int commandButtonWidth = (std::max)(110, (panelWidth - 2 * LayoutMetrics::kPanelInset - 8) / 2);
+    MoveControl(ctx->statusPanel, IDC_RECORD_START, LayoutMetrics::kPanelInset, y, commandButtonWidth, LayoutMetrics::kButtonHeight);
+    MoveControl(ctx->statusPanel, IDC_RECORD_STOP, LayoutMetrics::kPanelInset + commandButtonWidth + 8, y, commandButtonWidth, LayoutMetrics::kButtonHeight);
     y += 46;
 
-    MoveControl(ctx->statusPanel, IDC_LIVE_LABEL, xLabel, y, 90, rowHeight);
-    MoveControl(ctx->statusPanel, IDC_MONITOR_ICON, xLabel + 98, y + 6, 12, 12);
-    MoveControl(ctx->statusPanel, IDC_MONITOR_TEXT, xLabel + 115, y, 90, rowHeight);
-    MoveControl(ctx->statusPanel, IDC_RECORD_ICON, xLabel + 218, y + 6, 12, 12);
-    MoveControl(ctx->statusPanel, IDC_RECORD_TEXT, xLabel + 235, y, 90, rowHeight);
-    MoveControl(ctx->statusPanel, IDC_LENGTH_LABEL, xLabel + 335, y, 60, rowHeight);
-    MoveControl(ctx->statusPanel, IDC_LENGTH_VALUE, xLabel + 400, y, 110, rowHeight);
+    MoveControl(ctx->statusPanel, IDC_LIVE_LABEL, LayoutMetrics::kPanelInset, y, 90, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->statusPanel, IDC_MONITOR_ICON, LayoutMetrics::kPanelInset + 98, y + 6, 12, 12);
+    MoveControl(ctx->statusPanel, IDC_MONITOR_TEXT, LayoutMetrics::kPanelInset + 115, y, 90, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->statusPanel, IDC_RECORD_ICON, LayoutMetrics::kPanelInset + 218, y + 6, 12, 12);
+    MoveControl(ctx->statusPanel, IDC_RECORD_TEXT, LayoutMetrics::kPanelInset + 235, y, 90, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->statusPanel, IDC_LENGTH_LABEL, LayoutMetrics::kPanelInset + 335, y, 60, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->statusPanel, IDC_LENGTH_VALUE, LayoutMetrics::kPanelInset + 400, y, 110, LayoutMetrics::kRowHeight);
     y += 36;
 
-    const int wowTextX = xLabel + 126;
+    constexpr int wowTextX = LayoutMetrics::kPanelInset + 126;
     const int wowTextWidth = (std::max)(250, panelWidth - wowTextX - 20);
     for (const auto& row : kPrerequisiteRows) {
         if (row.visibleOnlyWhenUnhealthy && !ctx->warcraftRecorderDetected) {
@@ -125,7 +127,7 @@ void LayoutStatusPanel(AppContext* ctx, int panelWidth, int panelHeight)
         }
         const int labelWidth = row.iconId == IDC_WARCRAFT_RECORDER_ICON ? 126
             : (row.iconId == IDC_ADVANCED_LOGGING_ICON ? 160 : 100);
-        const int iconX = xLabel + labelWidth + 2;
+        const int iconX = LayoutMetrics::kPanelInset + labelWidth + 2;
         const int textX = row.iconId == IDC_WARCRAFT_RECORDER_ICON ? (wowTextX + 26)
             : (row.iconId == IDC_ADVANCED_LOGGING_ICON ? (wowTextX + 60) : wowTextX);
         int textWidth = row.iconId == IDC_WARCRAFT_RECORDER_ICON
@@ -134,35 +136,32 @@ void LayoutStatusPanel(AppContext* ctx, int panelWidth, int panelHeight)
         if (row.iconId == IDC_ADVANCED_LOGGING_ICON) {
             textWidth = 90;
         }
-        MoveControl(ctx->statusPanel, row.labelId, xLabel, y, labelWidth, rowHeight);
-        MoveControl(ctx->statusPanel, row.iconId, iconX, y + 3, 20, rowHeight);
-        MoveControl(ctx->statusPanel, row.textId, textX, y, textWidth, rowHeight);
+        MoveControl(ctx->statusPanel, row.labelId, LayoutMetrics::kPanelInset, y, labelWidth, LayoutMetrics::kRowHeight);
+        MoveControl(ctx->statusPanel, row.iconId, iconX, y + 3, 20, LayoutMetrics::kRowHeight);
+        MoveControl(ctx->statusPanel, row.textId, textX, y, textWidth, LayoutMetrics::kRowHeight);
         if (row.iconId == IDC_ADVANCED_LOGGING_ICON) {
-            const int advancedHelpIconSize = 16;
-            const int advancedHelpGap = 6;
             MoveControl(
                 ctx->statusPanel,
                 IDC_ADVANCED_LOGGING_HELP,
-                textX + textWidth + advancedHelpGap,
+                textX + textWidth + LayoutMetrics::kHelpIconGap,
                 y + 4,
-                advancedHelpIconSize,
-                advancedHelpIconSize);
+                LayoutMetrics::kHelpIconSize,
+                LayoutMetrics::kHelpIconSize);
         }
-        y += 40;
+        y += LayoutMetrics::kRowSpacing;
     }
 
-    MoveControl(ctx->statusPanel, IDC_STATUS_LABEL, xLabel, y, 60, rowHeight);
-    const int statusX = xLabel + 72;
+    MoveControl(ctx->statusPanel, IDC_STATUS_LABEL, LayoutMetrics::kPanelInset, y, 60, LayoutMetrics::kRowHeight);
+    constexpr int statusX = LayoutMetrics::kPanelInset + 72;
     const int statusWidth = (std::max)(260, panelWidth - statusX - 20);
-    const int statusButtonHeight = rowHeight + 4;
-    const int statusBottomPadding = 12;
-    const int statusGap = 8;
-    const int statusHeight = (std::max)(90, panelHeight - y - statusBottomPadding - statusButtonHeight - statusGap);
+    constexpr int statusBottomPadding = 12;
+    constexpr int statusGap = 8;
+    const int statusHeight = (std::max)(90, panelHeight - y - statusBottomPadding - LayoutMetrics::kButtonHeight - statusGap);
     MoveControl(ctx->statusPanel, IDC_STATUS_TEXT, statusX, y, statusWidth, statusHeight);
     const int openLogButtonWidth = (std::min)(200, (std::max)(140, statusWidth));
     const int openLogButtonX = statusX + statusWidth - openLogButtonWidth;
     const int openLogButtonY = y + statusHeight + statusGap;
-    MoveControl(ctx->statusPanel, IDC_STATUS_OPEN_LOG_FOLDER, openLogButtonX, openLogButtonY, openLogButtonWidth, statusButtonHeight);
+    MoveControl(ctx->statusPanel, IDC_STATUS_OPEN_LOG_FOLDER, openLogButtonX, openLogButtonY, openLogButtonWidth, LayoutMetrics::kButtonHeight);
 }
 
 void LayoutRecordingsPanel(AppContext* ctx, int panelWidth, int panelHeight)
@@ -171,24 +170,22 @@ void LayoutRecordingsPanel(AppContext* ctx, int panelWidth, int panelHeight)
         return;
     }
 
-    const int rowHeight = 24;
-    const int left = 20;
-    const int right = panelWidth - 20;
-    const int listTop = 90;
+    const int right = panelWidth - LayoutMetrics::kPanelInset;
+    constexpr int listTop = 90;
     const int listHeight = (std::max)(180, panelHeight - listTop - 20);
 
-    const int participantsGap = 12;
+    constexpr int participantsGap = 12;
     const int participantsWidth = (std::max)(170, (std::min)(240, panelWidth / 4));
-    const int listWidth = (std::max)(240, right - left - participantsWidth - participantsGap);
-    const int participantsLeft = left + listWidth + participantsGap;
+    const int listWidth = (std::max)(240, right - LayoutMetrics::kPanelInset - participantsWidth - participantsGap);
+    const int participantsLeft = LayoutMetrics::kPanelInset + listWidth + participantsGap;
 
-    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_LABEL, left, 20, right - left, rowHeight);
-    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_REFRESH, left, 52, 100, rowHeight + 4);
-    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_OPEN_FOLDER, left + 110, 52, 120, rowHeight + 4);
-    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_OPEN_DB_FOLDER, left + 240, 52, 130, rowHeight + 4);
-    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_LIST, left, listTop, listWidth, listHeight);
-    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_INFO_LABEL, participantsLeft, listTop, participantsWidth, rowHeight);
-    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_INFO_TEXT, participantsLeft, listTop + rowHeight, participantsWidth, (std::max)(100, listHeight - rowHeight));
+    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_LABEL, LayoutMetrics::kPanelInset, LayoutMetrics::kPanelInset, right - LayoutMetrics::kPanelInset, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_REFRESH, LayoutMetrics::kPanelInset, 52, 100, LayoutMetrics::kButtonHeight);
+    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_OPEN_FOLDER, LayoutMetrics::kPanelInset + 110, 52, 120, LayoutMetrics::kButtonHeight);
+    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_OPEN_DB_FOLDER, LayoutMetrics::kPanelInset + 240, 52, 130, LayoutMetrics::kButtonHeight);
+    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_LIST, LayoutMetrics::kPanelInset, listTop, listWidth, listHeight);
+    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_INFO_LABEL, participantsLeft, listTop, participantsWidth, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_INFO_TEXT, participantsLeft, listTop + LayoutMetrics::kRowHeight, participantsWidth, (std::max)(100, listHeight - LayoutMetrics::kRowHeight));
     if (ctx->recordingsList) {
         const int dungeonWidth = (std::max)(120, listWidth * 40 / 100);
         const int keyWidth = (std::max)(56, listWidth * 11 / 100);
@@ -212,61 +209,58 @@ void LayoutYouTubePanel(AppContext* ctx, int panelWidth, int panelHeight)
         return;
     }
 
-    const int rowHeight = 24;
-    const int left = 20;
-    const int right = panelWidth - 20;
-    const int listTop = 96;
-    const int accountTop = 20;
-    const int accountRightWidth = (std::max)(250, (std::min)(340, (right - left) / 3));
+    constexpr int listTop = 96;
+    const int right = panelWidth - LayoutMetrics::kPanelInset;
+    const int accountRightWidth = (std::max)(250, (std::min)(340, (right - LayoutMetrics::kPanelInset) / 3));
     const int accountRightX = right - accountRightWidth;
-    const int accountLeftWidth = (std::max)(240, accountRightX - left - 12);
-    const int statusIconWidth = 24;
+    const int accountLeftWidth = (std::max)(240, accountRightX - LayoutMetrics::kPanelInset - 12);
+    constexpr int statusIconWidth = 24;
     const int actionX = accountRightX + statusIconWidth + 8;
     const int actionWidth = (std::max)(120, accountRightWidth - statusIconWidth - 8);
     const int confirmLabelWidth = (std::max)(80, (std::min)(110, actionWidth / 2));
     const int confirmButtonWidth = (std::max)(44, (actionWidth - confirmLabelWidth - 8) / 2);
     constexpr int accountLabelWidth = 154;
-    const int accountFieldX = left + accountLabelWidth + 10;
+    const int accountFieldX = LayoutMetrics::kPanelInset + accountLabelWidth + 10;
     const int accountFieldWidth = accountLeftWidth - accountLabelWidth - 10;
 
-    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_ACCOUNT_LABEL, left, accountTop, accountLabelWidth, rowHeight);
-    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_ACCOUNT_LINK, accountFieldX, accountTop - 2, accountFieldWidth, rowHeight + 8);
-    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_LINK_STATUS, accountRightX, accountTop, statusIconWidth, rowHeight);
-    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_LINK_BUTTON, actionX, accountTop - 2, actionWidth, rowHeight + 4);
-    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_UNLINK_BUTTON, actionX, accountTop - 2, actionWidth, rowHeight + 4);
-    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_UNLINK_CONFIRM_LABEL, actionX, accountTop, confirmLabelWidth, rowHeight);
-    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_UNLINK_YES_BUTTON, actionX + confirmLabelWidth + 8, accountTop - 2, confirmButtonWidth, rowHeight + 4);
-    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_UNLINK_NO_BUTTON, actionX + confirmLabelWidth + 8 + confirmButtonWidth + 6, accountTop - 2, confirmButtonWidth, rowHeight + 4);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_ACCOUNT_LABEL, LayoutMetrics::kPanelInset, LayoutMetrics::kPanelInset, accountLabelWidth, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_ACCOUNT_LINK, accountFieldX, LayoutMetrics::kPanelInset - 2, accountFieldWidth, LayoutMetrics::kRowHeight + 8);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_LINK_STATUS, accountRightX, LayoutMetrics::kPanelInset, statusIconWidth, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_LINK_BUTTON, actionX, LayoutMetrics::kPanelInset - 2, actionWidth, LayoutMetrics::kButtonHeight);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_UNLINK_BUTTON, actionX, LayoutMetrics::kPanelInset - 2, actionWidth, LayoutMetrics::kButtonHeight);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_UNLINK_CONFIRM_LABEL, actionX, LayoutMetrics::kPanelInset, confirmLabelWidth, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_UNLINK_YES_BUTTON, actionX + confirmLabelWidth + 8, LayoutMetrics::kPanelInset - 2, confirmButtonWidth, LayoutMetrics::kButtonHeight);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_UNLINK_NO_BUTTON, actionX + confirmLabelWidth + 8 + confirmButtonWidth + 6, LayoutMetrics::kPanelInset - 2, confirmButtonWidth, LayoutMetrics::kButtonHeight);
 
     constexpr int refreshWidth = 96;
     constexpr int refreshGap = 10;
-    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_LABEL, left, 58, right - left - refreshWidth - refreshGap, rowHeight);
-    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_REFRESH, right - refreshWidth, 57, refreshWidth, rowHeight + 4);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_LABEL, LayoutMetrics::kPanelInset, 58, right - LayoutMetrics::kPanelInset - refreshWidth - refreshGap, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_REFRESH, right - refreshWidth, 57, refreshWidth, LayoutMetrics::kButtonHeight);
     const int preferredListHeight = (std::max)(140, panelHeight - listTop - 114);
     const int maxListHeight = (std::max)(0, panelHeight - listTop - 114);
     const int listHeight = (std::min)(preferredListHeight, maxListHeight);
-    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_MEDIA_LIST, left, listTop, right - left, listHeight);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_MEDIA_LIST, LayoutMetrics::kPanelInset, listTop, right - LayoutMetrics::kPanelInset, listHeight);
     if (ctx->youtubeMediaList) {
-        const int typeWidth = (std::max)(86, (right - left) * 12 / 100);
-        const int dateWidth = (std::max)(130, (right - left) * 23 / 100);
+        const int typeWidth = (std::max)(86, (right - LayoutMetrics::kPanelInset) * 12 / 100);
+        const int dateWidth = (std::max)(130, (right - LayoutMetrics::kPanelInset) * 23 / 100);
         const int reservedRightPadding = GetSystemMetrics(SM_CXVSCROLL) + 12;
-        const int nameWidth = (std::max)(220, right - left - typeWidth - dateWidth - reservedRightPadding);
+        const int nameWidth = (std::max)(220, right - LayoutMetrics::kPanelInset - typeWidth - dateWidth - reservedRightPadding);
         ListView_SetColumnWidth(ctx->youtubeMediaList, 0, typeWidth);
         ListView_SetColumnWidth(ctx->youtubeMediaList, 1, nameWidth);
         ListView_SetColumnWidth(ctx->youtubeMediaList, 2, dateWidth);
     }
 
     const int controlsTop = listTop + listHeight + 12;
-    const int rightColumnWidth = (std::max)(220, (std::min)(320, (right - left) / 3));
+    const int rightColumnWidth = (std::max)(220, (std::min)(320, (right - LayoutMetrics::kPanelInset) / 3));
     const int rightColumnX = right - rightColumnWidth;
-    const int leftColumnWidth = (std::max)(240, rightColumnX - left - 12);
-    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_TITLE_LABEL, left, controlsTop, 45, rowHeight);
-    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_TITLE_EDIT, left + 50, controlsTop, leftColumnWidth - 50, rowHeight);
-    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_PRIVACY_LABEL, rightColumnX, controlsTop, 70, rowHeight);
-    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_PRIVACY_COMBO, rightColumnX + 74, controlsTop, rightColumnWidth - 74, rowHeight);
-    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_UPLOAD_PROGRESS, left, controlsTop + 46, leftColumnWidth, 20);
-    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_UPLOAD_BUTTON, rightColumnX, controlsTop + 44, rightColumnWidth, rowHeight + 4);
-    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_UPLOAD_STATUS, left, controlsTop + 70, leftColumnWidth, rowHeight);
+    const int leftColumnWidth = (std::max)(240, rightColumnX - LayoutMetrics::kPanelInset - 12);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_TITLE_LABEL, LayoutMetrics::kPanelInset, controlsTop, 45, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_TITLE_EDIT, LayoutMetrics::kPanelInset + 50, controlsTop, leftColumnWidth - 50, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_PRIVACY_LABEL, rightColumnX, controlsTop, 70, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_PRIVACY_COMBO, rightColumnX + 74, controlsTop, rightColumnWidth - 74, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_UPLOAD_PROGRESS, LayoutMetrics::kPanelInset, controlsTop + 46, leftColumnWidth, 20);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_UPLOAD_BUTTON, rightColumnX, controlsTop + 44, rightColumnWidth, LayoutMetrics::kButtonHeight);
+    MoveControl(ctx->youtubePanel, IDC_YOUTUBE_UPLOAD_STATUS, LayoutMetrics::kPanelInset, controlsTop + 70, leftColumnWidth, LayoutMetrics::kRowHeight);
 }
 
 void LayoutChatPrivacyPanel(AppContext* ctx, int panelWidth, int panelHeight)
@@ -275,41 +269,38 @@ void LayoutChatPrivacyPanel(AppContext* ctx, int panelWidth, int panelHeight)
         return;
     }
 
-    const int rowHeight = 24;
-    const int left = 20;
-    const int right = panelWidth - 20;
-    int y = 20;
+    const int right = panelWidth - LayoutMetrics::kPanelInset;
+    int y = LayoutMetrics::kPanelInset;
 
-    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_ENABLED_CHECK, left, y, 240, rowHeight);
+    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_ENABLED_CHECK, LayoutMetrics::kPanelInset, y, 240, LayoutMetrics::kRowHeight);
     y += 32;
 
-    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_BLANK_RADIO, left + 104, y, 104, rowHeight);
-    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_CUSTOM_RADIO, left + 214, y, 104, rowHeight);
-    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_IMPORT_BUTTON, left + 324, y, 78, rowHeight + 4);
-    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_OPEN_FOLDER_BUTTON, left + 408, y, 108, rowHeight + 4);
+    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_BLANK_RADIO, LayoutMetrics::kPanelInset + 104, y, 104, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_CUSTOM_RADIO, LayoutMetrics::kPanelInset + 214, y, 104, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_IMPORT_BUTTON, LayoutMetrics::kPanelInset + 324, y, 78, LayoutMetrics::kButtonHeight);
+    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_OPEN_FOLDER_BUTTON, LayoutMetrics::kPanelInset + 408, y, 108, LayoutMetrics::kButtonHeight);
     y += 36;
 
-    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_LIBRARY_LABEL, left, y, 96, rowHeight);
-    const int comboWidth = (std::max)(160, right - (left + 114));
-    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_COMBO, left + 114, y, comboWidth, 180);
+    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_LIBRARY_LABEL, LayoutMetrics::kPanelInset, y, 96, LayoutMetrics::kRowHeight);
+    const int comboWidth = (std::max)(160, right - (LayoutMetrics::kPanelInset + 114));
+    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_COMBO, LayoutMetrics::kPanelInset + 114, y, comboWidth, 180);
     y += 34;
 
-    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_WIDTH_LABEL, left, y, 110, rowHeight);
-    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_WIDTH_EDIT, left + 114, y, 90, rowHeight);
-    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_HEIGHT_LABEL, left + 218, y, 110, rowHeight);
-    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_HEIGHT_EDIT, left + 328, y, 90, rowHeight);
+    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_WIDTH_LABEL, LayoutMetrics::kPanelInset, y, 110, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_WIDTH_EDIT, LayoutMetrics::kPanelInset + 114, y, 90, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_HEIGHT_LABEL, LayoutMetrics::kPanelInset + 218, y, 110, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_HEIGHT_EDIT, LayoutMetrics::kPanelInset + 328, y, 90, LayoutMetrics::kRowHeight);
     y += 34;
 
-    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_ANCHOR_LABEL, left, y, 110, rowHeight);
-    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_ANCHOR_COMBO, left + 114, y, 180, 140);
+    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_ANCHOR_LABEL, LayoutMetrics::kPanelInset, y, 110, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_ANCHOR_COMBO, LayoutMetrics::kPanelInset + 114, y, 180, 140);
     y += 38;
 
-    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_PREVIEW_LABEL, left, y, right - left, rowHeight);
+    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_PREVIEW_LABEL, LayoutMetrics::kPanelInset, y, right - LayoutMetrics::kPanelInset, LayoutMetrics::kRowHeight);
     y += 28;
 
-    const int previewHeight = (std::max)(220, panelHeight - y - 42);
-    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_PREVIEW, left, y, right - left, previewHeight);
-    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_PREVIEW_STATUS, left, y + previewHeight + 8, right - left, rowHeight);
+    const int previewHeight = (std::max)(220, panelHeight - y - 12);
+    MoveControl(ctx->chatPrivacyPanel, IDC_CHAT_PREVIEW, LayoutMetrics::kPanelInset, y, right - LayoutMetrics::kPanelInset, previewHeight);
 }
 
 void LayoutAboutPanel(AppContext* ctx, int panelWidth, int panelHeight)
@@ -317,31 +308,29 @@ void LayoutAboutPanel(AppContext* ctx, int panelWidth, int panelHeight)
     if (!ctx || !ctx->aboutPanel) {
         return;
     }
-    const int rowHeight = 24;
-    const int left = 20;
     const int rightButtonX = panelWidth - 170;
     const int valueWidth = (std::max)(180, rightButtonX - 150 - 14);
-    const int updatesRowBottom = 210 + rowHeight;
-    const int flavorY = updatesRowBottom + (std::max)(0, panelHeight - updatesRowBottom - rowHeight) / 2;
+    constexpr int updatesRowBottom = 210 + LayoutMetrics::kRowHeight;
+    const int flavorY = updatesRowBottom + (std::max)(0, panelHeight - updatesRowBottom - LayoutMetrics::kRowHeight) / 2;
 
-    MoveControl(ctx->aboutPanel, IDC_ABOUT_TITLE_LABEL, left, 24, panelWidth - 40, 34);
-    MoveControl(ctx->aboutPanel, IDC_ABOUT_BUILD_TEXT, left, 58, panelWidth - 40, rowHeight);
-    MoveControl(ctx->aboutPanel, IDC_ABOUT_WEBSITE_LABEL, left, 96, 120, rowHeight);
-    MoveControl(ctx->aboutPanel, IDC_ABOUT_WEBSITE_TEXT, 150, 96, valueWidth, rowHeight);
-    MoveControl(ctx->aboutPanel, IDC_ABOUT_WEBSITE_BUTTON, rightButtonX, 94, 150, rowHeight + 4);
+    MoveControl(ctx->aboutPanel, IDC_ABOUT_TITLE_LABEL, LayoutMetrics::kPanelInset, 24, panelWidth - (2 * LayoutMetrics::kPanelInset), 34);
+    MoveControl(ctx->aboutPanel, IDC_ABOUT_BUILD_TEXT, LayoutMetrics::kPanelInset, 58, panelWidth - (2 * LayoutMetrics::kPanelInset), LayoutMetrics::kRowHeight);
+    MoveControl(ctx->aboutPanel, IDC_ABOUT_WEBSITE_LABEL, LayoutMetrics::kPanelInset, 96, 120, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->aboutPanel, IDC_ABOUT_WEBSITE_TEXT, 150, 96, valueWidth, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->aboutPanel, IDC_ABOUT_WEBSITE_BUTTON, rightButtonX, 94, 150, LayoutMetrics::kButtonHeight);
 
-    MoveControl(ctx->aboutPanel, IDC_ABOUT_EMAIL_LABEL, left, 134, 120, rowHeight);
-    MoveControl(ctx->aboutPanel, IDC_ABOUT_EMAIL_TEXT, 150, 134, valueWidth, rowHeight);
-    MoveControl(ctx->aboutPanel, IDC_ABOUT_EMAIL_BUTTON, rightButtonX, 132, 150, rowHeight + 4);
+    MoveControl(ctx->aboutPanel, IDC_ABOUT_EMAIL_LABEL, LayoutMetrics::kPanelInset, 134, 120, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->aboutPanel, IDC_ABOUT_EMAIL_TEXT, 150, 134, valueWidth, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->aboutPanel, IDC_ABOUT_EMAIL_BUTTON, rightButtonX, 132, 150, LayoutMetrics::kButtonHeight);
 
-    MoveControl(ctx->aboutPanel, IDC_ABOUT_DISCORD_LABEL, left, 172, 120, rowHeight);
-    MoveControl(ctx->aboutPanel, IDC_ABOUT_DISCORD_TEXT, 150, 172, valueWidth, rowHeight);
-    MoveControl(ctx->aboutPanel, IDC_ABOUT_DISCORD_BUTTON, rightButtonX, 170, 150, rowHeight + 4);
+    MoveControl(ctx->aboutPanel, IDC_ABOUT_DISCORD_LABEL, LayoutMetrics::kPanelInset, 172, 120, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->aboutPanel, IDC_ABOUT_DISCORD_TEXT, 150, 172, valueWidth, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->aboutPanel, IDC_ABOUT_DISCORD_BUTTON, rightButtonX, 170, 150, LayoutMetrics::kButtonHeight);
 
-    MoveControl(ctx->aboutPanel, IDC_ABOUT_UPDATE_LABEL, left, 210, 120, rowHeight);
-    MoveControl(ctx->aboutPanel, IDC_ABOUT_UPDATE_TEXT, 150, 210, valueWidth, rowHeight);
-    MoveControl(ctx->aboutPanel, IDC_ABOUT_CHECK_UPDATES_BUTTON, rightButtonX, 208, 150, rowHeight + 4);
-    MoveControl(ctx->aboutPanel, IDC_ABOUT_FLAVOR_TEXT, left, flavorY, panelWidth - 40, rowHeight);
+    MoveControl(ctx->aboutPanel, IDC_ABOUT_UPDATE_LABEL, LayoutMetrics::kPanelInset, 210, 120, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->aboutPanel, IDC_ABOUT_UPDATE_TEXT, 150, 210, valueWidth, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->aboutPanel, IDC_ABOUT_CHECK_UPDATES_BUTTON, rightButtonX, 208, 150, LayoutMetrics::kButtonHeight);
+    MoveControl(ctx->aboutPanel, IDC_ABOUT_FLAVOR_TEXT, LayoutMetrics::kPanelInset, flavorY, panelWidth - (2 * LayoutMetrics::kPanelInset), LayoutMetrics::kRowHeight);
 }
 
 void LayoutClipsPanel(AppContext* ctx, int panelWidth, int panelHeight)
@@ -350,43 +339,39 @@ void LayoutClipsPanel(AppContext* ctx, int panelWidth, int panelHeight)
         return;
     }
 
-    const int rowHeight = 24;
-    const int left = 20;
-    const int right = panelWidth - 20;
-    const int top = 20;
-    const int bottomPadding = 20;
+    const int right = panelWidth - LayoutMetrics::kPanelInset;
 
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_SOURCE_LABEL, left, top, 110, rowHeight);
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_SOURCE_COMBO, left + 114, top, (std::max)(260, right - left - 230), 240);
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_REFRESH, right - 90, top - 1, 90, rowHeight + 4);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_SOURCE_LABEL, LayoutMetrics::kPanelInset, LayoutMetrics::kPanelInset, 110, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_SOURCE_COMBO, LayoutMetrics::kPanelInset + 114, LayoutMetrics::kPanelInset, (std::max)(260, right - LayoutMetrics::kPanelInset - 230), 240);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_REFRESH, right - 90, LayoutMetrics::kPanelInset - 1, 90, LayoutMetrics::kButtonHeight);
 
-    const int actionsTop = panelHeight - bottomPadding - (rowHeight + 4) + 1;
+    const int actionsTop = panelHeight - LayoutMetrics::kPanelInset - LayoutMetrics::kButtonHeight + 1;
     const int clippingTop = actionsTop - 34;
     const int volumeTop = clippingTop - 34;
     const int playbackTop = volumeTop - 34;
-    const int videoTop = top + 36;
+    constexpr int videoTop = LayoutMetrics::kPanelInset + 36;
     const int videoBottom = playbackTop - 10;
     const int videoHeight = (std::max)(120, videoBottom - videoTop);
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_VIDEO_SURFACE, left, videoTop, right - left, videoHeight);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_VIDEO_SURFACE, LayoutMetrics::kPanelInset, videoTop, right - LayoutMetrics::kPanelInset, videoHeight);
 
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_PLAY_PAUSE, left, playbackTop, 90, rowHeight + 4);
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_TIMELINE, left + 96, playbackTop + 1, (std::max)(140, right - left - 330), rowHeight + 2);
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_POSITION_TEXT, right - 228, playbackTop + 2, 228, rowHeight);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_PLAY_PAUSE, LayoutMetrics::kPanelInset, playbackTop, 90, LayoutMetrics::kButtonHeight);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_TIMELINE, LayoutMetrics::kPanelInset + 96, playbackTop + 1, (std::max)(140, right - LayoutMetrics::kPanelInset - 330), LayoutMetrics::kRowHeight + 2);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_POSITION_TEXT, right - 228, playbackTop + 2, 228, LayoutMetrics::kRowHeight);
 
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_VOLUME_LABEL, left, volumeTop, 60, rowHeight);
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_VOLUME_SLIDER, left + 62, volumeTop, 170, rowHeight);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_VOLUME_LABEL, LayoutMetrics::kPanelInset, volumeTop, 60, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_VOLUME_SLIDER, LayoutMetrics::kPanelInset + 62, volumeTop, 170, LayoutMetrics::kRowHeight);
 
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_START_LABEL, left, clippingTop, 50, rowHeight);
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_START_EDIT, left + 54, clippingTop, 74, rowHeight);
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_SET_START, left + 136, clippingTop - 1, 90, rowHeight + 4);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_START_LABEL, LayoutMetrics::kPanelInset, clippingTop, 50, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_START_EDIT, LayoutMetrics::kPanelInset + 54, clippingTop, 74, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_SET_START, LayoutMetrics::kPanelInset + 136, clippingTop - 1, 90, LayoutMetrics::kButtonHeight);
 
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_END_LABEL, left + 240, clippingTop, 40, rowHeight);
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_END_EDIT, left + 284, clippingTop, 74, rowHeight);
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_SET_END, left + 366, clippingTop - 1, 90, rowHeight + 4);
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_EXPORT, left, actionsTop - 1, 150, rowHeight + 4);
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_EXPORT_PRECISE, left + 160, actionsTop - 1, 170, rowHeight + 4);
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_OPEN_FOLDER, left + 340, actionsTop - 1, 110, rowHeight + 4);
-    MoveControl(ctx->clipsPanel, IDC_CLIPS_FFMPEG_WARNING, left + 460, actionsTop, (std::max)(0, right - left - 460), rowHeight + 4);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_END_LABEL, LayoutMetrics::kPanelInset + 240, clippingTop, 40, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_END_EDIT, LayoutMetrics::kPanelInset + 284, clippingTop, 74, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_SET_END, LayoutMetrics::kPanelInset + 366, clippingTop - 1, 90, LayoutMetrics::kButtonHeight);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_EXPORT, LayoutMetrics::kPanelInset, actionsTop - 1, 150, LayoutMetrics::kButtonHeight);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_EXPORT_PRECISE, LayoutMetrics::kPanelInset + 160, actionsTop - 1, 170, LayoutMetrics::kButtonHeight);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_OPEN_FOLDER, LayoutMetrics::kPanelInset + 340, actionsTop - 1, 110, LayoutMetrics::kButtonHeight);
+    MoveControl(ctx->clipsPanel, IDC_CLIPS_FFMPEG_WARNING, LayoutMetrics::kPanelInset + 460, actionsTop, (std::max)(0, right - LayoutMetrics::kPanelInset - 460), LayoutMetrics::kButtonHeight);
 }
 
 void LayoutKeybindsPanel(AppContext* ctx, int panelWidth, int panelHeight)
@@ -394,17 +379,15 @@ void LayoutKeybindsPanel(AppContext* ctx, int panelWidth, int panelHeight)
     if (!ctx || !ctx->keybindsPanel) {
         return;
     }
-    const int rowHeight = 24;
-    const int left = 20;
-    MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_INFO, left, 20, panelWidth - 40, rowHeight);
-    MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_AUTOSAVE_HINT, left, panelHeight - 44, panelWidth - 40, rowHeight);
+    MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_INFO, LayoutMetrics::kPanelInset, LayoutMetrics::kPanelInset, panelWidth - (2 * LayoutMetrics::kPanelInset), LayoutMetrics::kRowHeight);
+    MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_AUTOSAVE_HINT, LayoutMetrics::kPanelInset, panelHeight - 44, panelWidth - (2 * LayoutMetrics::kPanelInset), LayoutMetrics::kRowHeight);
     for (int index = 0; index < 3; ++index) {
         const int y = 64 + index * 44;
-        MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_CREATE_CLIP_LABEL + index, left, y, 160, rowHeight);
-        MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_CREATE_CLIP_VALUE + index, left + 170, y, 180, rowHeight);
-        MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_CREATE_CLIP_REBIND + index, left + 370, y, 100, rowHeight + 2);
-        MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_CREATE_CLIP_UNBIND + index, left + 480, y, 100, rowHeight + 2);
-        MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_CREATE_CLIP_RESET + index, left + 590, y, 100, rowHeight + 2);
+        MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_CREATE_CLIP_LABEL + index, LayoutMetrics::kPanelInset, y, 160, LayoutMetrics::kRowHeight);
+        MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_CREATE_CLIP_VALUE + index, LayoutMetrics::kPanelInset + 170, y, 180, LayoutMetrics::kRowHeight);
+        MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_CREATE_CLIP_REBIND + index, LayoutMetrics::kPanelInset + 370, y, 100, LayoutMetrics::kRowHeight + 2);
+        MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_CREATE_CLIP_UNBIND + index, LayoutMetrics::kPanelInset + 480, y, 100, LayoutMetrics::kRowHeight + 2);
+        MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_CREATE_CLIP_RESET + index, LayoutMetrics::kPanelInset + 590, y, 100, LayoutMetrics::kRowHeight + 2);
     }
 }
 
@@ -416,12 +399,12 @@ void LayoutMainUi(AppContext* ctx, int clientWidth, int clientHeight)
         return;
     }
 
-    const int outer = 12;
+    constexpr int outer = 12;
     const int navWidth = (std::max)(120, (std::min)(160, clientWidth / 6));
-    const int navY = 20;
-    const int navHeight = 34;
+    constexpr int navY = 20;
+    constexpr int navHeight = 34;
     const int panelX = outer + navWidth + 16;
-    const int panelY = 14;
+    constexpr int panelY = 14;
     const int panelWidth = (std::max)(320, clientWidth - panelX - outer);
     const int panelHeight = (std::max)(240, clientHeight - panelY - outer);
 

@@ -249,7 +249,6 @@ enum ControlId {
     IDC_CHAT_BLOCKER_ANCHOR_LABEL,
     IDC_CHAT_BLOCKER_ANCHOR_COMBO,
     IDC_CHAT_PREVIEW_LABEL,
-    IDC_CHAT_PREVIEW_STATUS,
     IDC_CHAT_PREVIEW,
     IDC_CHAT_SAVE_SETTINGS,
     IDC_RECORDINGS_LABEL,
@@ -395,7 +394,6 @@ struct AppContext {
     HWND chatBlockerImageOpenFolderButton = nullptr;
     HWND chatBlockerImageCombo = nullptr;
     HWND chatPreview = nullptr;
-    HWND chatPreviewStatus = nullptr;
     HBITMAP chatPreviewFrameBitmap = nullptr;
     int chatPreviewFrameWidth = 0;
     int chatPreviewFrameHeight = 0;
