@@ -3422,7 +3422,7 @@ void RefreshLiveStatus(AppContext* ctx)
                         const int textLength = lstrlenW(advancedLoggingText);
                         if (GetTextExtentPoint32W(dc, advancedLoggingText, textLength, &textSize)) {
                             const int helpX = textRect.left + textSize.cx + 6;
-                            MoveWindow(ctx->advancedLoggingHelpIcon, helpX, textRect.top + 4, 16, 16, TRUE);
+                            MoveWindow(ctx->advancedLoggingHelpIcon, helpX, textRect.top + 4, 20, 20, TRUE);
                         }
                         if (oldFont) {
                             SelectObject(dc, oldFont);
@@ -4731,7 +4731,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ctx->configurationTabButton = CreateWindowW(L"BUTTON", L"Config", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 58, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_CONFIGURATION), nullptr, nullptr);
         ctx->chatPrivacyTabButton = CreateWindowW(L"BUTTON", L"Chat Blocker", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 96, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_CHAT_PRIVACY), nullptr, nullptr);
         ctx->recordingsTabButton = CreateWindowW(L"BUTTON", L"Recordings", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 134, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_RECORDINGS), nullptr, nullptr);
-        ctx->clipsTabButton = CreateWindowW(L"BUTTON", L"Clips", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 172, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_CLIPS), nullptr, nullptr);
+        ctx->clipsTabButton = CreateWindowW(L"BUTTON", L"Clipmaker", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 172, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_CLIPS), nullptr, nullptr);
         ctx->youtubeTabButton = CreateWindowW(L"BUTTON", L"YouTube", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 210, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_YOUTUBE), nullptr, nullptr);
         ctx->keybindsTabButton = CreateWindowW(L"BUTTON", L"Keybinds", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 248, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_KEYBINDS), nullptr, nullptr);
         ctx->aboutTabButton = CreateWindowW(L"BUTTON", L"About", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 286, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_ABOUT), nullptr, nullptr);
@@ -4790,8 +4790,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             WS_VISIBLE | WS_CHILD | SS_OWNERDRAW | SS_NOTIFY,
             xEdit + 186,
             y + 4,
-            16,
-            16,
+            20,
+            20,
             ctx->recorderPanel,
             reinterpret_cast<HMENU>(IDC_PRESET_HELP),
             nullptr,
@@ -4901,8 +4901,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         y += rowSpacing;
 
         CreateWindowW(L"STATIC", L"Post-run tail (s):", WS_VISIBLE | WS_CHILD, xLabel, y, 104, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_POST_RUN_DELAY_LABEL), nullptr, nullptr);
-        ctx->postRunDelayHelpIcon = CreateWindowW(L"STATIC", L"", WS_VISIBLE | WS_CHILD | SS_OWNERDRAW | SS_NOTIFY, xLabel + 104, y + 4, 16, 16, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_POST_RUN_DELAY_HELP), nullptr, nullptr);
-        ctx->postRunDelayEdit = CreateWindowW(L"EDIT", L"30", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER | WS_TABSTOP, xLabel + 120, y, 70, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_POST_RUN_DELAY_EDIT), nullptr, nullptr);
+        ctx->postRunDelayEdit = CreateWindowW(L"EDIT", L"30", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER | WS_TABSTOP, xLabel + 104, y, 70, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_POST_RUN_DELAY_EDIT), nullptr, nullptr);
+        ctx->postRunDelayHelpIcon = CreateWindowW(L"STATIC", L"", WS_VISIBLE | WS_CHILD | SS_OWNERDRAW | SS_NOTIFY, xLabel + 180, y + 2, 20, 20, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_POST_RUN_DELAY_HELP), nullptr, nullptr);
         EnableCtrlASelectAll(ctx->postRunDelayEdit);
         SetWindowSubclass(ctx->postRunDelayHelpIcon, HoverTooltipSubclassProc, 1, reinterpret_cast<DWORD_PTR>(ctx));
         CreateWindowW(L"STATIC", L"Clip duration (s):", WS_VISIBLE | WS_CHILD, xLabel + 230, y, 116, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_CLIP_DURATION_LABEL), nullptr, nullptr);
@@ -5050,8 +5050,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             WS_VISIBLE | WS_CHILD | SS_OWNERDRAW | SS_NOTIFY,
             xLabel + 282,
             y + 4,
-            16,
-            16,
+            20,
+            20,
             ctx->statusPanel,
             reinterpret_cast<HMENU>(IDC_ADVANCED_LOGGING_HELP),
             nullptr,

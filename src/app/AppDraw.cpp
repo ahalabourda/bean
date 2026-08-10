@@ -1610,10 +1610,89 @@ void DrawHelpIcon(const DRAWITEMSTRUCT* drawInfo)
         return;
     }
     RECT rc = drawInfo->rcItem;
-    HBRUSH clearBrush = CreateSolidBrush(kColorPanelBottom);
-    if (clearBrush) { FillRect(drawInfo->hDC, &rc, clearBrush); DeleteObject(clearBrush); }
+    // Owner-draw controls do not have true alpha transparency. Repaint the
+    // parent panel's gradient underneath the icon so the area outside the
+    // circle still matches the current background.
+    FillStyledButtonParentBackground(drawInfo->hDC, drawInfo->hwndItem, rc, nullptr);
+
     const int width = rc.right - rc.left;
     const int height = rc.bottom - rc.top;
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+
+    const Gdiplus::REAL iconSize = static_cast<Gdiplus::REAL>((std::min)(width, height));
+    const Gdiplus::REAL circleDiameter = iconSize - 2.5f;
+    if (circleDiameter <= 0.0f) {
+        return;
+    }
+    const Gdiplus::REAL centerX = static_cast<Gdiplus::REAL>(rc.left + width / 2.0f);
+    const Gdiplus::REAL centerY = static_cast<Gdiplus::REAL>(rc.top + height / 2.0f);
+    const Gdiplus::REAL circleLeft = centerX - circleDiameter / 2.0f;
+    const Gdiplus::REAL circleTop = centerY - circleDiameter / 2.0f;
+
+    if (EnsureAlertGdiplus()) {
+        Gdiplus::Graphics graphics(drawInfo->hDC);
+        graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+        graphics.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
+        if (graphics.GetLastStatus() == Gdiplus::Ok) {
+            const auto toGdiPlusColor = [](COLORREF color) {
+                return Gdiplus::Color(
+                    255,
+                    GetRValue(color),
+                    GetGValue(color),
+                    GetBValue(color));
+            };
+
+            const Gdiplus::RectF circleRect(circleLeft, circleTop, circleDiameter, circleDiameter);
+            Gdiplus::SolidBrush circleBrush(toGdiPlusColor(kThemeColors.controlTabBackground));
+            Gdiplus::Pen borderPen(toGdiPlusColor(kThemeColors.controlHoverBorder), 1.25f);
+            graphics.FillEllipse(&circleBrush, circleRect);
+            graphics.DrawEllipse(&borderPen, circleRect);
+
+            // A vector glyph keeps the question mark compact and centered at
+            // this size, instead of allowing a font's descender to cross the
+            // circle border.
+            const Gdiplus::REAL scale = circleDiameter / 13.5f;
+            Gdiplus::GraphicsPath questionPath;
+            questionPath.StartFigure();
+            questionPath.AddBezier(
+                Gdiplus::PointF(centerX - 2.3f * scale, centerY - 2.0f * scale),
+                Gdiplus::PointF(centerX - 2.3f * scale, centerY - 3.8f * scale),
+                Gdiplus::PointF(centerX - 1.3f * scale, centerY - 4.6f * scale),
+                Gdiplus::PointF(centerX, centerY - 4.6f * scale));
+            questionPath.AddBezier(
+                Gdiplus::PointF(centerX, centerY - 4.6f * scale),
+                Gdiplus::PointF(centerX + 1.8f * scale, centerY - 4.6f * scale),
+                Gdiplus::PointF(centerX + 2.6f * scale, centerY - 3.5f * scale),
+                Gdiplus::PointF(centerX + 2.6f * scale, centerY - 2.0f * scale));
+            questionPath.AddBezier(
+                Gdiplus::PointF(centerX + 2.6f * scale, centerY - 2.0f * scale),
+                Gdiplus::PointF(centerX + 2.6f * scale, centerY - 0.2f * scale),
+                Gdiplus::PointF(centerX + 0.2f * scale, centerY),
+                Gdiplus::PointF(centerX, centerY + 1.7f * scale));
+
+            Gdiplus::Pen questionPen(toGdiPlusColor(kColorTooltipText), 1.65f);
+            questionPen.SetStartCap(Gdiplus::LineCapRound);
+            questionPen.SetEndCap(Gdiplus::LineCapRound);
+            questionPen.SetLineJoin(Gdiplus::LineJoinRound);
+            graphics.DrawPath(&questionPen, &questionPath);
+
+            Gdiplus::SolidBrush dotBrush(toGdiPlusColor(kColorTooltipText));
+            const Gdiplus::REAL dotDiameter = 1.8f * scale;
+            graphics.FillEllipse(
+                &dotBrush,
+                centerX - dotDiameter / 2.0f,
+                centerY + 4.0f * scale - dotDiameter / 2.0f,
+                dotDiameter,
+                dotDiameter);
+            return;
+        }
+    }
+
+    // GDI+ is available on supported Windows systems, but keep a safe
+    // fallback for startup failures.
     const int diameter = (std::max)(10, (std::min)(14, (std::min)(width, height) - 2));
     const int left = rc.left + (width - diameter) / 2;
     const int top = rc.top + (height - diameter) / 2;
@@ -1628,12 +1707,10 @@ void DrawHelpIcon(const DRAWITEMSTRUCT* drawInfo)
     if (oldPen) SelectObject(drawInfo->hDC, oldPen);
     if (fillBrush) DeleteObject(fillBrush);
     if (borderPen) DeleteObject(borderPen);
+
     RECT textRect{left, top, right, bottom};
     SetBkMode(drawInfo->hDC, TRANSPARENT);
     SetTextColor(drawInfo->hDC, kColorTooltipText);
-    if (gTheme.uiFont) {
-        SelectObject(drawInfo->hDC, gTheme.uiFont);
-    }
     DrawTextW(drawInfo->hDC, L"?", 1, &textRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 }
 

@@ -12,7 +12,7 @@ constexpr int kPanelInset = 20;
 constexpr int kRowHeight = 24;
 constexpr int kButtonHeight = kRowHeight + 4;
 constexpr int kRowSpacing = 40;
-constexpr int kHelpIconSize = 16;
+constexpr int kHelpIconSize = 20;
 constexpr int kHelpIconGap = 6;
 }
 
@@ -99,8 +99,14 @@ void LayoutConfigurationPanel(AppContext* ctx, int panelWidth, int)
     y += LayoutMetrics::kRowSpacing;
 
     MoveControl(ctx->recorderPanel, IDC_POST_RUN_DELAY_LABEL, LayoutMetrics::kPanelInset, y, 104, LayoutMetrics::kRowHeight);
-    MoveControl(ctx->recorderPanel, IDC_POST_RUN_DELAY_HELP, LayoutMetrics::kPanelInset + 104, y + 4, LayoutMetrics::kHelpIconSize, LayoutMetrics::kHelpIconSize);
-    MoveControl(ctx->recorderPanel, IDC_POST_RUN_DELAY_EDIT, LayoutMetrics::kPanelInset + 120, y, 70, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->recorderPanel, IDC_POST_RUN_DELAY_EDIT, LayoutMetrics::kPanelInset + 104, y, 70, LayoutMetrics::kRowHeight);
+    MoveControl(
+        ctx->recorderPanel,
+        IDC_POST_RUN_DELAY_HELP,
+        LayoutMetrics::kPanelInset + 104 + 70 + LayoutMetrics::kHelpIconGap,
+        y + (LayoutMetrics::kRowHeight - LayoutMetrics::kHelpIconSize) / 2,
+        LayoutMetrics::kHelpIconSize,
+        LayoutMetrics::kHelpIconSize);
     MoveControl(ctx->recorderPanel, IDC_CLIP_DURATION_LABEL, LayoutMetrics::kPanelInset + 230, y, 116, LayoutMetrics::kRowHeight);
     MoveControl(ctx->recorderPanel, IDC_CLIP_DURATION_EDIT, LayoutMetrics::kPanelInset + 350, y, 70, LayoutMetrics::kRowHeight);
     y += sectionSpacing;
