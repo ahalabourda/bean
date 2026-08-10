@@ -27,7 +27,7 @@
 inline constexpr wchar_t kWindowClassName[] = L"BeanMainWindow";
 inline constexpr wchar_t kWindowTitleBase[] = L"Battle Encounter Archival Nexus - WoW Recorder";
 inline constexpr wchar_t kAboutTitleText[] = L"Battle Encounter Archival Nexus";
-inline constexpr wchar_t kAboutFlavorText[] = L"\"Roll that beautiful bean footage...\"";
+inline constexpr wchar_t kAboutFlavorText[] = L"\"Thanks for using Bean!\"";
 inline constexpr wchar_t kIconFile16[] = L"bean-16.ico";
 inline constexpr wchar_t kIconFile32[] = L"bean-32.ico";
 inline constexpr wchar_t kIconFile48[] = L"bean-48.ico";
