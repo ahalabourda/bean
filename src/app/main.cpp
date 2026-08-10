@@ -4932,7 +4932,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
 
         ctx->microphoneCheck = CreateWindowW(
             L"BUTTON",
-            L"Record local microphone",
+            L"Record local mic",
             WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX | WS_TABSTOP,
             xEdit,
             y,
