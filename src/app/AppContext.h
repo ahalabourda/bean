@@ -215,7 +215,7 @@ inline ThemeColors MakeThemePalette(
     const COLORREF sliderMarker = accentBright;
     const COLORREF sliderThumb = textPrimary;
     const COLORREF mutedDot = controlTabBorder;
-    const COLORREF recordingDot = warning;
+    const COLORREF recordingDot = failure;
     return {
         windowTop,
         windowBottom,
