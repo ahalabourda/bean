@@ -1888,62 +1888,67 @@ void DrawUpdateAlertGlyph(HDC dc, const RECT& bounds)
 
     const int width = bounds.right - bounds.left;
     const int height = bounds.bottom - bounds.top;
-    const int diameter = (std::max)(10, (std::min)(14, (std::min)(width, height)));
-    const int left = bounds.left + (width - diameter) / 2;
-    const int top = bounds.top + (height - diameter) / 2;
-    const int right = left + diameter;
-    const int bottom = top + diameter;
+    const Gdiplus::REAL iconSize = static_cast<Gdiplus::REAL>((std::min)(width, height));
+    const Gdiplus::REAL circleDiameter = iconSize - 2.5f;
+    if (circleDiameter <= 0.0f) {
+        return;
+    }
+    const Gdiplus::REAL centerX = static_cast<Gdiplus::REAL>(bounds.left + width / 2.0f);
+    const Gdiplus::REAL centerY = static_cast<Gdiplus::REAL>(bounds.top + height / 2.0f);
+    const Gdiplus::REAL circleLeft = centerX - circleDiameter / 2.0f;
+    const Gdiplus::REAL circleTop = centerY - circleDiameter / 2.0f;
 
     if (EnsureAlertGdiplus()) {
         Gdiplus::Graphics graphics(dc);
         graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
         graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+        graphics.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
 
         const Gdiplus::Color warningColor(
             255,
-            GetRValue(kColorWarning),
-            GetGValue(kColorWarning),
-            GetBValue(kColorWarning));
+            GetRValue(kThemeColors.accent),
+            GetGValue(kThemeColors.accent),
+            GetBValue(kThemeColors.accent));
         const Gdiplus::Color glyphColor(
             255,
             GetRValue(kColorWindowTop),
             GetGValue(kColorWindowTop),
             GetBValue(kColorWindowTop));
         Gdiplus::SolidBrush warningBrush(warningColor);
-        Gdiplus::Pen warningPen(warningColor, 1.0f);
-        graphics.FillEllipse(
-            &warningBrush,
-            static_cast<Gdiplus::REAL>(left),
-            static_cast<Gdiplus::REAL>(top),
-            static_cast<Gdiplus::REAL>(diameter - 1),
-            static_cast<Gdiplus::REAL>(diameter - 1));
-        graphics.DrawEllipse(
-            &warningPen,
-            static_cast<Gdiplus::REAL>(left) + 0.5f,
-            static_cast<Gdiplus::REAL>(top) + 0.5f,
-            static_cast<Gdiplus::REAL>(diameter - 2),
-            static_cast<Gdiplus::REAL>(diameter - 2));
+        Gdiplus::Pen warningPen(warningColor, 1.25f);
+        const Gdiplus::RectF circleRect(circleLeft, circleTop, circleDiameter, circleDiameter);
+        graphics.FillEllipse(&warningBrush, circleRect);
+        graphics.DrawEllipse(&warningPen, circleRect);
 
-        Gdiplus::Pen glyphPen(glyphColor, 1.8f);
-        const Gdiplus::REAL centerX = static_cast<Gdiplus::REAL>(left + right) / 2.0f;
+        const Gdiplus::REAL scale = circleDiameter / 13.5f;
+        Gdiplus::Pen glyphPen(glyphColor, 2.2f);
+        glyphPen.SetStartCap(Gdiplus::LineCapRound);
+        glyphPen.SetEndCap(Gdiplus::LineCapRound);
+        glyphPen.SetLineJoin(Gdiplus::LineJoinRound);
         graphics.DrawLine(
             &glyphPen,
             centerX,
-            static_cast<Gdiplus::REAL>(top) + 3.0f,
+            centerY - 4.5f * scale,
             centerX,
-            static_cast<Gdiplus::REAL>(bottom) - 5.0f);
+            centerY + 1.8f * scale);
         Gdiplus::SolidBrush glyphBrush(glyphColor);
+        const Gdiplus::REAL dotDiameter = 1.8f * scale;
         graphics.FillEllipse(
             &glyphBrush,
-            centerX - 1.0f,
-            static_cast<Gdiplus::REAL>(bottom) - 4.0f,
-            2.0f,
-            2.0f);
+            centerX - dotDiameter / 2.0f,
+            centerY + 4.0f * scale - dotDiameter / 2.0f,
+            dotDiameter,
+            dotDiameter);
         return;
     }
 
-    HPEN borderPen = CreatePen(PS_SOLID, 1, kColorWarning);
-    HBRUSH fillBrush = CreateSolidBrush(kColorWarning);
+    const int diameter = (std::max)(1, (std::min)(width, height) - 2);
+    const int left = bounds.left + (width - diameter) / 2;
+    const int top = bounds.top + (height - diameter) / 2;
+    const int right = left + diameter;
+    const int bottom = top + diameter;
+    HPEN borderPen = CreatePen(PS_SOLID, 1, kThemeColors.accent);
+    HBRUSH fillBrush = CreateSolidBrush(kThemeColors.accent);
     HGDIOBJ oldPen = borderPen ? SelectObject(dc, borderPen) : nullptr;
     HGDIOBJ oldBrush = fillBrush ? SelectObject(dc, fillBrush) : nullptr;
     Ellipse(dc, left, top, right, bottom);
@@ -1960,11 +1965,11 @@ void DrawUpdateAlertGlyph(HDC dc, const RECT& bounds)
         DeleteObject(borderPen);
     }
 
-    const int centerX = (left + right) / 2;
+    const int centerXInt = (left + right) / 2;
     HPEN exclamationPen = CreatePen(PS_SOLID, 2, kColorWindowTop);
     HGDIOBJ oldExclamationPen = exclamationPen ? SelectObject(dc, exclamationPen) : nullptr;
-    MoveToEx(dc, centerX, top + 3, nullptr);
-    LineTo(dc, centerX, bottom - 5);
+    MoveToEx(dc, centerXInt, top + 3, nullptr);
+    LineTo(dc, centerXInt, bottom - 5);
     if (oldExclamationPen) {
         SelectObject(dc, oldExclamationPen);
     }
@@ -1973,7 +1978,7 @@ void DrawUpdateAlertGlyph(HDC dc, const RECT& bounds)
     }
     HBRUSH dotBrush = CreateSolidBrush(kColorWindowTop);
     HGDIOBJ oldDotBrush = dotBrush ? SelectObject(dc, dotBrush) : nullptr;
-    Ellipse(dc, centerX - 1, bottom - 4, centerX + 2, bottom - 1);
+    Ellipse(dc, centerXInt - 1, bottom - 4, centerXInt + 2, bottom - 1);
     if (oldDotBrush) {
         SelectObject(dc, oldDotBrush);
     }
@@ -2553,10 +2558,10 @@ void DrawStyledButton(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
             }
             if (showAboutUpdateIndicator) {
                 RECT iconRect = rc;
-                iconRect.left = iconRect.right - 20;
                 iconRect.right -= 8;
+                const int targetSize = 18;
+                iconRect.left = iconRect.right - targetSize;
                 const int height = iconRect.bottom - iconRect.top;
-                const int targetSize = 14;
                 const int yInset = (std::max)(0, (height - targetSize) / 2);
                 iconRect.top += yInset;
                 iconRect.bottom = iconRect.top + targetSize;

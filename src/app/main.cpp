@@ -3134,11 +3134,17 @@ void ApplyAboutUpdateAvailabilityResult(AppContext* ctx, const UpdateAvailabilit
     ctx->aboutUpdateCheckInProgress.store(false);
 
     const bool wasUpdateAvailable = ctx->aboutUpdateAvailable;
+#ifdef _DEBUG
+    // Temporary visual-test override; keep the indicator visible regardless
+    // of whether the Debug build can reach the update server.
+    ctx->aboutUpdateAvailable = true;
+#else
     if (payload.availability == bean::app::UpdateAvailability::UpdateAvailable) {
         ctx->aboutUpdateAvailable = true;
     } else if (payload.availability == bean::app::UpdateAvailability::UpToDate) {
         ctx->aboutUpdateAvailable = false;
     }
+#endif
     if (wasUpdateAvailable != ctx->aboutUpdateAvailable && ctx->aboutTabButton) {
         InvalidateRect(ctx->aboutTabButton, nullptr, TRUE);
     }

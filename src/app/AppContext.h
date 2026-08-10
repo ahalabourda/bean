@@ -814,7 +814,12 @@ struct AppContext {
     std::atomic<std::uint64_t> aboutUpdateCheckRequestId{0};
     // Kept on the UI thread so the About tab can advertise an update even
     // while its panel has never been opened.
+    // Temporary Debug-build override for visually testing the indicator.
+#ifdef _DEBUG
+    bool aboutUpdateAvailable = true;
+#else
     bool aboutUpdateAvailable = false;
+#endif
     bool youtubeOAuthConfigured = false;
     bool youtubeLinked = false;
     bool youtubeUnlinkConfirmPending = false;
