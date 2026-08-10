@@ -1745,9 +1745,6 @@ void RefreshMicrophoneOptionsUi(AppContext* ctx)
         EnableWindow(ctx->microphoneNoiseSuppressionCheck, micEnabled ? TRUE : FALSE);
         if (noiseWasEnabled != micEnabled) {
             RedrawWindow(ctx->microphoneNoiseSuppressionCheck, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
-            if (ctx->recorderPanel) {
-                RedrawWindow(ctx->recorderPanel, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE);
-            }
         }
     }
 }

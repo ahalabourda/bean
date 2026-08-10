@@ -320,6 +320,47 @@ void DrawModernRadioGlyph(
     }
 }
 
+void DrawModernCheckboxCheckmark(HDC dc, const RECT& glyph, int centerY)
+{
+    if (EnsureAlertGdiplus()) {
+        Gdiplus::Graphics graphics(dc);
+        graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+        graphics.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
+        if (graphics.GetLastStatus() == Gdiplus::Ok) {
+            Gdiplus::Pen checkPen(
+                Gdiplus::Color(
+                    255,
+                    GetRValue(kColorButtonText),
+                    GetGValue(kColorButtonText),
+                    GetBValue(kColorButtonText)),
+                1.8f);
+            checkPen.SetStartCap(Gdiplus::LineCapRound);
+            checkPen.SetEndCap(Gdiplus::LineCapRound);
+            checkPen.SetLineJoin(Gdiplus::LineJoinRound);
+            const Gdiplus::PointF points[] = {
+                {static_cast<Gdiplus::REAL>(glyph.left + 3), static_cast<Gdiplus::REAL>(centerY)},
+                {static_cast<Gdiplus::REAL>(glyph.left + 6), static_cast<Gdiplus::REAL>(glyph.bottom - 3)},
+                {static_cast<Gdiplus::REAL>(glyph.right - 3), static_cast<Gdiplus::REAL>(glyph.top + 3)},
+            };
+            graphics.DrawLines(&checkPen, points, 3);
+            return;
+        }
+    }
+
+    HPEN checkPen = CreatePen(PS_SOLID, 2, kColorButtonText);
+    HGDIOBJ oldCheckPen = checkPen ? SelectObject(dc, checkPen) : nullptr;
+    MoveToEx(dc, glyph.left + 3, centerY, nullptr);
+    LineTo(dc, glyph.left + 6, glyph.bottom - 3);
+    LineTo(dc, glyph.right - 3, glyph.top + 3);
+    if (oldCheckPen) {
+        SelectObject(dc, oldCheckPen);
+    }
+    if (checkPen) {
+        DeleteObject(checkPen);
+    }
+}
+
 void DrawModernToggleContent(HWND hwnd, HDC dc, const AppContext* ctx)
 {
     if (!hwnd || !dc) {
@@ -378,17 +419,7 @@ void DrawModernToggleContent(HWND hwnd, HDC dc, const AppContext* ctx)
             DeleteObject(borderPen);
         }
         if (checked) {
-            HPEN checkPen = CreatePen(PS_SOLID, 2, kColorButtonText);
-            HGDIOBJ oldCheckPen = checkPen ? SelectObject(dc, checkPen) : nullptr;
-            MoveToEx(dc, glyph.left + 3, centerY, nullptr);
-            LineTo(dc, glyph.left + 6, glyph.bottom - 3);
-            LineTo(dc, glyph.right - 3, glyph.top + 3);
-            if (oldCheckPen) {
-                SelectObject(dc, oldCheckPen);
-            }
-            if (checkPen) {
-                DeleteObject(checkPen);
-            }
+            DrawModernCheckboxCheckmark(dc, glyph, centerY);
         }
     }
 
@@ -467,7 +498,7 @@ void DrawModernComboChrome(HWND hwnd, HDC dc)
     const COLORREF borderColor = !enabled
         ? kThemeColors.controlDisabledBorder
         : (focused ? kThemeColors.accentBright : (hovered ? kThemeColors.controlHoverBorder : kColorInputBorder));
-    const int borderThickness = focused ? 2 : 1;
+    const int borderThickness = 1;
     HBRUSH borderBrush = CreateSolidBrush(borderColor);
     if (borderBrush) {
         RECT topBorder{rc.left, rc.top, rc.right, rc.top + borderThickness};
@@ -638,7 +669,8 @@ LRESULT CALLBACK ModernComboSubclassProc(HWND hwnd, UINT message, WPARAM wParam,
         return result;
     }
     case WM_LBUTTONDOWN:
-    case WM_LBUTTONUP: {
+    case WM_LBUTTONUP:
+    case WM_LBUTTONDBLCLK: {
         LRESULT result = DefSubclassProc(hwnd, message, wParam, lParam);
         RefreshModernCombo(hwnd);
         return result;
