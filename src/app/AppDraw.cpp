@@ -578,12 +578,24 @@ LRESULT CALLBACK ModernToggleSubclassProc(HWND hwnd, UINT message, WPARAM wParam
         DrawModernToggle(hwnd, reinterpret_cast<HDC>(wParam), ctx);
         return 0;
     case WM_MOUSEMOVE: {
-        if (gHoveredModernToggle != hwnd) {
+        RECT clientRect{};
+        GetClientRect(hwnd, &clientRect);
+        const POINT point{
+            static_cast<LONG>(static_cast<short>(LOWORD(lParam))),
+            static_cast<LONG>(static_cast<short>(HIWORD(lParam)))};
+        const bool inside = PtInRect(&clientRect, point) != FALSE;
+        const bool hoverChanged = inside
+            ? gHoveredModernToggle != hwnd
+            : gHoveredModernToggle == hwnd;
+        if (inside && gHoveredModernToggle != hwnd) {
             HWND previous = gHoveredModernToggle;
             gHoveredModernToggle = hwnd;
             if (previous && IsWindow(previous)) {
                 InvalidateRect(previous, nullptr, FALSE);
             }
+            InvalidateRect(hwnd, nullptr, FALSE);
+        } else if (!inside && gHoveredModernToggle == hwnd) {
+            gHoveredModernToggle = nullptr;
             InvalidateRect(hwnd, nullptr, FALSE);
         }
         TRACKMOUSEEVENT track{};
@@ -591,14 +603,24 @@ LRESULT CALLBACK ModernToggleSubclassProc(HWND hwnd, UINT message, WPARAM wParam
         track.dwFlags = TME_LEAVE;
         track.hwndTrack = hwnd;
         TrackMouseEvent(&track);
-        break;
+        LRESULT result = DefSubclassProc(hwnd, message, wParam, lParam);
+        if (hoverChanged) {
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        UpdateWindow(hwnd);
+        return result;
     }
     case WM_MOUSELEAVE:
         if (gHoveredModernToggle == hwnd) {
             gHoveredModernToggle = nullptr;
             InvalidateRect(hwnd, nullptr, FALSE);
         }
-        break;
+        {
+            LRESULT result = DefSubclassProc(hwnd, message, wParam, lParam);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            UpdateWindow(hwnd);
+            return result;
+        }
     case WM_SETFOCUS:
     case WM_KILLFOCUS:
     case WM_ENABLE:
