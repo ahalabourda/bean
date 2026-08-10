@@ -31,6 +31,7 @@ inline constexpr int kDefaultRecordingResolutionHeight = 0; // Full game resolut
 inline constexpr int kDefaultFps = 60;
 inline constexpr int kDefaultPostRunStopDelaySeconds = 30;
 inline constexpr int kDefaultClipDurationSeconds = 30;
+inline constexpr char kDefaultTheme[] = "bean_alpha";
 inline constexpr Keybind kDefaultClipKeybind{6, 0x77};        // Ctrl+Shift+F8
 inline constexpr Keybind kDefaultManualStartKeybind{6, 0x78}; // Ctrl+Shift+F9
 inline constexpr Keybind kDefaultManualStopKeybind{6, 0x79};  // Ctrl+Shift+F10
@@ -73,6 +74,7 @@ struct AppSettings {
     int fps = kDefaultFps;
     int postRunStopDelaySeconds = kDefaultPostRunStopDelaySeconds;
     int clipDurationSeconds = kDefaultClipDurationSeconds;
+    std::string theme = kDefaultTheme;
     Keybind clipKeybind = kDefaultClipKeybind;
     Keybind manualStartKeybind = kDefaultManualStartKeybind;
     Keybind manualStopKeybind = kDefaultManualStopKeybind;

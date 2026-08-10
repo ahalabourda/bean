@@ -114,7 +114,7 @@ struct ThemeColors {
     COLORREF recordingDot;
 };
 
-inline constexpr ThemeColors kThemeColors{
+inline constexpr ThemeColors kBeanAlphaThemeColors{
     RGB(11, 14, 23),
     RGB(5, 7, 14),
     RGB(31, 36, 52),
@@ -158,29 +158,198 @@ inline constexpr ThemeColors kThemeColors{
     RGB(255, 112, 130),
 };
 
+// UI-thread-owned active palette. It starts with Bean Alpha and is replaced
+// when the user selects another preset in Customize.
+inline ThemeColors kThemeColors = kBeanAlphaThemeColors;
+
+constexpr COLORREF MixThemeColors(COLORREF first, COLORREF second, int secondWeightPercent)
+{
+    const int weight = secondWeightPercent < 0 ? 0 : (secondWeightPercent > 100 ? 100 : secondWeightPercent);
+    const int firstWeight = 100 - weight;
+    const auto mixChannel = [firstWeight, weight](int firstChannel, int secondChannel) {
+        return (firstChannel * firstWeight + secondChannel * weight + 50) / 100;
+    };
+    return RGB(
+        mixChannel(GetRValue(first), GetRValue(second)),
+        mixChannel(GetGValue(first), GetGValue(second)),
+        mixChannel(GetBValue(first), GetBValue(second)));
+}
+
+inline ThemeColors MakeThemePalette(
+    COLORREF windowTop,
+    COLORREF windowBottom,
+    COLORREF panelTop,
+    COLORREF panelBottom,
+    COLORREF panelBorder,
+    COLORREF textPrimary,
+    COLORREF textMuted,
+    COLORREF inputBackground,
+    COLORREF buttonBackground,
+    COLORREF accent,
+    COLORREF accentBright,
+    COLORREF success,
+    COLORREF failure,
+    COLORREF warning)
+{
+    const COLORREF youtubeInputBackground = MixThemeColors(inputBackground, panelTop, 35);
+    const COLORREF inputBorder = MixThemeColors(panelBorder, textMuted, 35);
+    const COLORREF tooltipBackground = MixThemeColors(windowTop, windowBottom, 60);
+    const COLORREF listSelection = MixThemeColors(accent, panelBottom, 55);
+    const COLORREF listRow = MixThemeColors(inputBackground, panelBottom, 25);
+    const COLORREF listRowAlternate = MixThemeColors(panelBottom, inputBackground, 45);
+    const COLORREF listGrid = MixThemeColors(panelBorder, panelBottom, 50);
+    const COLORREF controlHoverBackground = MixThemeColors(buttonBackground, accent, 35);
+    const COLORREF controlHoverBorder = MixThemeColors(accentBright, panelBorder, 35);
+    const COLORREF controlPressedBackground = MixThemeColors(buttonBackground, accent, 60);
+    const COLORREF controlPressedBorder = accent;
+    const COLORREF controlActiveBackground = MixThemeColors(accent, panelBottom, 35);
+    const COLORREF controlActiveBorder = accentBright;
+    const COLORREF controlTabBackground = MixThemeColors(buttonBackground, windowTop, 30);
+    const COLORREF controlTabBorder = MixThemeColors(panelBorder, windowTop, 40);
+    const COLORREF controlDisabledBackground = MixThemeColors(panelBottom, windowTop, 35);
+    const COLORREF controlDisabledBorder = MixThemeColors(panelBorder, windowTop, 45);
+    const COLORREF controlDisabledText = MixThemeColors(textMuted, windowTop, 35);
+    const COLORREF dropdownHoverBackground = listSelection;
+    const COLORREF sliderTrack = panelBorder;
+    const COLORREF sliderSelection = accent;
+    const COLORREF sliderMarker = accentBright;
+    const COLORREF sliderThumb = textPrimary;
+    const COLORREF mutedDot = controlTabBorder;
+    const COLORREF recordingDot = warning;
+    return {
+        windowTop,
+        windowBottom,
+        panelTop,
+        panelBottom,
+        panelBorder,
+        textPrimary,
+        textMuted,
+        inputBackground,
+        youtubeInputBackground,
+        inputBorder,
+        buttonBackground,
+        textPrimary,
+        tooltipBackground,
+        textPrimary,
+        listSelection,
+        listRow,
+        listRowAlternate,
+        listGrid,
+        success,
+        failure,
+        warning,
+        accent,
+        accentBright,
+        controlHoverBackground,
+        controlHoverBorder,
+        controlPressedBackground,
+        controlPressedBorder,
+        controlActiveBackground,
+        controlActiveBorder,
+        controlTabBackground,
+        controlTabBorder,
+        controlDisabledBackground,
+        controlDisabledBorder,
+        controlDisabledText,
+        dropdownHoverBackground,
+        sliderTrack,
+        sliderSelection,
+        sliderMarker,
+        sliderThumb,
+        mutedDot,
+        recordingDot
+    };
+}
+
+struct ThemeDefinition {
+    const char* id;
+    const wchar_t* displayName;
+    ThemeColors colors;
+};
+
+inline const std::array<ThemeDefinition, 10> kThemeDefinitions{{
+    {"bean_alpha", L"Bean Alpha", kBeanAlphaThemeColors},
+    {"midnight_roast", L"Midnight Roast", MakeThemePalette(
+        RGB(10, 12, 20), RGB(4, 5, 10), RGB(34, 31, 46), RGB(19, 17, 29), RGB(91, 72, 113),
+        RGB(244, 237, 255), RGB(186, 171, 204), RGB(22, 19, 34), RGB(53, 43, 67),
+        RGB(177, 112, 255), RGB(218, 177, 255), RGB(100, 224, 158), RGB(255, 108, 146), RGB(255, 207, 103))},
+    {"mocha", L"Mocha", MakeThemePalette(
+        RGB(29, 18, 15), RGB(14, 8, 7), RGB(65, 42, 32), RGB(36, 22, 18), RGB(126, 83, 61),
+        RGB(255, 242, 225), RGB(207, 168, 137), RGB(35, 21, 17), RGB(82, 48, 36),
+        RGB(222, 139, 83), RGB(255, 190, 120), RGB(111, 214, 135), RGB(239, 108, 100), RGB(255, 211, 111))},
+    {"matcha", L"Matcha", MakeThemePalette(
+        RGB(13, 23, 18), RGB(6, 12, 9), RGB(31, 53, 42), RGB(16, 31, 24), RGB(70, 112, 88),
+        RGB(232, 248, 235), RGB(162, 197, 173), RGB(15, 29, 22), RGB(37, 67, 48),
+        RGB(102, 194, 126), RGB(170, 235, 157), RGB(102, 221, 145), RGB(246, 111, 118), RGB(244, 211, 101))},
+    {"ocean", L"Ocean", MakeThemePalette(
+        RGB(8, 20, 31), RGB(3, 9, 16), RGB(24, 53, 70), RGB(12, 28, 40), RGB(54, 115, 143),
+        RGB(226, 246, 255), RGB(154, 194, 213), RGB(10, 27, 39), RGB(25, 65, 88),
+        RGB(64, 173, 225), RGB(139, 221, 255), RGB(85, 218, 173), RGB(245, 108, 127), RGB(245, 204, 92))},
+    {"berry", L"Berry", MakeThemePalette(
+        RGB(27, 10, 23), RGB(13, 4, 12), RGB(61, 25, 52), RGB(33, 12, 29), RGB(125, 57, 105),
+        RGB(255, 234, 249), RGB(211, 159, 194), RGB(32, 12, 28), RGB(79, 31, 67),
+        RGB(226, 91, 167), RGB(255, 157, 211), RGB(103, 220, 155), RGB(255, 101, 137), RGB(255, 211, 104))},
+    {"sunset", L"Sunset", MakeThemePalette(
+        RGB(31, 15, 12), RGB(15, 6, 7), RGB(72, 35, 30), RGB(39, 17, 19), RGB(137, 69, 58),
+        RGB(255, 238, 224), RGB(211, 164, 146), RGB(39, 17, 18), RGB(92, 41, 34),
+        RGB(239, 126, 78), RGB(255, 181, 107), RGB(101, 219, 157), RGB(255, 103, 115), RGB(255, 213, 104))},
+    {"lavender", L"Lavender", MakeThemePalette(
+        RGB(18, 15, 32), RGB(8, 6, 18), RGB(45, 37, 68), RGB(24, 18, 42), RGB(95, 80, 142),
+        RGB(241, 238, 255), RGB(181, 171, 211), RGB(24, 19, 43), RGB(59, 47, 91),
+        RGB(145, 121, 235), RGB(198, 177, 255), RGB(104, 224, 169), RGB(248, 105, 135), RGB(246, 210, 102))},
+    {"ember", L"Ember", MakeThemePalette(
+        RGB(25, 17, 10), RGB(12, 7, 4), RGB(58, 39, 24), RGB(31, 19, 10), RGB(125, 82, 43),
+        RGB(255, 244, 222), RGB(210, 178, 128), RGB(31, 19, 10), RGB(79, 47, 23),
+        RGB(232, 143, 53), RGB(255, 195, 102), RGB(105, 222, 145), RGB(248, 102, 100), RGB(255, 216, 100))},
+    {"high_contrast", L"High Contrast", MakeThemePalette(
+        RGB(0, 0, 0), RGB(0, 0, 0), RGB(20, 20, 20), RGB(5, 5, 5), RGB(130, 130, 130),
+        RGB(255, 255, 255), RGB(220, 220, 220), RGB(15, 15, 15), RGB(42, 42, 42),
+        RGB(0, 170, 255), RGB(100, 220, 255), RGB(0, 255, 120), RGB(255, 70, 90), RGB(255, 220, 0))}
+}};
+
+inline const ThemeDefinition* FindThemeDefinition(const std::string& id)
+{
+    for (const auto& theme : kThemeDefinitions) {
+        if (id == theme.id) {
+            return &theme;
+        }
+    }
+    return &kThemeDefinitions.front();
+}
+
+inline size_t ThemeIndexForId(const std::string& id)
+{
+    for (size_t index = 0; index < kThemeDefinitions.size(); ++index) {
+        if (id == kThemeDefinitions[index].id) {
+            return index;
+        }
+    }
+    return 0;
+}
+
 // Compatibility aliases keep existing drawing code readable while ensuring
 // the actual values above remain centralized.
-inline constexpr COLORREF kColorWindowTop = kThemeColors.windowTop;
-inline constexpr COLORREF kColorWindowBottom = kThemeColors.windowBottom;
-inline constexpr COLORREF kColorPanelTop = kThemeColors.panelTop;
-inline constexpr COLORREF kColorPanelBottom = kThemeColors.panelBottom;
-inline constexpr COLORREF kColorPanelBorder = kThemeColors.panelBorder;
-inline constexpr COLORREF kColorTextPrimary = kThemeColors.textPrimary;
-inline constexpr COLORREF kColorTextMuted = kThemeColors.textMuted;
-inline constexpr COLORREF kColorInputBg = kThemeColors.inputBackground;
-inline constexpr COLORREF kColorYouTubeInputBg = kThemeColors.youtubeInputBackground;
-inline constexpr COLORREF kColorInputBorder = kThemeColors.inputBorder;
-inline constexpr COLORREF kColorButtonBg = kThemeColors.buttonBackground;
-inline constexpr COLORREF kColorButtonText = kThemeColors.buttonText;
-inline constexpr COLORREF kColorTooltipBg = kThemeColors.tooltipBackground;
-inline constexpr COLORREF kColorTooltipText = kThemeColors.tooltipText;
-inline constexpr COLORREF kColorListSelection = kThemeColors.listSelection;
-inline constexpr COLORREF kColorListRow = kThemeColors.listRow;
-inline constexpr COLORREF kColorListRowAlt = kThemeColors.listRowAlternate;
-inline constexpr COLORREF kColorListGrid = kThemeColors.listGrid;
-inline constexpr COLORREF kColorSuccess = kThemeColors.success;
-inline constexpr COLORREF kColorFailure = kThemeColors.failure;
-inline constexpr COLORREF kColorWarning = kThemeColors.warning;
+inline COLORREF& kColorWindowTop = kThemeColors.windowTop;
+inline COLORREF& kColorWindowBottom = kThemeColors.windowBottom;
+inline COLORREF& kColorPanelTop = kThemeColors.panelTop;
+inline COLORREF& kColorPanelBottom = kThemeColors.panelBottom;
+inline COLORREF& kColorPanelBorder = kThemeColors.panelBorder;
+inline COLORREF& kColorTextPrimary = kThemeColors.textPrimary;
+inline COLORREF& kColorTextMuted = kThemeColors.textMuted;
+inline COLORREF& kColorInputBg = kThemeColors.inputBackground;
+inline COLORREF& kColorYouTubeInputBg = kThemeColors.youtubeInputBackground;
+inline COLORREF& kColorInputBorder = kThemeColors.inputBorder;
+inline COLORREF& kColorButtonBg = kThemeColors.buttonBackground;
+inline COLORREF& kColorButtonText = kThemeColors.buttonText;
+inline COLORREF& kColorTooltipBg = kThemeColors.tooltipBackground;
+inline COLORREF& kColorTooltipText = kThemeColors.tooltipText;
+inline COLORREF& kColorListSelection = kThemeColors.listSelection;
+inline COLORREF& kColorListRow = kThemeColors.listRow;
+inline COLORREF& kColorListRowAlt = kThemeColors.listRowAlternate;
+inline COLORREF& kColorListGrid = kThemeColors.listGrid;
+inline COLORREF& kColorSuccess = kThemeColors.success;
+inline COLORREF& kColorFailure = kThemeColors.failure;
+inline COLORREF& kColorWarning = kThemeColors.warning;
 inline constexpr int kMinClientWidth = 930;
 inline constexpr int kMinClientHeight = 560;
 inline constexpr int kSpecIconSizePx = 16;
@@ -276,6 +445,8 @@ enum ControlId {
     IDC_CLIP_DURATION_LABEL,
     IDC_CLIP_DURATION_EDIT,
     IDC_CONFIGURATION_AUTOSAVE_HINT,
+    IDC_CUSTOMIZE_THEME_LABEL,
+    IDC_CUSTOMIZE_THEME_COMBO,
     IDC_KEYBINDS_INFO,
     IDC_KEYBINDS_AUTOSAVE_HINT,
     IDC_KEYBINDS_CREATE_CLIP_LABEL,
@@ -466,6 +637,7 @@ struct AppContext {
     HWND aboutTabButton = nullptr;
     HWND clipsTabButton = nullptr;
     HWND keybindsTabButton = nullptr;
+    HWND customizeThemeCombo = nullptr;
     HWND statusPanel = nullptr;
     HWND recorderPanel = nullptr;
     HWND recordingsPanel = nullptr;

@@ -79,7 +79,7 @@ const wchar_t* ClipPreviewEngine::VideoHostWindowClass()
         windowClass.hInstance = GetModuleHandleW(nullptr);
         windowClass.lpszClassName = kClassName;
         windowClass.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512)); // IDC_ARROW
-        windowClass.hbrBackground = CreateSolidBrush(kColorInputBg);
+        windowClass.hbrBackground = CreateSolidBrush(RGB(0, 0, 0));
         RegisterClassW(&windowClass);
         registered = true;
     }
@@ -381,9 +381,9 @@ HRESULT ClipPreviewEngine::UpdatePlaybackWindow()
 
     RECT destination{0, 0, destWidth, destHeight};
     const MFARGB borderColor{
-        GetBValue(kColorInputBg),
-        GetGValue(kColorInputBg),
-        GetRValue(kColorInputBg),
+        0,
+        0,
+        0,
         255};
     const HRESULT hr = engineEx_->UpdateVideoStream(nullptr, &destination, &borderColor);
     InvalidateRect(containerWindow_, nullptr, FALSE);

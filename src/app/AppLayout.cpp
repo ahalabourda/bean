@@ -396,9 +396,11 @@ void LayoutKeybindsPanel(AppContext* ctx, int panelWidth, int panelHeight)
         return;
     }
     MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_INFO, LayoutMetrics::kPanelInset, LayoutMetrics::kPanelInset, panelWidth - (2 * LayoutMetrics::kPanelInset), LayoutMetrics::kRowHeight);
+    MoveControl(ctx->keybindsPanel, IDC_CUSTOMIZE_THEME_LABEL, LayoutMetrics::kPanelInset, 54, 120, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->keybindsPanel, IDC_CUSTOMIZE_THEME_COMBO, LayoutMetrics::kPanelInset + 130, 52, 280, 320);
     MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_AUTOSAVE_HINT, LayoutMetrics::kPanelInset, panelHeight - 44, panelWidth - (2 * LayoutMetrics::kPanelInset), LayoutMetrics::kRowHeight);
     for (int index = 0; index < 3; ++index) {
-        const int y = 64 + index * 44;
+        const int y = 104 + index * 44;
         MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_CREATE_CLIP_LABEL + index, LayoutMetrics::kPanelInset, y, 160, LayoutMetrics::kRowHeight);
         MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_CREATE_CLIP_VALUE + index, LayoutMetrics::kPanelInset + 170, y, 180, LayoutMetrics::kRowHeight);
         MoveControl(ctx->keybindsPanel, IDC_KEYBINDS_CREATE_CLIP_REBIND + index, LayoutMetrics::kPanelInset + 370, y, 100, LayoutMetrics::kRowHeight + 2);

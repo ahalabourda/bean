@@ -149,6 +149,7 @@ void TestSettingsStoreLoadSaveAndConversion()
     saveSettings.detectedWowClientHeight = 1440;
     saveSettings.fps = 120;
     saveSettings.postRunStopDelaySeconds = 45;
+    saveSettings.theme = "ocean";
     saveSettings.chatBlockerEnabled = true;
     saveSettings.chatBlockerWidth = 640;
     saveSettings.chatBlockerHeight = 320;
@@ -174,6 +175,7 @@ void TestSettingsStoreLoadSaveAndConversion()
     Expect(loaded.recordingResolutionHeight == 720, "Load should restore recording resolution.");
     Expect(loaded.fps == 120, "Load should restore fps.");
     Expect(loaded.postRunStopDelaySeconds == 45, "Load should restore postRunStopDelaySeconds.");
+    Expect(loaded.theme == "ocean", "Load should restore the selected theme.");
     Expect(loaded.chatBlockerAnchor == bean::core::AppSettings::ChatBlockerAnchor::TopRight, "Load should restore chatBlockerAnchor.");
     Expect(loaded.youtubeClientId == "youtube-client-id", "Load should restore YouTube client ID.");
     Expect(loaded.youtubeRefreshToken == "refresh-token", "Load should restore YouTube refresh token.");

@@ -149,6 +149,7 @@ constexpr char kRecordingResolutionHeight[] = "recordingResolutionHeight";
 constexpr char kFps[] = "fps";
 constexpr char kPostRunStopDelaySeconds[] = "postRunStopDelaySeconds";
 constexpr char kClipDurationSeconds[] = "clipDurationSeconds";
+constexpr char kTheme[] = "theme";
 constexpr char kClipKeybindModifiers[] = "clipKeybindModifiers";
 constexpr char kClipKeybindVirtualKey[] = "clipKeybindVirtualKey";
 constexpr char kManualStartKeybindModifiers[] = "manualStartKeybindModifiers";
@@ -470,6 +471,10 @@ bool SettingsStore::LoadLocked(AppSettings& settings, std::string& error) const
     settings.fps = ReadInt(content, SettingsKeys::kFps, settings.fps);
     settings.postRunStopDelaySeconds = ClampInt(ReadInt(content, SettingsKeys::kPostRunStopDelaySeconds, settings.postRunStopDelaySeconds), 0, 600, 30);
     settings.clipDurationSeconds = ClampInt(ReadInt(content, SettingsKeys::kClipDurationSeconds, settings.clipDurationSeconds), 1, 3600, 30);
+    const auto theme = ReadQuoted(content, SettingsKeys::kTheme);
+    if (!theme.empty()) {
+        settings.theme = theme;
+    }
     settings.clipKeybind.modifiers = static_cast<std::uint32_t>(
         ClampInt(ReadInt(content, SettingsKeys::kClipKeybindModifiers, static_cast<int>(settings.clipKeybind.modifiers)), 0, 31, 6));
     settings.clipKeybind.virtualKey = static_cast<std::uint32_t>(
@@ -569,6 +574,7 @@ bool SettingsStore::SaveLocked(const AppSettings& settings, std::string& error) 
         << "  \"" << SettingsKeys::kFps << "\": " << settings.fps << ",\n"
         << "  \"" << SettingsKeys::kPostRunStopDelaySeconds << "\": " << settings.postRunStopDelaySeconds << ",\n"
         << "  \"" << SettingsKeys::kClipDurationSeconds << "\": " << settings.clipDurationSeconds << ",\n"
+        << "  \"" << SettingsKeys::kTheme << "\": \"" << EscapeJson(settings.theme) << "\",\n"
         << "  \"" << SettingsKeys::kClipKeybindModifiers << "\": " << settings.clipKeybind.modifiers << ",\n"
         << "  \"" << SettingsKeys::kClipKeybindVirtualKey << "\": " << settings.clipKeybind.virtualKey << ",\n"
         << "  \"" << SettingsKeys::kManualStartKeybindModifiers << "\": " << settings.manualStartKeybind.modifiers << ",\n"

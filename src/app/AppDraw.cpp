@@ -1044,6 +1044,26 @@ void EnsureThemeResources()
     }
 }
 
+void RebuildThemeColorResources()
+{
+    if (gTheme.inputBrush) { DeleteObject(gTheme.inputBrush); gTheme.inputBrush = nullptr; }
+    if (gTheme.youtubeInputBrush) { DeleteObject(gTheme.youtubeInputBrush); gTheme.youtubeInputBrush = nullptr; }
+    if (gTheme.buttonBrush) { DeleteObject(gTheme.buttonBrush); gTheme.buttonBrush = nullptr; }
+    if (gTheme.panelSolidBrush) { DeleteObject(gTheme.panelSolidBrush); gTheme.panelSolidBrush = nullptr; }
+    if (gTheme.panelBorderBrush) { DeleteObject(gTheme.panelBorderBrush); gTheme.panelBorderBrush = nullptr; }
+    if (gTheme.tooltipBrush) { DeleteObject(gTheme.tooltipBrush); gTheme.tooltipBrush = nullptr; }
+    if (gTheme.successPen) { DeleteObject(gTheme.successPen); gTheme.successPen = nullptr; }
+    if (gTheme.failurePen) { DeleteObject(gTheme.failurePen); gTheme.failurePen = nullptr; }
+    if (gTheme.listGridPen) { DeleteObject(gTheme.listGridPen); gTheme.listGridPen = nullptr; }
+    if (gTheme.mutedDotPen) { DeleteObject(gTheme.mutedDotPen); gTheme.mutedDotPen = nullptr; }
+    if (gTheme.recordingDotPen) { DeleteObject(gTheme.recordingDotPen); gTheme.recordingDotPen = nullptr; }
+    if (gTheme.successBrush) { DeleteObject(gTheme.successBrush); gTheme.successBrush = nullptr; }
+    if (gTheme.failureBrush) { DeleteObject(gTheme.failureBrush); gTheme.failureBrush = nullptr; }
+    if (gTheme.mutedDotBrush) { DeleteObject(gTheme.mutedDotBrush); gTheme.mutedDotBrush = nullptr; }
+    if (gTheme.recordingDotBrush) { DeleteObject(gTheme.recordingDotBrush); gTheme.recordingDotBrush = nullptr; }
+    EnsureThemeResources();
+}
+
 void DestroyThemeResources()
 {
     if (gTheme.uiFont) { DeleteObject(gTheme.uiFont); gTheme.uiFont = nullptr; }
@@ -1215,6 +1235,7 @@ bool IsStyledComboId(int controlId)
     case IDC_RECORDING_RESOLUTION_COMBO:
     case IDC_CHAT_BLOCKER_IMAGE_COMBO:
     case IDC_CHAT_BLOCKER_ANCHOR_COMBO:
+    case IDC_CUSTOMIZE_THEME_COMBO:
     case IDC_YOUTUBE_PRIVACY_COMBO:
     case IDC_CLIPS_SOURCE_COMBO:
         return true;
@@ -1328,7 +1349,7 @@ void ConfigureModernControls(AppContext* ctx)
         }
     }
 
-    const std::array<std::pair<HWND, int>, 9> comboControls = {{
+    const std::array<std::pair<HWND, int>, 10> comboControls = {{
         {ctx->recorderPanel, IDC_ENCODER_COMBO},
         {ctx->recorderPanel, IDC_PRESET_COMBO},
         {ctx->recorderPanel, IDC_CONTAINER_COMBO},
@@ -1336,6 +1357,7 @@ void ConfigureModernControls(AppContext* ctx)
         {ctx->recorderPanel, IDC_RECORDING_RESOLUTION_COMBO},
         {ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_COMBO},
         {ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_ANCHOR_COMBO},
+        {ctx->keybindsPanel, IDC_CUSTOMIZE_THEME_COMBO},
         {ctx->youtubePanel, IDC_YOUTUBE_PRIVACY_COMBO},
         {ctx->clipsPanel, IDC_CLIPS_SOURCE_COMBO},
     }};
@@ -1354,6 +1376,9 @@ void ConfigureModernControls(AppContext* ctx)
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
         SendMessageW(combo, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), 24);
         SendMessageW(combo, CB_SETITEMHEIGHT, 0, 28);
+        if (controlId == IDC_CUSTOMIZE_THEME_COMBO) {
+            SendMessageW(combo, CB_SETMINVISIBLE, static_cast<WPARAM>(kThemeDefinitions.size()), 0);
+        }
         SetWindowTheme(combo, L"", L"");
         SetWindowSubclass(combo, ModernComboSubclassProc, 1, reinterpret_cast<DWORD_PTR>(ctx));
     }

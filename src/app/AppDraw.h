@@ -5,6 +5,7 @@
 extern VisualTheme gTheme;
 
 void EnsureThemeResources();
+void RebuildThemeColorResources();
 void DestroyThemeResources();
 void DestroyParticipantSpecIcons(AppContext* ctx);
 void EnsureParticipantSpecIconList(AppContext* ctx);

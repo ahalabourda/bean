@@ -4057,8 +4057,80 @@ bool ApplyReasonableDefaults(bean::core::AppSettings& settings, std::string& war
         settings.microphoneDeviceId = "default";
         changed = true;
     }
+    const auto* theme = FindThemeDefinition(settings.theme);
+    if (!theme || settings.theme != theme->id) {
+        settings.theme = bean::core::kDefaultTheme;
+        changed = true;
+    }
 
     return changed;
+}
+
+void ApplySelectedTheme(AppContext* ctx)
+{
+    if (!ctx) {
+        return;
+    }
+
+    const auto* theme = FindThemeDefinition(ctx->settings.theme);
+    if (!theme) {
+        theme = &kThemeDefinitions.front();
+    }
+    ctx->settings.theme = theme->id;
+    kThemeColors = theme->colors;
+    RebuildThemeColorResources();
+
+    if (ctx->mainWindow) {
+        ApplyDarkTitleBar(ctx->mainWindow);
+    }
+    if (ctx->recordingsList) {
+        ListView_SetBkColor(ctx->recordingsList, kColorListRow);
+        ListView_SetTextBkColor(ctx->recordingsList, kColorListRow);
+        ListView_SetTextColor(ctx->recordingsList, kColorTextPrimary);
+    }
+    if (ctx->recordingsInfoText) {
+        ListView_SetBkColor(ctx->recordingsInfoText, kColorListRow);
+        ListView_SetTextBkColor(ctx->recordingsInfoText, kColorListRow);
+        ListView_SetTextColor(ctx->recordingsInfoText, kColorTextPrimary);
+    }
+    if (ctx->youtubeMediaList) {
+        ListView_SetBkColor(ctx->youtubeMediaList, kColorListRow);
+        ListView_SetTextBkColor(ctx->youtubeMediaList, kColorListRow);
+        ListView_SetTextColor(ctx->youtubeMediaList, kColorTextPrimary);
+    }
+    if (ctx->youtubeUploadProgress) {
+        SendMessageW(ctx->youtubeUploadProgress, PBM_SETBARCOLOR, 0, static_cast<LPARAM>(kColorListSelection));
+        SendMessageW(ctx->youtubeUploadProgress, PBM_SETBKCOLOR, 0, static_cast<LPARAM>(kColorInputBg));
+    }
+    if (ctx->clipsPreviewEngine) {
+        ApplyClipVideoWindowBounds(ctx);
+    }
+    if (ctx->customizeThemeCombo) {
+        SendMessageW(
+            ctx->customizeThemeCombo,
+            CB_SETCURSEL,
+            static_cast<WPARAM>(ThemeIndexForId(ctx->settings.theme)),
+            0);
+    }
+    if (ctx->mainWindow) {
+        RedrawWindow(
+            ctx->mainWindow,
+            nullptr,
+            nullptr,
+            RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+        UpdateWindow(ctx->mainWindow);
+    }
+}
+
+void SaveThemeSettings(AppContext* ctx)
+{
+    if (!ctx) {
+        return;
+    }
+    std::string error;
+    if (!ctx->settingsStore.Save(ctx->settings, error)) {
+        SetStatus(ctx, std::wstring(L"Theme save failed: ") + ToWide(error));
+    }
 }
 
 void PushSettingsToUi(AppContext* ctx)
@@ -4078,6 +4150,13 @@ void PushSettingsToUi(AppContext* ctx)
     SetWindowTextW(ctx->postRunDelayEdit, ToWide(std::to_string(ctx->settings.postRunStopDelaySeconds)).c_str());
     SetWindowTextW(ctx->clipDurationEdit, ToWide(std::to_string(ctx->settings.clipDurationSeconds)).c_str());
     PushKeybindsToUi(ctx);
+    if (ctx->customizeThemeCombo) {
+        SendMessageW(
+            ctx->customizeThemeCombo,
+            CB_SETCURSEL,
+            static_cast<WPARAM>(ThemeIndexForId(ctx->settings.theme)),
+            0);
+    }
     const std::wstring selectedCustomImageFileName = ctx->settings.chatBlockerCustomImagePath.filename().wstring();
     RefreshChatBlockerImageCombo(ctx, selectedCustomImageFileName);
     SendMessageW(ctx->chatBlockerImageBlankRadio, BM_SETCHECK, ctx->settings.chatBlockerUseCustomImage ? BST_UNCHECKED : BST_CHECKED, 0);
@@ -4707,7 +4786,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ctx = appCtx;
         // Main-window controls are configured during WM_CREATE, so store it immediately.
         ctx->mainWindow = hwnd;
-        ApplyDarkTitleBar(hwnd);
+        ApplySelectedTheme(ctx);
 
         constexpr int navWidth = 120;
         constexpr int navX = 12;
@@ -4733,7 +4812,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ctx->recordingsTabButton = CreateWindowW(L"BUTTON", L"Recordings", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 134, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_RECORDINGS), nullptr, nullptr);
         ctx->clipsTabButton = CreateWindowW(L"BUTTON", L"Clipmaker", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 172, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_CLIPS), nullptr, nullptr);
         ctx->youtubeTabButton = CreateWindowW(L"BUTTON", L"YouTube", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 210, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_YOUTUBE), nullptr, nullptr);
-        ctx->keybindsTabButton = CreateWindowW(L"BUTTON", L"Keybinds", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 248, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_KEYBINDS), nullptr, nullptr);
+        ctx->keybindsTabButton = CreateWindowW(L"BUTTON", L"Customize", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 248, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_KEYBINDS), nullptr, nullptr);
         ctx->aboutTabButton = CreateWindowW(L"BUTTON", L"About", WS_VISIBLE | WS_CHILD | BS_OWNERDRAW, navX, 286, navWidth, 32, hwnd, reinterpret_cast<HMENU>(IDC_TAB_ABOUT), nullptr, nullptr);
 
         EnsureThemeResources();
@@ -4925,13 +5004,35 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
 
         CreateWindowW(
             L"STATIC",
-            L"These global hotkeys work while Bean is running, even when another app is focused.",
+            L"Customize global hotkeys and the visual appearance of Bean.",
             WS_VISIBLE | WS_CHILD,
             20, 20, 700, rowHeight,
             ctx->keybindsPanel,
             reinterpret_cast<HMENU>(IDC_KEYBINDS_INFO),
             nullptr,
             nullptr);
+        CreateWindowW(
+            L"STATIC",
+            L"Theme:",
+            WS_VISIBLE | WS_CHILD,
+            20, 54, 120, rowHeight,
+            ctx->keybindsPanel,
+            reinterpret_cast<HMENU>(IDC_CUSTOMIZE_THEME_LABEL),
+            nullptr,
+            nullptr);
+        ctx->customizeThemeCombo = CreateWindowW(
+            L"COMBOBOX",
+            L"",
+            WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS
+                | CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP,
+            150, 52, 280, 320,
+            ctx->keybindsPanel,
+            reinterpret_cast<HMENU>(IDC_CUSTOMIZE_THEME_COMBO),
+            nullptr,
+            nullptr);
+        for (const auto& theme : kThemeDefinitions) {
+            SendMessageW(ctx->customizeThemeCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(theme.displayName));
+        }
         CreateWindowW(
             L"STATIC",
             L"Settings auto-save as you make changes.",
@@ -4948,7 +5049,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         const int unbindIds[] = {IDC_KEYBINDS_CREATE_CLIP_UNBIND, IDC_KEYBINDS_MANUAL_START_UNBIND, IDC_KEYBINDS_MANUAL_STOP_UNBIND};
         const int resetIds[] = {IDC_KEYBINDS_CREATE_CLIP_RESET, IDC_KEYBINDS_MANUAL_START_RESET, IDC_KEYBINDS_MANUAL_STOP_RESET};
         for (int index = 0; index < 3; ++index) {
-            const int rowY = 64 + index * 44;
+            const int rowY = 104 + index * 44;
             CreateWindowW(L"STATIC", keybindLabels[index], WS_VISIBLE | WS_CHILD,
                 20, rowY, 160, rowHeight, ctx->keybindsPanel,
                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(labelIds[index])), nullptr, nullptr);
@@ -5564,6 +5665,17 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             // Let the native combo finish its selection transaction first,
             // then repaint the custom closed-state item from the queue.
             ScheduleModernComboRedraw(reinterpret_cast<HWND>(lParam));
+        }
+        if (ctx
+            && HIWORD(wParam) == CBN_SELCHANGE
+            && LOWORD(wParam) == IDC_CUSTOMIZE_THEME_COMBO) {
+            const LRESULT selectedIndex = SendMessageW(ctx->customizeThemeCombo, CB_GETCURSEL, 0, 0);
+            if (selectedIndex >= 0 && static_cast<size_t>(selectedIndex) < kThemeDefinitions.size()) {
+                ctx->settings.theme = kThemeDefinitions[static_cast<size_t>(selectedIndex)].id;
+                ApplySelectedTheme(ctx);
+                SaveThemeSettings(ctx);
+            }
+            return 0;
         }
         if (HIWORD(wParam) == EN_CHANGE && (LOWORD(wParam) == IDC_OUTPUT_EDIT || LOWORD(wParam) == IDC_LOG_EDIT)) {
             RefreshFolderAvailability(ctx);
