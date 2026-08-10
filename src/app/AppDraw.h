@@ -4,6 +4,11 @@
 
 extern VisualTheme gTheme;
 
+enum class BeanFileListKind {
+    Recordings,
+    YouTube
+};
+
 void EnsureThemeResources();
 void RebuildThemeColorResources();
 void DestroyThemeResources();
@@ -15,6 +20,9 @@ int ResolveParticipantSpecIconIndex(
     const std::optional<std::string>& specName);
 void ApplyUiFonts(HWND root);
 void ApplyRecordingsFonts(AppContext* ctx);
+HWND CreateBeanFileList(HWND parent, int controlId, AppContext* ctx, BeanFileListKind kind);
+void RefreshBeanFileList(HWND list);
+int GetBeanFileListSelectedIndex(HWND list);
 
 bool IsStyledButtonId(int controlId);
 bool IsStyledComboId(int controlId);
@@ -31,8 +39,6 @@ void DrawHelpIcon(const DRAWITEMSTRUCT* drawInfo);
 void DrawConfigurationTooltip(const DRAWITEMSTRUCT* drawInfo);
 void HideConfigurationTooltip(AppContext* ctx);
 void ConfigureConfigurationTooltips(AppContext* ctx);
-void DrawRecordingsGridLines(const NMLVCUSTOMDRAW* customDraw, const AppContext* ctx);
-LRESULT CALLBACK RecordingsHeaderSubclassProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR refData);
 void DrawYouTubeLinkStatus(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx);
 void DrawYouTubeUploadStatus(const DRAWITEMSTRUCT* drawInfo, AppContext* ctx);
 LRESULT CALLBACK HoverTooltipSubclassProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR subclassId, DWORD_PTR refData);

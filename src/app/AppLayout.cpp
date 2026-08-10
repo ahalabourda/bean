@@ -55,7 +55,7 @@ void LayoutConfigurationPanel(AppContext* ctx, int panelWidth, int)
 
     const int comboWidth = (std::max)(190, panelWidth - xEdit - 30);
     MoveControl(ctx->recorderPanel, IDC_ENCODER_LABEL, LayoutMetrics::kPanelInset, y, 120, LayoutMetrics::kRowHeight);
-    MoveControl(ctx->recorderPanel, IDC_ENCODER_COMBO, xEdit, y, comboWidth, 150);
+    MoveControl(ctx->recorderPanel, IDC_ENCODER_COMBO, xEdit, y, comboWidth, 180);
     y += LayoutMetrics::kRowSpacing;
 
     const int rightContentStart = panelWidth - 220;
@@ -202,17 +202,6 @@ void LayoutRecordingsPanel(AppContext* ctx, int panelWidth, int panelHeight)
     MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_LIST, LayoutMetrics::kPanelInset, listTop, listWidth, listHeight);
     MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_INFO_LABEL, participantsLeft, listTop, participantsWidth, LayoutMetrics::kRowHeight);
     MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_INFO_TEXT, participantsLeft, listTop + LayoutMetrics::kRowHeight, participantsWidth, (std::max)(100, listHeight - LayoutMetrics::kRowHeight));
-    if (ctx->recordingsList) {
-        const int dungeonWidth = (std::max)(120, listWidth * 40 / 100);
-        const int keyWidth = (std::max)(56, listWidth * 11 / 100);
-        const int lengthWidth = (std::max)(88, listWidth * 17 / 100);
-        const int reservedRightPadding = GetSystemMetrics(SM_CXVSCROLL) + 12;
-        const int dateWidth = (std::max)(94, listWidth - dungeonWidth - keyWidth - lengthWidth - reservedRightPadding);
-        ListView_SetColumnWidth(ctx->recordingsList, 0, dungeonWidth);
-        ListView_SetColumnWidth(ctx->recordingsList, 1, keyWidth);
-        ListView_SetColumnWidth(ctx->recordingsList, 2, lengthWidth);
-        ListView_SetColumnWidth(ctx->recordingsList, 3, dateWidth);
-    }
     if (ctx->recordingsInfoText) {
         ListView_SetColumnWidth(ctx->recordingsInfoText, 0, (std::max)(80, participantsWidth - 8));
     }
@@ -256,15 +245,6 @@ void LayoutYouTubePanel(AppContext* ctx, int panelWidth, int panelHeight)
     const int maxListHeight = (std::max)(0, panelHeight - listTop - 114);
     const int listHeight = (std::min)(preferredListHeight, maxListHeight);
     MoveControl(ctx->youtubePanel, IDC_YOUTUBE_MEDIA_LIST, LayoutMetrics::kPanelInset, listTop, right - LayoutMetrics::kPanelInset, listHeight);
-    if (ctx->youtubeMediaList) {
-        const int typeWidth = (std::max)(86, (right - LayoutMetrics::kPanelInset) * 12 / 100);
-        const int dateWidth = (std::max)(130, (right - LayoutMetrics::kPanelInset) * 23 / 100);
-        const int reservedRightPadding = GetSystemMetrics(SM_CXVSCROLL) + 12;
-        const int nameWidth = (std::max)(220, right - LayoutMetrics::kPanelInset - typeWidth - dateWidth - reservedRightPadding);
-        ListView_SetColumnWidth(ctx->youtubeMediaList, 0, typeWidth);
-        ListView_SetColumnWidth(ctx->youtubeMediaList, 1, nameWidth);
-        ListView_SetColumnWidth(ctx->youtubeMediaList, 2, dateWidth);
-    }
 
     const int controlsTop = listTop + listHeight + 12;
     const int rightColumnWidth = (std::max)(220, (std::min)(320, (right - LayoutMetrics::kPanelInset) / 3));

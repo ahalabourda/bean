@@ -78,6 +78,30 @@ namespace {
 
 constexpr char kYouTubeAuthServerUrl[] = "https://andrew.gg/bean/youtube-auth/";
 
+COLORREF ListSelectionBackground(const AppContext* ctx)
+{
+    const bool appActive = ctx && ctx->mainWindow && GetForegroundWindow() == ctx->mainWindow;
+    return appActive ? kColorListSelection : kThemeColors.listSelectionInactive;
+}
+
+void FillThemedListItemBackground(HWND list, const NMLVCUSTOMDRAW* customDraw, COLORREF color)
+{
+    if (!list || !customDraw) {
+        return;
+    }
+    RECT itemRect = customDraw->nmcd.rc;
+    ListView_GetItemRect(
+        list,
+        static_cast<int>(customDraw->nmcd.dwItemSpec),
+        &itemRect,
+        LVIR_BOUNDS);
+    HBRUSH brush = CreateSolidBrush(color);
+    if (brush) {
+        FillRect(customDraw->nmcd.hdc, &itemRect, brush);
+        DeleteObject(brush);
+    }
+}
+
 void ApplyDarkTitleBar(HWND hwnd)
 {
     // Win10 20H1+: dark system chrome. Win11+: exact caption/text/border colors.
@@ -2483,7 +2507,7 @@ int GetSelectedYouTubeMediaIndex(AppContext* ctx)
     if (!ctx || !ctx->youtubeMediaList) {
         return -1;
     }
-    return ListView_GetNextItem(ctx->youtubeMediaList, -1, LVNI_SELECTED);
+    return GetBeanFileListSelectedIndex(ctx->youtubeMediaList);
 }
 
 std::wstring DefaultYouTubeTitle(const std::filesystem::path& path)
@@ -2496,34 +2520,52 @@ std::wstring DefaultYouTubeTitle(const std::filesystem::path& path)
     return title;
 }
 
+void SortYouTubeMediaItems(AppContext* ctx)
+{
+    if (!ctx) {
+        return;
+    }
+    const auto column = ctx->youtubeSortColumn;
+    const bool ascending = ctx->youtubeSortAscending;
+    std::stable_sort(
+        ctx->youtubeMediaItems.begin(),
+        ctx->youtubeMediaItems.end(),
+        [column, ascending](const YouTubeMediaFile& left, const YouTubeMediaFile& right) {
+            int comparison = 0;
+            switch (column) {
+            case AppContext::YouTubeSortColumn::Type: {
+                const int leftType = left.type == YouTubeMediaType::Clip ? 1 : 0;
+                const int rightType = right.type == YouTubeMediaType::Clip ? 1 : 0;
+                comparison = leftType < rightType ? -1 : (leftType > rightType ? 1 : 0);
+                break;
+            }
+            case AppContext::YouTubeSortColumn::Name: {
+                const auto leftName = left.path.filename().wstring();
+                const auto rightName = right.path.filename().wstring();
+                comparison = _wcsicmp(leftName.c_str(), rightName.c_str());
+                break;
+            }
+            case AppContext::YouTubeSortColumn::Date:
+                comparison = left.modified < right.modified ? -1 : (left.modified > right.modified ? 1 : 0);
+                break;
+            }
+            if (comparison == 0) {
+                const auto leftPath = left.path.wstring();
+                const auto rightPath = right.path.wstring();
+                comparison = _wcsicmp(leftPath.c_str(), rightPath.c_str());
+            }
+            return ascending ? comparison < 0 : comparison > 0;
+        });
+}
+
 void RepopulateYouTubeMediaList(AppContext* ctx)
 {
     if (!ctx || !ctx->youtubeMediaList) {
         return;
     }
 
-    ListView_DeleteAllItems(ctx->youtubeMediaList);
-    for (size_t index = 0; index < ctx->youtubeMediaItems.size(); ++index) {
-        const auto& media = ctx->youtubeMediaItems[index];
-        LVITEMW item{};
-        item.mask = LVIF_TEXT;
-        item.iItem = static_cast<int>(index);
-        const wchar_t* typeText = media.type == YouTubeMediaType::Clip ? L"Clip" : L"Recording";
-        item.pszText = const_cast<wchar_t*>(typeText);
-        SendMessageW(ctx->youtubeMediaList, LVM_INSERTITEMW, 0, reinterpret_cast<LPARAM>(&item));
-
-        const std::wstring fileName = media.path.filename().wstring();
-        const std::wstring dateText = FormatLocalDate(FileTimeToSystemClock(media.modified));
-        LVITEMW subItem{};
-        subItem.mask = LVIF_TEXT;
-        subItem.iItem = static_cast<int>(index);
-        subItem.iSubItem = 1;
-        subItem.pszText = const_cast<wchar_t*>(fileName.c_str());
-        SendMessageW(ctx->youtubeMediaList, LVM_SETITEMTEXTW, static_cast<WPARAM>(index), reinterpret_cast<LPARAM>(&subItem));
-        subItem.iSubItem = 2;
-        subItem.pszText = const_cast<wchar_t*>(dateText.c_str());
-        SendMessageW(ctx->youtubeMediaList, LVM_SETITEMTEXTW, static_cast<WPARAM>(index), reinterpret_cast<LPARAM>(&subItem));
-    }
+    ctx->youtubeMediaSelectedIndex = -1;
+    RefreshBeanFileList(ctx->youtubeMediaList);
 }
 
 void RefreshYouTubeUiState(AppContext* ctx);
@@ -2562,6 +2604,7 @@ void RefreshYouTubeMediaList(AppContext* ctx)
     }
 
     ctx->youtubeMediaItems = EnumerateYouTubeMediaFiles(recordingsFolder);
+    SortYouTubeMediaItems(ctx);
     RepopulateYouTubeMediaList(ctx);
     UpdateYouTubeMediaSelection(ctx);
 
@@ -2847,35 +2890,9 @@ void RepopulateRecordingsListControl(AppContext* ctx)
         return;
     }
 
-    ListView_DeleteAllItems(ctx->recordingsList);
-    int itemIndex = 0;
-    for (const auto& recording : ctx->recordingItems) {
-        LVITEMW item{};
-        item.mask = LVIF_TEXT;
-        item.iItem = itemIndex;
-        item.iSubItem = 0;
-        item.pszText = const_cast<wchar_t*>(recording.dungeonName.c_str());
-        SendMessageW(ctx->recordingsList, LVM_INSERTITEMW, 0, reinterpret_cast<LPARAM>(&item));
-
-        LVITEMW subItem{};
-        subItem.mask = LVIF_TEXT;
-        subItem.iItem = itemIndex;
-
-        subItem.iSubItem = 1;
-        subItem.pszText = const_cast<wchar_t*>(recording.keystoneText.c_str());
-        SendMessageW(ctx->recordingsList, LVM_SETITEMTEXTW, static_cast<WPARAM>(itemIndex), reinterpret_cast<LPARAM>(&subItem));
-
-        subItem.iSubItem = 2;
-        subItem.pszText = const_cast<wchar_t*>(recording.durationText.c_str());
-        SendMessageW(ctx->recordingsList, LVM_SETITEMTEXTW, static_cast<WPARAM>(itemIndex), reinterpret_cast<LPARAM>(&subItem));
-
-        subItem.iSubItem = 3;
-        subItem.pszText = const_cast<wchar_t*>(recording.dateText.c_str());
-        SendMessageW(ctx->recordingsList, LVM_SETITEMTEXTW, static_cast<WPARAM>(itemIndex), reinterpret_cast<LPARAM>(&subItem));
-        ++itemIndex;
-    }
-
-    UpdateRecordingInfoPane(ctx, ListView_GetNextItem(ctx->recordingsList, -1, LVNI_SELECTED));
+    ctx->recordingsSelectedIndex = -1;
+    RefreshBeanFileList(ctx->recordingsList);
+    UpdateRecordingInfoPane(ctx, ctx->recordingsSelectedIndex);
 }
 
 bool RecordingListDisplayEqual(
@@ -2915,8 +2932,9 @@ void RefreshRecordingsList(AppContext* ctx)
 
     if (!DirectoryExists(folder)) {
         if (!ctx->recordingItems.empty()) {
-            ListView_DeleteAllItems(ctx->recordingsList);
             ctx->recordingItems.clear();
+            ctx->recordingsSelectedIndex = -1;
+            RefreshBeanFileList(ctx->recordingsList);
             UpdateRecordingInfoPane(ctx, -1);
         }
         SetWindowTextW(ctx->recordingsLabel, L"Recordings folder is unavailable.");
@@ -4083,20 +4101,10 @@ void ApplySelectedTheme(AppContext* ctx)
     if (ctx->mainWindow) {
         ApplyDarkTitleBar(ctx->mainWindow);
     }
-    if (ctx->recordingsList) {
-        ListView_SetBkColor(ctx->recordingsList, kColorListRow);
-        ListView_SetTextBkColor(ctx->recordingsList, kColorListRow);
-        ListView_SetTextColor(ctx->recordingsList, kColorTextPrimary);
-    }
     if (ctx->recordingsInfoText) {
         ListView_SetBkColor(ctx->recordingsInfoText, kColorListRow);
         ListView_SetTextBkColor(ctx->recordingsInfoText, kColorListRow);
         ListView_SetTextColor(ctx->recordingsInfoText, kColorTextPrimary);
-    }
-    if (ctx->youtubeMediaList) {
-        ListView_SetBkColor(ctx->youtubeMediaList, kColorListRow);
-        ListView_SetTextBkColor(ctx->youtubeMediaList, kColorListRow);
-        ListView_SetTextColor(ctx->youtubeMediaList, kColorTextPrimary);
     }
     if (ctx->youtubeUploadProgress) {
         SendMessageW(ctx->youtubeUploadProgress, PBM_SETBARCOLOR, 0, static_cast<LPARAM>(kColorListSelection));
@@ -4848,7 +4856,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         y += rowSpacing;
 
         CreateWindowW(L"STATIC", L"Video Encoder:", WS_VISIBLE | WS_CHILD, xLabel, y, labelWidth, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_ENCODER_LABEL), nullptr, nullptr);
-        ctx->encoderCombo = CreateWindowW(L"COMBOBOX", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP, xEdit, y, 230, 140, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_ENCODER_COMBO), nullptr, nullptr);
+        ctx->encoderCombo = CreateWindowW(L"COMBOBOX", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP, xEdit, y, 230, 180, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_ENCODER_COMBO), nullptr, nullptr);
         SendMessageW(ctx->encoderCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"GPU (Auto)"));
         SendMessageW(ctx->encoderCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"NVIDIA NVENC"));
         SendMessageW(ctx->encoderCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"AMD AMF"));
@@ -5308,36 +5316,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         CreateWindowW(L"BUTTON", L"Refresh", WS_VISIBLE | WS_CHILD, 20, 52, 100, rowHeight + 4, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_RECORDINGS_REFRESH), nullptr, nullptr);
         CreateWindowW(L"BUTTON", L"Open Folder", WS_VISIBLE | WS_CHILD, 130, 52, 120, rowHeight + 4, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_RECORDINGS_OPEN_FOLDER), nullptr, nullptr);
         CreateWindowW(L"BUTTON", L"Open DB Folder", WS_VISIBLE | WS_CHILD, 260, 52, 130, rowHeight + 4, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_RECORDINGS_OPEN_DB_FOLDER), nullptr, nullptr);
-        ctx->recordingsList = CreateWindowW(WC_LISTVIEWW, L"", WS_VISIBLE | WS_CHILD | WS_BORDER | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS, 20, 90, 500, 220, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_RECORDINGS_LIST), nullptr, nullptr);
-        SetWindowTheme(ctx->recordingsList, L"", L"");
-        ListView_SetExtendedListViewStyle(ctx->recordingsList, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
-        ListView_SetBkColor(ctx->recordingsList, kColorListRow);
-        ListView_SetTextBkColor(ctx->recordingsList, kColorListRow);
-        ListView_SetTextColor(ctx->recordingsList, kColorTextPrimary);
-        LVCOLUMNW column{};
-        column.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM | LVCF_FMT;
-        column.cx = 240;
-        column.fmt = LVCFMT_LEFT;
-        column.pszText = const_cast<wchar_t*>(L"Dungeon");
-        SendMessageW(ctx->recordingsList, LVM_INSERTCOLUMNW, 0, reinterpret_cast<LPARAM>(&column));
-        column.cx = 64;
-        column.fmt = LVCFMT_CENTER;
-        column.pszText = const_cast<wchar_t*>(L"Level");
-        SendMessageW(ctx->recordingsList, LVM_INSERTCOLUMNW, 1, reinterpret_cast<LPARAM>(&column));
-        column.cx = 110;
-        column.fmt = LVCFMT_CENTER;
-        column.pszText = const_cast<wchar_t*>(L"Duration");
-        SendMessageW(ctx->recordingsList, LVM_INSERTCOLUMNW, 2, reinterpret_cast<LPARAM>(&column));
-        column.cx = 128;
-        column.fmt = LVCFMT_CENTER;
-        column.pszText = const_cast<wchar_t*>(L"Date");
-        SendMessageW(ctx->recordingsList, LVM_INSERTCOLUMNW, 3, reinterpret_cast<LPARAM>(&column));
-        ctx->recordingsListHeader = ListView_GetHeader(ctx->recordingsList);
-        if (ctx->recordingsListHeader) {
-            SetWindowTheme(ctx->recordingsListHeader, L"", L"");
-            SetWindowSubclass(ctx->recordingsListHeader, RecordingsHeaderSubclassProc, 2, reinterpret_cast<DWORD_PTR>(ctx));
-            InvalidateRect(ctx->recordingsListHeader, nullptr, TRUE);
-        }
+        ctx->recordingsList = CreateBeanFileList(
+            ctx->recordingsPanel,
+            IDC_RECORDINGS_LIST,
+            ctx,
+            BeanFileListKind::Recordings);
         ctx->recordingsInfoLabel = CreateWindowW(L"STATIC", L"Characters", WS_VISIBLE | WS_CHILD, 532, 90, 228, rowHeight, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_RECORDINGS_INFO_LABEL), nullptr, nullptr);
         ctx->recordingsInfoText = CreateWindowW(WC_LISTVIEWW, L"", WS_VISIBLE | WS_CHILD | WS_BORDER | LVS_REPORT | LVS_SINGLESEL | LVS_NOCOLUMNHEADER, 532, 114, 228, 196, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_RECORDINGS_INFO_TEXT), nullptr, nullptr);
         SetWindowTheme(ctx->recordingsInfoText, L"", L"");
@@ -5355,42 +5338,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
 
         ctx->youtubeLabel = CreateWindowW(L"STATIC", L"Recordings and clips:", WS_VISIBLE | WS_CHILD, 20, 58, 740, rowHeight, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_LABEL), nullptr, nullptr);
         CreateWindowW(L"BUTTON", L"Refresh", WS_VISIBLE | WS_CHILD | WS_TABSTOP, 664, 57, 96, rowHeight + 4, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_REFRESH), nullptr, nullptr);
-        ctx->youtubeMediaList = CreateWindowW(
-            WC_LISTVIEWW,
-            L"",
-            WS_VISIBLE | WS_CHILD | WS_BORDER | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
-            20,
-            96,
-            740,
-            220,
+        ctx->youtubeMediaList = CreateBeanFileList(
             ctx->youtubePanel,
-            reinterpret_cast<HMENU>(IDC_YOUTUBE_MEDIA_LIST),
-            nullptr,
-            nullptr);
-        SetWindowTheme(ctx->youtubeMediaList, L"", L"");
-        ListView_SetExtendedListViewStyle(ctx->youtubeMediaList, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
-        ListView_SetBkColor(ctx->youtubeMediaList, kColorListRow);
-        ListView_SetTextBkColor(ctx->youtubeMediaList, kColorListRow);
-        ListView_SetTextColor(ctx->youtubeMediaList, kColorTextPrimary);
-        LVCOLUMNW youtubeColumn{};
-        youtubeColumn.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM | LVCF_FMT;
-        youtubeColumn.cx = 90;
-        youtubeColumn.fmt = LVCFMT_LEFT;
-        youtubeColumn.pszText = const_cast<wchar_t*>(L"Type");
-        SendMessageW(ctx->youtubeMediaList, LVM_INSERTCOLUMNW, 0, reinterpret_cast<LPARAM>(&youtubeColumn));
-        youtubeColumn.cx = 320;
-        youtubeColumn.pszText = const_cast<wchar_t*>(L"Name");
-        SendMessageW(ctx->youtubeMediaList, LVM_INSERTCOLUMNW, 1, reinterpret_cast<LPARAM>(&youtubeColumn));
-        youtubeColumn.cx = 160;
-        youtubeColumn.fmt = LVCFMT_CENTER;
-        youtubeColumn.pszText = const_cast<wchar_t*>(L"Date");
-        SendMessageW(ctx->youtubeMediaList, LVM_INSERTCOLUMNW, 2, reinterpret_cast<LPARAM>(&youtubeColumn));
-        ctx->youtubeMediaListHeader = ListView_GetHeader(ctx->youtubeMediaList);
-        if (ctx->youtubeMediaListHeader) {
-            SetWindowTheme(ctx->youtubeMediaListHeader, L"", L"");
-            SetWindowSubclass(ctx->youtubeMediaListHeader, RecordingsHeaderSubclassProc, 2, reinterpret_cast<DWORD_PTR>(ctx));
-            InvalidateRect(ctx->youtubeMediaListHeader, nullptr, TRUE);
-        }
+            IDC_YOUTUBE_MEDIA_LIST,
+            ctx,
+            BeanFileListKind::YouTube);
 
         ctx->youtubeLinkButton = CreateWindowW(L"BUTTON", L"Link YouTube", WS_VISIBLE | WS_CHILD, 540, 20, 110, rowHeight + 4, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_LINK_BUTTON), nullptr, nullptr);
         ctx->youtubeUnlinkButton = CreateWindowW(L"BUTTON", L"Unlink Account", WS_CHILD, 652, 20, 108, rowHeight + 4, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_UNLINK_BUTTON), nullptr, nullptr);
@@ -5635,6 +5587,88 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         RegisterConfiguredHotkeys(ctx);
         return 0;
     }
+    case WM_ACTIVATE:
+        if (ctx) {
+            if (ctx->recordingsList) {
+                InvalidateRect(ctx->recordingsList, nullptr, FALSE);
+            }
+            if (ctx->recordingsInfoText) {
+                InvalidateRect(ctx->recordingsInfoText, nullptr, FALSE);
+            }
+            if (ctx->youtubeMediaList) {
+                InvalidateRect(ctx->youtubeMediaList, nullptr, FALSE);
+            }
+        }
+        break;
+    case WM_BEAN_FILE_LIST_SELECTION:
+        if (ctx && reinterpret_cast<HWND>(wParam) == ctx->recordingsList) {
+            UpdateRecordingInfoPane(ctx, static_cast<int>(lParam));
+        } else if (ctx && reinterpret_cast<HWND>(wParam) == ctx->youtubeMediaList) {
+            UpdateYouTubeMediaSelection(ctx);
+        }
+        return 0;
+    case WM_BEAN_FILE_LIST_COLUMN_CLICK:
+        if (ctx && reinterpret_cast<HWND>(wParam) == ctx->recordingsList) {
+            const int column = static_cast<int>(lParam);
+            if (column >= 0 && column <= 3) {
+                const auto clickedColumn = static_cast<AppContext::RecordingSortColumn>(column);
+                if (ctx->recordingSortColumn == clickedColumn) {
+                    ctx->recordingSortAscending = !ctx->recordingSortAscending;
+                } else {
+                    ctx->recordingSortColumn = clickedColumn;
+                    ctx->recordingSortAscending = true;
+                }
+                SortRecordingItems(ctx);
+                RepopulateRecordingsListControl(ctx);
+            }
+        } else if (ctx && reinterpret_cast<HWND>(wParam) == ctx->youtubeMediaList) {
+            const int column = static_cast<int>(lParam);
+            if (column >= 0 && column <= 2) {
+                const auto clickedColumn = static_cast<AppContext::YouTubeSortColumn>(column);
+                if (ctx->youtubeSortColumn == clickedColumn) {
+                    ctx->youtubeSortAscending = !ctx->youtubeSortAscending;
+                } else {
+                    ctx->youtubeSortColumn = clickedColumn;
+                    ctx->youtubeSortAscending = true;
+                }
+                SortYouTubeMediaItems(ctx);
+                ctx->youtubeMediaSelectedIndex = -1;
+                RefreshBeanFileList(ctx->youtubeMediaList);
+                UpdateYouTubeMediaSelection(ctx);
+            }
+        }
+        return 0;
+    case WM_BEAN_FILE_LIST_DOUBLE_CLICK:
+        if (ctx && reinterpret_cast<HWND>(wParam) == ctx->recordingsList) {
+            const int selected = static_cast<int>(lParam);
+            if (selected >= 0 && static_cast<size_t>(selected) < ctx->recordingItems.size()) {
+                const auto result = reinterpret_cast<intptr_t>(ShellExecuteW(
+                    hwnd,
+                    L"open",
+                    ctx->recordingItems[static_cast<size_t>(selected)].path.wstring().c_str(),
+                    nullptr,
+                    nullptr,
+                    SW_SHOWNORMAL));
+                if (result <= 32) {
+                    SetStatus(ctx, L"Failed to open selected recording.");
+                }
+            }
+        } else if (ctx && reinterpret_cast<HWND>(wParam) == ctx->youtubeMediaList) {
+            const int selected = static_cast<int>(lParam);
+            if (selected >= 0 && static_cast<size_t>(selected) < ctx->youtubeMediaItems.size()) {
+                const auto result = reinterpret_cast<intptr_t>(ShellExecuteW(
+                    hwnd,
+                    L"open",
+                    ctx->youtubeMediaItems[static_cast<size_t>(selected)].path.wstring().c_str(),
+                    nullptr,
+                    nullptr,
+                    SW_SHOWNORMAL));
+                if (result <= 32) {
+                    SetStatus(ctx, L"Failed to open selected YouTube media file.");
+                }
+            }
+        }
+        return 0;
     case WM_HOTKEY:
         if (ctx && ctx->orchestrator && wParam == kClipHotkeyId) {
             std::string clipError;
@@ -5810,114 +5844,17 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 if (itemIndex < ctx->visibleParticipantRowColors.size()) {
                     participantColor = ctx->visibleParticipantRowColors[itemIndex];
                 }
+                const COLORREF rowBackground = (customDraw->nmcd.uItemState & CDIS_SELECTED)
+                    ? ListSelectionBackground(ctx)
+                    : (((itemIndex % 2) == 0) ? kColorListRow : kColorListRowAlt);
+                FillThemedListItemBackground(ctx->recordingsInfoText, customDraw, rowBackground);
                 customDraw->clrText = participantColor;
-                customDraw->clrTextBk = ((itemIndex % 2) == 0) ? kColorListRow : kColorListRowAlt;
+                customDraw->clrTextBk = rowBackground;
                 return CDRF_NEWFONT;
             }
             if (customDraw->nmcd.dwDrawStage == CDDS_POSTPAINT) {
                 return CDRF_DODEFAULT;
             }
-        }
-        if (hdr->idFrom == IDC_RECORDINGS_LIST && hdr->code == NM_CUSTOMDRAW) {
-            auto* customDraw = reinterpret_cast<NMLVCUSTOMDRAW*>(lParam);
-            if (customDraw->nmcd.dwDrawStage == CDDS_PREPAINT) {
-                return CDRF_NOTIFYITEMDRAW | CDRF_NOTIFYPOSTPAINT;
-            }
-            if (customDraw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
-                customDraw->clrText = kColorTextPrimary;
-                customDraw->clrTextBk = (customDraw->nmcd.uItemState & CDIS_SELECTED)
-                    ? kColorListSelection
-                    : ((customDraw->nmcd.dwItemSpec % 2 == 0) ? kColorListRow : kColorListRowAlt);
-                return CDRF_NOTIFYSUBITEMDRAW;
-            }
-            if (customDraw->nmcd.dwDrawStage == (CDDS_ITEMPREPAINT | CDDS_SUBITEM)) {
-                customDraw->clrText = kColorTextPrimary;
-                customDraw->clrTextBk = (customDraw->nmcd.uItemState & CDIS_SELECTED)
-                    ? kColorListSelection
-                    : ((customDraw->nmcd.dwItemSpec % 2 == 0) ? kColorListRow : kColorListRowAlt);
-                if ((customDraw->nmcd.uItemState & CDIS_SELECTED) == 0
-                    && customDraw->iSubItem == 1
-                    && customDraw->nmcd.dwItemSpec < ctx->recordingItems.size()) {
-                    const auto& item = ctx->recordingItems[customDraw->nmcd.dwItemSpec];
-                    if (item.outcome == AppContext::RecordingItem::Outcome::Success) {
-                        customDraw->clrText = kColorSuccess;
-                    } else if (item.outcome == AppContext::RecordingItem::Outcome::Failure) {
-                        customDraw->clrText = kColorFailure;
-                    }
-                }
-                return CDRF_NEWFONT;
-            }
-            if (customDraw->nmcd.dwDrawStage == CDDS_POSTPAINT) {
-                DrawRecordingsGridLines(customDraw, ctx);
-                return CDRF_DODEFAULT;
-            }
-        }
-        if (hdr->idFrom == IDC_RECORDINGS_LIST && hdr->code == LVN_COLUMNCLICK) {
-            auto* nmlv = reinterpret_cast<LPNMLISTVIEW>(lParam);
-            if (nmlv->iSubItem < 0 || nmlv->iSubItem > 3) {
-                return 0;
-            }
-            const auto clickedColumn = static_cast<AppContext::RecordingSortColumn>(nmlv->iSubItem);
-            if (ctx->recordingSortColumn == clickedColumn) {
-                ctx->recordingSortAscending = !ctx->recordingSortAscending;
-            } else {
-                ctx->recordingSortColumn = clickedColumn;
-                ctx->recordingSortAscending = true;
-            }
-            SortRecordingItems(ctx);
-            RepopulateRecordingsListControl(ctx);
-            return 0;
-        }
-        if (hdr->idFrom == IDC_RECORDINGS_LIST && hdr->code == LVN_ITEMCHANGED) {
-            const int selected = ListView_GetNextItem(ctx->recordingsList, -1, LVNI_SELECTED);
-            UpdateRecordingInfoPane(ctx, selected);
-            return 0;
-        }
-        if (hdr->idFrom == IDC_RECORDINGS_LIST && hdr->code == NM_DBLCLK) {
-            const int selected = ListView_GetNextItem(ctx->recordingsList, -1, LVNI_SELECTED);
-            if (selected >= 0 && static_cast<size_t>(selected) < ctx->recordingItems.size()) {
-                const auto path = ctx->recordingItems[static_cast<size_t>(selected)].path;
-                const auto result = reinterpret_cast<intptr_t>(ShellExecuteW(hwnd, L"open", path.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL));
-                if (result <= 32) {
-                    SetStatus(ctx, L"Failed to open selected recording.");
-                }
-            }
-            return 0;
-        }
-        if (hdr->idFrom == IDC_YOUTUBE_MEDIA_LIST && hdr->code == NM_CUSTOMDRAW) {
-            auto* customDraw = reinterpret_cast<NMLVCUSTOMDRAW*>(lParam);
-            if (customDraw->nmcd.dwDrawStage == CDDS_PREPAINT) {
-                return CDRF_NOTIFYITEMDRAW;
-            }
-            if (customDraw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
-                customDraw->clrText = kColorTextPrimary;
-                customDraw->clrTextBk = (customDraw->nmcd.uItemState & CDIS_SELECTED)
-                    ? kColorListSelection
-                    : ((customDraw->nmcd.dwItemSpec % 2 == 0) ? kColorListRow : kColorListRowAlt);
-                return CDRF_NOTIFYSUBITEMDRAW;
-            }
-            if (customDraw->nmcd.dwDrawStage == (CDDS_ITEMPREPAINT | CDDS_SUBITEM)) {
-                customDraw->clrText = kColorTextPrimary;
-                customDraw->clrTextBk = (customDraw->nmcd.uItemState & CDIS_SELECTED)
-                    ? kColorListSelection
-                    : ((customDraw->nmcd.dwItemSpec % 2 == 0) ? kColorListRow : kColorListRowAlt);
-                return CDRF_NEWFONT;
-            }
-        }
-        if (hdr->idFrom == IDC_YOUTUBE_MEDIA_LIST && hdr->code == LVN_ITEMCHANGED) {
-            UpdateYouTubeMediaSelection(ctx);
-            return 0;
-        }
-        if (hdr->idFrom == IDC_YOUTUBE_MEDIA_LIST && hdr->code == NM_DBLCLK) {
-            const int selected = GetSelectedYouTubeMediaIndex(ctx);
-            if (selected >= 0 && static_cast<size_t>(selected) < ctx->youtubeMediaItems.size()) {
-                const auto& path = ctx->youtubeMediaItems[static_cast<size_t>(selected)].path;
-                const auto result = reinterpret_cast<intptr_t>(ShellExecuteW(hwnd, L"open", path.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL));
-                if (result <= 32) {
-                    SetStatus(ctx, L"Failed to open selected YouTube media file.");
-                }
-            }
-            return 0;
         }
         break;
     }

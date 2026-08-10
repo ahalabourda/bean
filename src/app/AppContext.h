@@ -43,6 +43,9 @@ inline constexpr UINT WM_BEAN_CLIPS_EXPORT_COMPLETE = WM_APP + 107;
 inline constexpr UINT WM_BEAN_UPDATE_AVAILABILITY_READY = WM_APP + 108;
 inline constexpr UINT WM_BEAN_CLIPS_MEDIA_EVENT = WM_APP + 109;
 inline constexpr UINT WM_BEAN_FFMPEG_PROBE_COMPLETE = WM_APP + 110;
+inline constexpr UINT WM_BEAN_FILE_LIST_SELECTION = WM_APP + 111;
+inline constexpr UINT WM_BEAN_FILE_LIST_COLUMN_CLICK = WM_APP + 112;
+inline constexpr UINT WM_BEAN_FILE_LIST_DOUBLE_CLICK = WM_APP + 113;
 inline constexpr wchar_t kStatusLogFilePrefix[] = L"bean-status-log-";
 inline constexpr wchar_t kStatusLogFileExtension[] = L".txt";
 inline constexpr size_t kStatusLogRetentionCount = 5;
@@ -112,6 +115,10 @@ struct ThemeColors {
     COLORREF sliderThumb;
     COLORREF mutedDot;
     COLORREF recordingDot;
+    COLORREF listSelectionInactive;
+    COLORREF scrollbarTrack;
+    COLORREF scrollbarThumb;
+    COLORREF scrollbarThumbHover;
 };
 
 inline constexpr ThemeColors kBeanAlphaThemeColors{
@@ -156,6 +163,10 @@ inline constexpr ThemeColors kBeanAlphaThemeColors{
     RGB(233, 239, 251),
     RGB(138, 151, 183),
     RGB(255, 112, 130),
+    RGB(34, 42, 61),
+    RGB(12, 16, 25),
+    RGB(72, 86, 122),
+    RGB(104, 129, 183),
 };
 
 // UI-thread-owned active palette. It starts with Bean Alpha and is replaced
@@ -216,6 +227,10 @@ inline ThemeColors MakeThemePalette(
     const COLORREF sliderThumb = textPrimary;
     const COLORREF mutedDot = controlTabBorder;
     const COLORREF recordingDot = failure;
+    const COLORREF listSelectionInactive = MixThemeColors(listSelection, panelBottom, 45);
+    const COLORREF scrollbarTrack = MixThemeColors(panelBottom, windowTop, 35);
+    const COLORREF scrollbarThumb = MixThemeColors(panelBorder, textMuted, 25);
+    const COLORREF scrollbarThumbHover = MixThemeColors(accent, panelBorder, 45);
     return {
         windowTop,
         windowBottom,
@@ -257,7 +272,11 @@ inline ThemeColors MakeThemePalette(
         sliderMarker,
         sliderThumb,
         mutedDot,
-        recordingDot
+        recordingDot,
+        listSelectionInactive,
+        scrollbarTrack,
+        scrollbarThumb,
+        scrollbarThumbHover
     };
 }
 
@@ -669,13 +688,11 @@ struct AppContext {
     std::optional<std::chrono::steady_clock::time_point> chatPreviewLastCaptureAt;
     std::optional<std::chrono::steady_clock::time_point> chatPreviewLastInvalidateAt;
     HWND recordingsList = nullptr;
-    HWND recordingsListHeader = nullptr;
     HWND recordingsInfoLabel = nullptr;
     HWND recordingsLabel = nullptr;
     HWND recordingsInfoText = nullptr;
     HWND youtubeLabel = nullptr;
     HWND youtubeMediaList = nullptr;
-    HWND youtubeMediaListHeader = nullptr;
     HWND youtubeUploadProgress = nullptr;
     HWND youtubeUploadStatus = nullptr;
     HWND youtubeLinkButton = nullptr;
@@ -773,6 +790,8 @@ struct AppContext {
     std::vector<RecordingItem> recordingItems;
     std::vector<YouTubeMediaFile> youtubeMediaItems;
     std::vector<COLORREF> visibleParticipantRowColors;
+    int recordingsSelectedIndex = -1;
+    int youtubeMediaSelectedIndex = -1;
     HIMAGELIST participantSpecIcons = nullptr;
     std::unordered_map<std::string, int> participantSpecIconIndexByKey;
     enum class RecordingSortColumn {
@@ -783,6 +802,13 @@ struct AppContext {
     };
     RecordingSortColumn recordingSortColumn = RecordingSortColumn::Date;
     bool recordingSortAscending = false;
+    enum class YouTubeSortColumn {
+        Type = 0,
+        Name = 1,
+        Date = 2
+    };
+    YouTubeSortColumn youtubeSortColumn = YouTubeSortColumn::Date;
+    bool youtubeSortAscending = false;
     std::atomic<bool> youtubeBusy{false};
     std::atomic<bool> aboutUpdateCheckInProgress{false};
     std::atomic<std::uint64_t> aboutUpdateCheckRequestId{0};

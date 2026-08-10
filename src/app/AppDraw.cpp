@@ -1,6 +1,7 @@
 #include "app/AppDraw.h"
 
 #include "app/AppPrerequisites.h"
+#include "app/AppRecordingHelpers.h"
 #include "app/AppUtilities.h"
 #include "obs/IRecorderEngine.h"
 
@@ -11,8 +12,10 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdlib>
 #include <sstream>
 #include <utility>
+#include <unordered_map>
 
 #pragma comment(lib, "Gdiplus.lib")
 
@@ -24,6 +27,9 @@ HWND gHoveredStyledButton = nullptr;
 HWND gHoveredModernToggle = nullptr;
 HWND gHoveredModernCombo = nullptr;
 HWND gHoveredHelpIcon = nullptr;
+HWND gHoveredThemedScrollbar = nullptr;
+HWND gDraggingThemedScrollbar = nullptr;
+int gThemedScrollbarDragOffset = 0;
 ULONG_PTR gAlertGdiplusToken = 0;
 constexpr UINT kRefreshModernComboMessage = WM_APP + 120;
 
@@ -687,6 +693,400 @@ LRESULT CALLBACK ModernComboSubclassProc(HWND hwnd, UINT message, WPARAM wParam,
     return DefSubclassProc(hwnd, message, wParam, lParam);
 }
 
+std::unordered_map<HWND, HWND> gThemedScrollbarByHost;
+constexpr int kThemedScrollbarWidth = 14;
+
+bool IsListViewHost(HWND hwnd)
+{
+    wchar_t className[64] = {};
+    GetClassNameW(hwnd, className, static_cast<int>(std::size(className)));
+    return lstrcmpiW(className, WC_LISTVIEWW) == 0;
+}
+
+bool IsListBoxHost(HWND hwnd)
+{
+    wchar_t className[64] = {};
+    GetClassNameW(hwnd, className, static_cast<int>(std::size(className)));
+    return lstrcmpiW(className, L"ListBox") == 0
+        || lstrcmpiW(className, L"ComboLBox") == 0;
+}
+
+int ThemedScrollHostItemCount(HWND hwnd)
+{
+    if (IsListViewHost(hwnd)) {
+        return ListView_GetItemCount(hwnd);
+    }
+    if (IsListBoxHost(hwnd)) {
+        return static_cast<int>(SendMessageW(hwnd, LB_GETCOUNT, 0, 0));
+    }
+    return 0;
+}
+
+int ThemedScrollHostPageSize(HWND hwnd)
+{
+    RECT clientRect{};
+    GetClientRect(hwnd, &clientRect);
+    const int clientHeight = clientRect.bottom - clientRect.top;
+    if (clientHeight <= 0) {
+        return 1;
+    }
+    if (IsListViewHost(hwnd)) {
+        return (std::max)(1, ListView_GetCountPerPage(hwnd));
+    }
+    if (IsListBoxHost(hwnd)) {
+        const int itemHeight = static_cast<int>(SendMessageW(hwnd, LB_GETITEMHEIGHT, 0, 0));
+        return itemHeight > 0 ? (std::max)(1, clientHeight / itemHeight) : 1;
+    }
+    return 1;
+}
+
+int ThemedScrollHostPosition(HWND hwnd)
+{
+    if (IsListViewHost(hwnd)) {
+        return (std::max)(0, ListView_GetTopIndex(hwnd));
+    }
+    if (IsListBoxHost(hwnd)) {
+        return (std::max)(0, static_cast<int>(SendMessageW(hwnd, LB_GETTOPINDEX, 0, 0)));
+    }
+    return 0;
+}
+
+void HideNativeScrollbars(HWND hwnd)
+{
+    if (!hwnd) {
+        return;
+    }
+    LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    LONG_PTR desiredStyle = style & ~(WS_VSCROLL | WS_HSCROLL);
+    if (IsListViewHost(hwnd)) {
+        desiredStyle |= LVS_NOSCROLL;
+    }
+    if (desiredStyle != style) {
+        SetWindowLongPtrW(hwnd, GWL_STYLE, desiredStyle);
+        SetWindowPos(
+            hwnd,
+            nullptr,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    }
+    ShowScrollBar(hwnd, SB_BOTH, FALSE);
+}
+
+void SetThemedScrollHostPosition(HWND hwnd, int position)
+{
+    const int itemCount = ThemedScrollHostItemCount(hwnd);
+    const int pageSize = ThemedScrollHostPageSize(hwnd);
+    const int maxPosition = (std::max)(0, itemCount - pageSize);
+    position = (std::clamp)(position, 0, maxPosition);
+    if (IsListViewHost(hwnd)) {
+        const int currentPosition = ThemedScrollHostPosition(hwnd);
+        RECT itemRect{};
+        const int itemHeight = ListView_GetItemRect(hwnd, currentPosition, &itemRect, LVIR_BOUNDS)
+            ? itemRect.bottom - itemRect.top
+            : 0;
+        if (itemHeight > 0 && position != currentPosition) {
+            SendMessageW(
+                hwnd,
+                LVM_SCROLL,
+                0,
+                static_cast<LPARAM>((position - currentPosition) * itemHeight));
+        }
+        if (position < itemCount) {
+            ListView_EnsureVisible(hwnd, position, FALSE);
+        }
+    } else if (IsListBoxHost(hwnd)) {
+        SendMessageW(hwnd, LB_SETTOPINDEX, static_cast<WPARAM>(position), 0);
+    }
+}
+
+void UpdateThemedScrollbar(HWND host)
+{
+    HideNativeScrollbars(host);
+    const auto scrollbarIt = gThemedScrollbarByHost.find(host);
+    if (scrollbarIt == gThemedScrollbarByHost.end() || !IsWindow(scrollbarIt->second)) {
+        return;
+    }
+    HWND scrollbar = scrollbarIt->second;
+    RECT clientRect{};
+    GetClientRect(host, &clientRect);
+    const int scrollbarX = (std::max)(0, static_cast<int>(clientRect.right) - kThemedScrollbarWidth);
+    const int hostHeight = (std::max)(0, static_cast<int>(clientRect.bottom));
+    ::MoveWindow(
+        scrollbar,
+        scrollbarX,
+        0,
+        kThemedScrollbarWidth,
+        hostHeight,
+        TRUE);
+
+    const int itemCount = ThemedScrollHostItemCount(host);
+    const int pageSize = ThemedScrollHostPageSize(host);
+    const int maxPosition = (std::max)(0, itemCount - pageSize);
+    ShowWindow(scrollbar, maxPosition > 0 ? SW_SHOW : SW_HIDE);
+}
+
+struct ThemedScrollbarMetrics {
+    RECT clientRect{};
+    int thumbTop = 0;
+    int thumbHeight = 0;
+    int maxPosition = 0;
+};
+
+bool GetThemedScrollbarMetrics(HWND scrollbar, ThemedScrollbarMetrics& metrics)
+{
+    if (!scrollbar) {
+        return false;
+    }
+    HWND host = GetParent(scrollbar);
+    if (!host) {
+        return false;
+    }
+    GetClientRect(scrollbar, &metrics.clientRect);
+    const int trackHeight = metrics.clientRect.bottom - metrics.clientRect.top;
+    const int itemCount = ThemedScrollHostItemCount(host);
+    const int pageSize = ThemedScrollHostPageSize(host);
+    const int range = (std::max)(1, itemCount);
+    metrics.maxPosition = (std::max)(0, itemCount - pageSize);
+    if (trackHeight <= 0 || metrics.maxPosition <= 0) {
+        return false;
+    }
+    metrics.thumbHeight = (std::max)(
+        24,
+        (std::min)(trackHeight, static_cast<int>(
+            (static_cast<long long>(trackHeight) * pageSize) / range)));
+    const int travel = (std::max)(0, trackHeight - metrics.thumbHeight);
+    const int position = (std::min)(ThemedScrollHostPosition(host), metrics.maxPosition);
+    metrics.thumbTop = metrics.maxPosition > 0
+        ? static_cast<int>((static_cast<long long>(travel) * position) / metrics.maxPosition)
+        : 0;
+    return true;
+}
+
+void DrawThemedScrollbarControl(HWND hwnd, HDC dc)
+{
+    if (!hwnd || !dc) {
+        return;
+    }
+    RECT clientRect{};
+    GetClientRect(hwnd, &clientRect);
+    HBRUSH trackBrush = CreateSolidBrush(kThemeColors.scrollbarTrack);
+    if (trackBrush) {
+        FillRect(dc, &clientRect, trackBrush);
+        DeleteObject(trackBrush);
+    }
+
+    ThemedScrollbarMetrics metrics{};
+    if (!GetThemedScrollbarMetrics(hwnd, metrics)) {
+        return;
+    }
+
+    RECT thumbRect{
+        clientRect.left + 2,
+        metrics.thumbTop + 2,
+        clientRect.right - 2,
+        metrics.thumbTop + metrics.thumbHeight - 2};
+    const COLORREF thumbColor = gHoveredThemedScrollbar == hwnd
+        ? kThemeColors.scrollbarThumbHover
+        : kThemeColors.scrollbarThumb;
+    HBRUSH thumbBrush = CreateSolidBrush(thumbColor);
+    if (thumbBrush) {
+        FillRect(dc, &thumbRect, thumbBrush);
+        DeleteObject(thumbBrush);
+    }
+}
+
+LRESULT CALLBACK ThemedScrollbarControlProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR)
+{
+    switch (message) {
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(hwnd, &paint);
+        DrawThemedScrollbarControl(hwnd, dc);
+        EndPaint(hwnd, &paint);
+        return 0;
+    }
+    case WM_MOUSEMOVE: {
+        if (gDraggingThemedScrollbar == hwnd) {
+            ThemedScrollbarMetrics metrics{};
+            if (GetThemedScrollbarMetrics(hwnd, metrics)) {
+                const int y = static_cast<int>(static_cast<short>(HIWORD(lParam)));
+                const int travel = (std::max)(
+                    1,
+                    static_cast<int>(metrics.clientRect.bottom - metrics.clientRect.top) - metrics.thumbHeight);
+                const int desiredTop = y - gThemedScrollbarDragOffset;
+                const int clampedTop = (std::clamp)(desiredTop, 0, travel);
+                const int position = static_cast<int>(
+                    (static_cast<long long>(clampedTop) * metrics.maxPosition) / travel);
+                HWND host = GetParent(hwnd);
+                SendMessageW(
+                    host,
+                    WM_VSCROLL,
+                    MAKEWPARAM(SB_THUMBTRACK, position),
+                    reinterpret_cast<LPARAM>(hwnd));
+            }
+            return 0;
+        }
+        if (gHoveredThemedScrollbar != hwnd) {
+            HWND previous = gHoveredThemedScrollbar;
+            gHoveredThemedScrollbar = hwnd;
+            if (previous && IsWindow(previous)) {
+                InvalidateRect(previous, nullptr, FALSE);
+            }
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        TRACKMOUSEEVENT track{};
+        track.cbSize = sizeof(track);
+        track.dwFlags = TME_LEAVE;
+        track.hwndTrack = hwnd;
+        TrackMouseEvent(&track);
+        return 0;
+    }
+    case WM_MOUSELEAVE:
+        if (gHoveredThemedScrollbar == hwnd) {
+            gHoveredThemedScrollbar = nullptr;
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        return 0;
+    case WM_LBUTTONDOWN: {
+        ThemedScrollbarMetrics metrics{};
+        if (!GetThemedScrollbarMetrics(hwnd, metrics)) {
+            return 0;
+        }
+        const int y = static_cast<int>(static_cast<short>(HIWORD(lParam)));
+        if (y >= metrics.thumbTop && y < metrics.thumbTop + metrics.thumbHeight) {
+            gDraggingThemedScrollbar = hwnd;
+            gThemedScrollbarDragOffset = y - metrics.thumbTop;
+            SetCapture(hwnd);
+        } else {
+            HWND host = GetParent(hwnd);
+            const int command = y < metrics.thumbTop ? SB_PAGEUP : SB_PAGEDOWN;
+            SendMessageW(host, WM_VSCROLL, MAKEWPARAM(command, 0), reinterpret_cast<LPARAM>(hwnd));
+        }
+        return 0;
+    }
+    case WM_LBUTTONUP:
+        if (gDraggingThemedScrollbar == hwnd) {
+            ThemedScrollbarMetrics metrics{};
+            if (GetThemedScrollbarMetrics(hwnd, metrics)) {
+                const int y = static_cast<int>(static_cast<short>(HIWORD(lParam)));
+                const int travel = (std::max)(
+                    1,
+                    static_cast<int>(metrics.clientRect.bottom - metrics.clientRect.top) - metrics.thumbHeight);
+                const int desiredTop = y - gThemedScrollbarDragOffset;
+                const int clampedTop = (std::clamp)(desiredTop, 0, travel);
+                const int position = static_cast<int>(
+                    (static_cast<long long>(clampedTop) * metrics.maxPosition) / travel);
+                HWND host = GetParent(hwnd);
+                SendMessageW(
+                    host,
+                    WM_VSCROLL,
+                    MAKEWPARAM(SB_THUMBPOSITION, position),
+                    reinterpret_cast<LPARAM>(hwnd));
+            }
+            ReleaseCapture();
+            gDraggingThemedScrollbar = nullptr;
+            gThemedScrollbarDragOffset = 0;
+        }
+        return 0;
+    case WM_CAPTURECHANGED:
+        if (gDraggingThemedScrollbar == hwnd) {
+            gDraggingThemedScrollbar = nullptr;
+            gThemedScrollbarDragOffset = 0;
+        }
+        return 0;
+    case WM_LBUTTONDBLCLK:
+        return 0;
+    case WM_NCDESTROY:
+        if (gHoveredThemedScrollbar == hwnd) {
+            gHoveredThemedScrollbar = nullptr;
+        }
+        if (gDraggingThemedScrollbar == hwnd) {
+            gDraggingThemedScrollbar = nullptr;
+            gThemedScrollbarDragOffset = 0;
+        }
+        RemoveWindowSubclass(hwnd, ThemedScrollbarControlProc, 1);
+        break;
+    default:
+        break;
+    }
+    return DefSubclassProc(hwnd, message, wParam, lParam);
+}
+
+LRESULT CALLBACK ThemedScrollbarHostSubclassProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR)
+{
+    switch (message) {
+    case WM_NCPAINT: {
+        LRESULT result = DefSubclassProc(hwnd, message, wParam, lParam);
+        HideNativeScrollbars(hwnd);
+        UpdateThemedScrollbar(hwnd);
+        return result;
+    }
+    case WM_PAINT: {
+        LRESULT result = DefSubclassProc(hwnd, message, wParam, lParam);
+        UpdateThemedScrollbar(hwnd);
+        return result;
+    }
+    case WM_SIZE: {
+        LRESULT result = DefSubclassProc(hwnd, message, wParam, lParam);
+        UpdateThemedScrollbar(hwnd);
+        return result;
+    }
+    case WM_MOUSEWHEEL: {
+        const int itemCount = ThemedScrollHostItemCount(hwnd);
+        if (itemCount <= ThemedScrollHostPageSize(hwnd)) {
+            return DefSubclassProc(hwnd, message, wParam, lParam);
+        }
+        const int wheelDelta = GET_WHEEL_DELTA_WPARAM(wParam);
+        const int lines = (std::max)(1, std::abs(wheelDelta) / WHEEL_DELTA);
+        const int direction = wheelDelta > 0 ? -1 : 1;
+        SetThemedScrollHostPosition(hwnd, ThemedScrollHostPosition(hwnd) + direction * lines);
+        UpdateThemedScrollbar(hwnd);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    }
+    case WM_KEYDOWN: {
+        LRESULT result = DefSubclassProc(hwnd, message, wParam, lParam);
+        UpdateThemedScrollbar(hwnd);
+        return result;
+    }
+    case WM_VSCROLL:
+        if (reinterpret_cast<HWND>(lParam) == gThemedScrollbarByHost[hwnd]) {
+            const int pageSize = ThemedScrollHostPageSize(hwnd);
+            const int currentPosition = ThemedScrollHostPosition(hwnd);
+            const int maxPosition = (std::max)(0, ThemedScrollHostItemCount(hwnd) - pageSize);
+            int nextPosition = currentPosition;
+            switch (LOWORD(wParam)) {
+            case SB_LINEUP: nextPosition -= 1; break;
+            case SB_LINEDOWN: nextPosition += 1; break;
+            case SB_PAGEUP: nextPosition -= pageSize; break;
+            case SB_PAGEDOWN: nextPosition += pageSize; break;
+            case SB_THUMBPOSITION:
+            case SB_THUMBTRACK: nextPosition = HIWORD(wParam); break;
+            case SB_TOP: nextPosition = 0; break;
+            case SB_BOTTOM: nextPosition = maxPosition; break;
+            default: break;
+            }
+            SetThemedScrollHostPosition(hwnd, nextPosition);
+            UpdateThemedScrollbar(hwnd);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        break;
+    case WM_NCDESTROY:
+        gThemedScrollbarByHost.erase(hwnd);
+        RemoveWindowSubclass(hwnd, ThemedScrollbarHostSubclassProc, 1);
+        break;
+    default:
+        break;
+    }
+    return DefSubclassProc(hwnd, message, wParam, lParam);
+}
+
 const wchar_t* GetHelpTooltipTextForControl(const AppContext* ctx, HWND control)
 {
     if (!ctx || !control) {
@@ -771,75 +1171,6 @@ void ShowConfigurationTooltip(AppContext* ctx, HWND anchor, const wchar_t* text)
     InvalidateRect(ctx->configurationTooltip, nullptr, TRUE);
 }
 
-void PaintRecordingsHeader(HWND header, HDC hdc)
-{
-    if (!header || !hdc) {
-        return;
-    }
-
-    RECT rc{};
-    GetClientRect(header, &rc);
-    HBRUSH bgBrush = CreateSolidBrush(kColorInputBg);
-    if (bgBrush) {
-        FillRect(hdc, &rc, bgBrush);
-        DeleteObject(bgBrush);
-    }
-
-    HGDIOBJ oldFont = nullptr;
-    if (gTheme.recordingsFont) {
-        oldFont = SelectObject(hdc, gTheme.recordingsFont);
-    } else if (gTheme.uiFont) {
-        oldFont = SelectObject(hdc, gTheme.uiFont);
-    }
-
-    const int columnCount = static_cast<int>(SendMessageW(header, HDM_GETITEMCOUNT, 0, 0));
-    for (int i = 0; i < columnCount; ++i) {
-        RECT cell{};
-        if (!SendMessageW(header, HDM_GETITEMRECT, static_cast<WPARAM>(i), reinterpret_cast<LPARAM>(&cell))) {
-            continue;
-        }
-
-        HDITEMW item{};
-        wchar_t textBuffer[128] = {};
-        item.mask = HDI_TEXT | HDI_FORMAT;
-        item.pszText = textBuffer;
-        item.cchTextMax = static_cast<int>(std::size(textBuffer));
-        SendMessageW(header, HDM_GETITEMW, static_cast<WPARAM>(i), reinterpret_cast<LPARAM>(&item));
-
-        RECT textRect = cell;
-        SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, kColorTextMuted);
-        if ((item.fmt & HDF_CENTER) != 0) {
-            DrawTextW(hdc, textBuffer, -1, &textRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        } else {
-            textRect.left += 8;
-            DrawTextW(hdc, textBuffer, -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        }
-    }
-
-    EnsureThemeResources();
-    HGDIOBJ oldPen = gTheme.listGridPen ? SelectObject(hdc, gTheme.listGridPen) : nullptr;
-    if (gTheme.listGridPen) {
-        const int columnCountForLines = static_cast<int>(SendMessageW(header, HDM_GETITEMCOUNT, 0, 0));
-        for (int i = 0; i < columnCountForLines; ++i) {
-            RECT cell{};
-            if (!SendMessageW(header, HDM_GETITEMRECT, static_cast<WPARAM>(i), reinterpret_cast<LPARAM>(&cell))) {
-                continue;
-            }
-            MoveToEx(hdc, cell.right - 1, cell.top, nullptr);
-            LineTo(hdc, cell.right - 1, cell.bottom);
-        }
-        MoveToEx(hdc, rc.left, rc.bottom - 1, nullptr);
-        LineTo(hdc, rc.right, rc.bottom - 1);
-    }
-    if (oldPen) {
-        SelectObject(hdc, oldPen);
-    }
-    if (oldFont) {
-        SelectObject(hdc, oldFont);
-    }
-}
-
 } // namespace
 
 void ScheduleModernComboRedraw(HWND combo)
@@ -847,6 +1178,594 @@ void ScheduleModernComboRedraw(HWND combo)
     if (combo) {
         PostMessageW(combo, kRefreshModernComboMessage, 0, 0);
     }
+}
+
+void ConfigureThemedScrollbars(HWND hwnd)
+{
+    if (!hwnd) {
+        return;
+    }
+
+    const auto existing = gThemedScrollbarByHost.find(hwnd);
+    if (existing != gThemedScrollbarByHost.end() && IsWindow(existing->second)) {
+        UpdateThemedScrollbar(hwnd);
+        return;
+    }
+
+    const LONG_PTR originalStyle = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    LONG_PTR style = originalStyle;
+    style &= ~(WS_VSCROLL | WS_HSCROLL);
+    style |= WS_CLIPCHILDREN;
+    if (IsListViewHost(hwnd)) {
+        style |= LVS_NOSCROLL;
+    }
+    SetWindowLongPtrW(hwnd, GWL_STYLE, style);
+    SetWindowPos(
+        hwnd,
+        nullptr,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+
+    HWND scrollbar = CreateWindowExW(
+        0,
+        L"STATIC",
+        L"",
+        WS_CHILD | WS_VISIBLE,
+        0,
+        0,
+        kThemedScrollbarWidth,
+        0,
+        hwnd,
+        nullptr,
+        GetModuleHandleW(nullptr),
+        nullptr);
+    if (!scrollbar) {
+        SetWindowLongPtrW(hwnd, GWL_STYLE, originalStyle);
+        SetWindowPos(
+            hwnd,
+            nullptr,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        return;
+    }
+
+    gThemedScrollbarByHost[hwnd] = scrollbar;
+    SetWindowSubclass(scrollbar, ThemedScrollbarControlProc, 1, 0);
+    SetWindowTheme(hwnd, L"", L"");
+    SetWindowSubclass(hwnd, ThemedScrollbarHostSubclassProc, 1, 0);
+    UpdateThemedScrollbar(hwnd);
+    InvalidateRect(hwnd, nullptr, TRUE);
+}
+
+namespace {
+
+struct BeanFileListState {
+    AppContext* ctx = nullptr;
+    BeanFileListKind kind = BeanFileListKind::Recordings;
+    int scrollOffset = 0;
+    bool draggingScrollbar = false;
+    int dragOffset = 0;
+};
+
+std::unordered_map<HWND, BeanFileListState> gBeanFileLists;
+constexpr int kBeanFileListHeaderHeight = 28;
+constexpr int kBeanFileListRowHeight = 26;
+constexpr int kBeanFileListScrollbarWidth = 14;
+
+BeanFileListState* GetBeanFileListState(HWND hwnd)
+{
+    const auto it = gBeanFileLists.find(hwnd);
+    return it == gBeanFileLists.end() ? nullptr : &it->second;
+}
+
+int& BeanFileListSelection(BeanFileListState& state)
+{
+    return state.kind == BeanFileListKind::Recordings
+        ? state.ctx->recordingsSelectedIndex
+        : state.ctx->youtubeMediaSelectedIndex;
+}
+
+size_t BeanFileListItemCount(const BeanFileListState& state)
+{
+    return state.kind == BeanFileListKind::Recordings
+        ? state.ctx->recordingItems.size()
+        : state.ctx->youtubeMediaItems.size();
+}
+
+COLORREF BeanFileListSelectionBackground(const BeanFileListState& state)
+{
+    const bool appActive = state.ctx
+        && state.ctx->mainWindow
+        && GetForegroundWindow() == state.ctx->mainWindow;
+    return appActive ? kColorListSelection : kThemeColors.listSelectionInactive;
+}
+
+std::vector<int> BeanFileListColumnWidths(HWND hwnd, BeanFileListKind kind)
+{
+    RECT rc{};
+    GetClientRect(hwnd, &rc);
+    const int contentWidth = (std::max)(100, static_cast<int>(rc.right) - kBeanFileListScrollbarWidth);
+    std::vector<int> widths;
+    if (kind == BeanFileListKind::Recordings) {
+        const int dungeonWidth = (std::max)(120, contentWidth * 40 / 100);
+        const int keyWidth = (std::max)(56, contentWidth * 11 / 100);
+        const int lengthWidth = (std::max)(88, contentWidth * 17 / 100);
+        const int dateWidth = (std::max)(94, contentWidth - dungeonWidth - keyWidth - lengthWidth);
+        widths = {dungeonWidth, keyWidth, lengthWidth, dateWidth};
+    } else {
+        const int typeWidth = (std::max)(86, contentWidth * 12 / 100);
+        const int dateWidth = (std::max)(130, contentWidth * 23 / 100);
+        const int nameWidth = (std::max)(220, contentWidth - typeWidth - dateWidth);
+        widths = {typeWidth, nameWidth, dateWidth};
+    }
+    int totalWidth = 0;
+    for (const int width : widths) {
+        totalWidth += width;
+    }
+    if (totalWidth > contentWidth) {
+        int assignedWidth = 0;
+        for (size_t index = 0; index + 1 < widths.size(); ++index) {
+            widths[index] = (std::max)(1, widths[index] * contentWidth / totalWidth);
+            assignedWidth += widths[index];
+        }
+        widths.back() = (std::max)(1, contentWidth - assignedWidth);
+    }
+    return widths;
+}
+
+std::vector<std::wstring> BeanFileListHeaders(BeanFileListKind kind)
+{
+    return kind == BeanFileListKind::Recordings
+        ? std::vector<std::wstring>{L"Dungeon", L"Level", L"Duration", L"Date"}
+        : std::vector<std::wstring>{L"Type", L"Name", L"Date"};
+}
+
+int BeanFileListVisibleRows(int clientHeight)
+{
+    const int contentHeight = (std::max)(0, clientHeight - kBeanFileListHeaderHeight);
+    return (std::max)(1, (contentHeight + kBeanFileListRowHeight - 1) / kBeanFileListRowHeight);
+}
+
+bool BeanFileListColumnCentered(BeanFileListKind kind, size_t column)
+{
+    return kind == BeanFileListKind::YouTube ? column == 2 : column > 0;
+}
+
+std::vector<std::wstring> BeanFileListRow(const BeanFileListState& state, size_t index)
+{
+    if (state.kind == BeanFileListKind::Recordings) {
+        const auto& item = state.ctx->recordingItems[index];
+        return {item.dungeonName, item.keystoneText, item.durationText, item.dateText};
+    }
+    const auto& item = state.ctx->youtubeMediaItems[index];
+    return {
+        item.type == YouTubeMediaType::Clip ? L"Clip" : L"Recording",
+        item.path.filename().wstring(),
+        FormatLocalDate(FileTimeToSystemClock(item.modified))};
+}
+
+void DrawBeanFileListText(HDC dc, const RECT& rect, const std::wstring& text, bool centered, COLORREF color, HFONT font)
+{
+    HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, color);
+    RECT textRect = rect;
+    textRect.left += centered ? 3 : 8;
+    textRect.right -= centered ? 3 : 6;
+    DrawTextW(
+        dc,
+        text.c_str(),
+        -1,
+        &textRect,
+        (centered ? DT_CENTER : DT_LEFT) | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    if (oldFont) {
+        SelectObject(dc, oldFont);
+    }
+}
+
+void DrawBeanFileList(HWND hwnd, HDC dc)
+{
+    BeanFileListState* state = GetBeanFileListState(hwnd);
+    if (!state || !state->ctx || !dc) {
+        return;
+    }
+    RECT clientRect{};
+    GetClientRect(hwnd, &clientRect);
+    HBRUSH backgroundBrush = CreateSolidBrush(kColorListRow);
+    if (backgroundBrush) {
+        FillRect(dc, &clientRect, backgroundBrush);
+        DeleteObject(backgroundBrush);
+    }
+
+    const auto widths = BeanFileListColumnWidths(hwnd, state->kind);
+    const auto headers = BeanFileListHeaders(state->kind);
+    const int contentWidth = clientRect.right - kBeanFileListScrollbarWidth;
+    HBRUSH headerBrush = CreateSolidBrush(kColorInputBg);
+    if (headerBrush) {
+        RECT headerRect{0, 0, contentWidth, kBeanFileListHeaderHeight};
+        FillRect(dc, &headerRect, headerBrush);
+        DeleteObject(headerBrush);
+    }
+
+    const HFONT font = gTheme.recordingsFont ? gTheme.recordingsFont : gTheme.uiFont;
+    int columnLeft = 0;
+    for (size_t column = 0; column < headers.size(); ++column) {
+        RECT cell{columnLeft, 0, columnLeft + widths[column], kBeanFileListHeaderHeight};
+        DrawBeanFileListText(
+            dc,
+            cell,
+            headers[column],
+            BeanFileListColumnCentered(state->kind, column),
+            kColorTextMuted,
+            font);
+        HBRUSH lineBrush = CreateSolidBrush(kColorListGrid);
+        if (lineBrush) {
+            RECT line{cell.right - 1, 0, cell.right, clientRect.bottom};
+            FillRect(dc, &line, lineBrush);
+            DeleteObject(lineBrush);
+        }
+        columnLeft += widths[column];
+    }
+
+    const size_t itemCount = BeanFileListItemCount(*state);
+    const int clientHeight = static_cast<int>(clientRect.bottom);
+    const int visibleRows = BeanFileListVisibleRows(clientHeight);
+    const int maxOffset = (std::max)(0, static_cast<int>(itemCount) - visibleRows);
+    state->scrollOffset = (std::clamp)(state->scrollOffset, 0, maxOffset);
+    const int selectedIndex = BeanFileListSelection(*state);
+    for (int row = 0; row < visibleRows; ++row) {
+        const size_t itemIndex = static_cast<size_t>(state->scrollOffset + row);
+        if (itemIndex >= itemCount) {
+            break;
+        }
+        const int top = kBeanFileListHeaderHeight + row * kBeanFileListRowHeight;
+        const bool selected = static_cast<int>(itemIndex) == selectedIndex;
+        const COLORREF rowColor = selected
+            ? BeanFileListSelectionBackground(*state)
+            : ((itemIndex % 2 == 0) ? kColorListRow : kColorListRowAlt);
+        HBRUSH rowBrush = CreateSolidBrush(rowColor);
+        if (rowBrush) {
+            RECT rowRect{0, top, contentWidth, top + kBeanFileListRowHeight};
+            FillRect(dc, &rowRect, rowBrush);
+            DeleteObject(rowBrush);
+        }
+
+        const auto cells = BeanFileListRow(*state, itemIndex);
+        columnLeft = 0;
+        for (size_t column = 0; column < cells.size(); ++column) {
+            RECT cell{columnLeft, top, columnLeft + widths[column], top + kBeanFileListRowHeight};
+            COLORREF textColor = kColorTextPrimary;
+            if (state->kind == BeanFileListKind::Recordings
+                && column == 1
+                && !selected
+                && itemIndex < state->ctx->recordingItems.size()) {
+                const auto outcome = state->ctx->recordingItems[itemIndex].outcome;
+                if (outcome == AppContext::RecordingItem::Outcome::Success) {
+                    textColor = kColorSuccess;
+                } else if (outcome == AppContext::RecordingItem::Outcome::Failure) {
+                    textColor = kColorFailure;
+                }
+            }
+            DrawBeanFileListText(
+                dc,
+                cell,
+                cells[column],
+                BeanFileListColumnCentered(state->kind, column),
+                textColor,
+                font);
+            columnLeft += widths[column];
+        }
+        HBRUSH gridBrush = CreateSolidBrush(kColorListGrid);
+        if (gridBrush) {
+            RECT line{0, top + kBeanFileListRowHeight - 1, contentWidth, top + kBeanFileListRowHeight};
+            FillRect(dc, &line, gridBrush);
+            DeleteObject(gridBrush);
+        }
+    }
+
+    HBRUSH scrollbarTrack = CreateSolidBrush(kThemeColors.scrollbarTrack);
+    if (scrollbarTrack) {
+        RECT track{contentWidth, 0, clientRect.right, clientRect.bottom};
+        FillRect(dc, &track, scrollbarTrack);
+        DeleteObject(scrollbarTrack);
+    }
+    if (maxOffset > 0) {
+        const int trackHeight = clientHeight;
+        const int thumbHeight = (std::max)(
+            24,
+            (std::min)(trackHeight, trackHeight * visibleRows / (std::max)(1, static_cast<int>(itemCount))));
+        const int travel = (std::max)(1, trackHeight - thumbHeight);
+        const int thumbTop = travel * state->scrollOffset / maxOffset;
+        const COLORREF thumbColor = state->draggingScrollbar
+            ? kThemeColors.scrollbarThumbHover
+            : kThemeColors.scrollbarThumb;
+        HBRUSH thumbBrush = CreateSolidBrush(thumbColor);
+        if (thumbBrush) {
+            RECT thumb{contentWidth + 2, thumbTop + 2, clientRect.right - 2, thumbTop + thumbHeight - 2};
+            FillRect(dc, &thumb, thumbBrush);
+            DeleteObject(thumbBrush);
+        }
+    }
+    HBRUSH borderBrush = CreateSolidBrush(kColorInputBorder);
+    if (borderBrush) {
+        RECT topBorder{0, 0, clientRect.right, 1};
+        RECT bottomBorder{0, clientRect.bottom - 1, clientRect.right, clientRect.bottom};
+        RECT leftBorder{0, 0, 1, clientRect.bottom};
+        RECT rightBorder{clientRect.right - 1, 0, clientRect.right, clientRect.bottom};
+        FillRect(dc, &topBorder, borderBrush);
+        FillRect(dc, &bottomBorder, borderBrush);
+        FillRect(dc, &leftBorder, borderBrush);
+        FillRect(dc, &rightBorder, borderBrush);
+        DeleteObject(borderBrush);
+    }
+}
+
+void NotifyBeanFileList(HWND hwnd, UINT message, LPARAM value)
+{
+    const BeanFileListState* state = GetBeanFileListState(hwnd);
+    HWND target = state && state->ctx ? state->ctx->mainWindow : GetParent(hwnd);
+    if (target) {
+        SendMessageW(target, message, reinterpret_cast<WPARAM>(hwnd), value);
+    }
+}
+
+void EnsureBeanFileListSelectionVisible(HWND hwnd, BeanFileListState& state)
+{
+    RECT clientRect{};
+    GetClientRect(hwnd, &clientRect);
+    const int clientHeight = static_cast<int>(clientRect.bottom);
+    const int visibleRows = BeanFileListVisibleRows(clientHeight);
+    const int selected = BeanFileListSelection(state);
+    if (selected >= 0) {
+        if (selected < state.scrollOffset) {
+            state.scrollOffset = selected;
+        } else if (selected >= state.scrollOffset + visibleRows) {
+            state.scrollOffset = selected - visibleRows + 1;
+        }
+    }
+    const int maxOffset = (std::max)(0, static_cast<int>(BeanFileListItemCount(state)) - visibleRows);
+    state.scrollOffset = (std::clamp)(state.scrollOffset, 0, maxOffset);
+}
+
+void PaintBeanFileListBuffered(HWND hwnd, HDC target, const PAINTSTRUCT& paint)
+{
+    RECT clientRect{};
+    GetClientRect(hwnd, &clientRect);
+    const int width = static_cast<int>(clientRect.right);
+    const int height = static_cast<int>(clientRect.bottom);
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+
+    HDC buffer = CreateCompatibleDC(target);
+    HBITMAP bitmap = buffer ? CreateCompatibleBitmap(target, width, height) : nullptr;
+    if (!buffer || !bitmap) {
+        if (bitmap) {
+            DeleteObject(bitmap);
+        }
+        if (buffer) {
+            DeleteDC(buffer);
+        }
+        DrawBeanFileList(hwnd, target);
+        return;
+    }
+
+    const HGDIOBJ oldBitmap = SelectObject(buffer, bitmap);
+    DrawBeanFileList(hwnd, buffer);
+    const RECT& dirty = paint.rcPaint;
+    BitBlt(
+        target,
+        dirty.left,
+        dirty.top,
+        dirty.right - dirty.left,
+        dirty.bottom - dirty.top,
+        buffer,
+        dirty.left,
+        dirty.top,
+        SRCCOPY);
+    SelectObject(buffer, oldBitmap);
+    DeleteObject(bitmap);
+    DeleteDC(buffer);
+}
+
+LRESULT CALLBACK BeanFileListSubclassProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR)
+{
+    BeanFileListState* state = GetBeanFileListState(hwnd);
+    if (!state) {
+        return DefSubclassProc(hwnd, message, wParam, lParam);
+    }
+    switch (message) {
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(hwnd, &paint);
+        PaintBeanFileListBuffered(hwnd, dc, paint);
+        EndPaint(hwnd, &paint);
+        return 0;
+    }
+    case WM_SIZE:
+        EnsureBeanFileListSelectionVisible(hwnd, *state);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    case WM_MOUSEWHEEL: {
+        const int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+        const int lines = (std::max)(1, std::abs(delta) / WHEEL_DELTA);
+        state->scrollOffset += delta > 0 ? -lines : lines;
+        EnsureBeanFileListSelectionVisible(hwnd, *state);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    }
+    case WM_LBUTTONDOWN: {
+        SetFocus(hwnd);
+        RECT rc{};
+        GetClientRect(hwnd, &rc);
+        const int clientHeight = static_cast<int>(rc.bottom);
+        const int x = static_cast<int>(static_cast<short>(LOWORD(lParam)));
+        const int y = static_cast<int>(static_cast<short>(HIWORD(lParam)));
+        const int contentWidth = rc.right - kBeanFileListScrollbarWidth;
+        const size_t itemCount = BeanFileListItemCount(*state);
+        const int visibleRows = BeanFileListVisibleRows(clientHeight);
+        const int maxOffset = (std::max)(0, static_cast<int>(itemCount) - visibleRows);
+        if (x >= contentWidth && maxOffset > 0) {
+            const int trackHeight = clientHeight;
+            const int thumbHeight = (std::max)(
+                24,
+                (std::min)(trackHeight, trackHeight * visibleRows / (std::max)(1, static_cast<int>(itemCount))));
+            const int travel = (std::max)(1, trackHeight - thumbHeight);
+            const int thumbTop = travel * state->scrollOffset / maxOffset;
+            if (y >= thumbTop && y < thumbTop + thumbHeight) {
+                state->draggingScrollbar = true;
+                state->dragOffset = y - thumbTop;
+                SetCapture(hwnd);
+            } else {
+                state->scrollOffset += y < thumbTop ? -visibleRows : visibleRows;
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        }
+        if (y >= kBeanFileListHeaderHeight && x < contentWidth) {
+            const int row = (y - kBeanFileListHeaderHeight) / kBeanFileListRowHeight;
+            const int index = state->scrollOffset + row;
+            if (row >= 0 && index >= 0 && static_cast<size_t>(index) < itemCount) {
+                BeanFileListSelection(*state) = index;
+                NotifyBeanFileList(hwnd, WM_BEAN_FILE_LIST_SELECTION, index);
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        }
+        if (y < kBeanFileListHeaderHeight && x < contentWidth) {
+            const auto widths = BeanFileListColumnWidths(hwnd, state->kind);
+            int left = 0;
+            for (size_t column = 0; column < widths.size(); ++column) {
+                if (x >= left && x < left + widths[column]) {
+                    NotifyBeanFileList(hwnd, WM_BEAN_FILE_LIST_COLUMN_CLICK, static_cast<LPARAM>(column));
+                    break;
+                }
+                left += widths[column];
+            }
+        }
+        return 0;
+    }
+    case WM_MOUSEMOVE:
+        if (state->draggingScrollbar) {
+            RECT rc{};
+            GetClientRect(hwnd, &rc);
+            const int clientHeight = static_cast<int>(rc.bottom);
+            const int itemCount = static_cast<int>(BeanFileListItemCount(*state));
+            const int visibleRows = BeanFileListVisibleRows(clientHeight);
+            const int maxOffset = (std::max)(0, itemCount - visibleRows);
+            const int thumbHeight = (std::max)(
+                24,
+                (std::min)(clientHeight, clientHeight * visibleRows / (std::max)(1, itemCount)));
+            const int travel = (std::max)(1, clientHeight - thumbHeight);
+            const int y = static_cast<int>(static_cast<short>(HIWORD(lParam)));
+            state->scrollOffset = (std::clamp)((y - state->dragOffset) * maxOffset / travel, 0, maxOffset);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        return 0;
+    case WM_LBUTTONUP:
+        if (state->draggingScrollbar) {
+            state->draggingScrollbar = false;
+            ReleaseCapture();
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        break;
+    case WM_KEYDOWN: {
+        const int itemCount = static_cast<int>(BeanFileListItemCount(*state));
+        if (itemCount <= 0) {
+            return 0;
+        }
+        int& selected = BeanFileListSelection(*state);
+        int next = selected < 0 ? 0 : selected;
+        RECT rc{};
+        GetClientRect(hwnd, &rc);
+        const int visibleRows = BeanFileListVisibleRows(static_cast<int>(rc.bottom));
+        if (wParam == VK_UP) next -= 1;
+        else if (wParam == VK_DOWN) next += 1;
+        else if (wParam == VK_PRIOR) next -= visibleRows;
+        else if (wParam == VK_NEXT) next += visibleRows;
+        else if (wParam == VK_HOME) next = 0;
+        else if (wParam == VK_END) next = itemCount - 1;
+        else break;
+        selected = (std::clamp)(next, 0, itemCount - 1);
+        EnsureBeanFileListSelectionVisible(hwnd, *state);
+        NotifyBeanFileList(hwnd, WM_BEAN_FILE_LIST_SELECTION, selected);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    }
+    case WM_LBUTTONDBLCLK: {
+        const int y = static_cast<int>(static_cast<short>(HIWORD(lParam)));
+        if (y >= kBeanFileListHeaderHeight) {
+            const int row = (y - kBeanFileListHeaderHeight) / kBeanFileListRowHeight;
+            const int index = state->scrollOffset + row;
+            if (index >= 0 && static_cast<size_t>(index) < BeanFileListItemCount(*state)) {
+                NotifyBeanFileList(hwnd, WM_BEAN_FILE_LIST_DOUBLE_CLICK, index);
+            }
+        }
+        return 0;
+    }
+    case WM_SETFOCUS:
+    case WM_KILLFOCUS:
+        InvalidateRect(hwnd, nullptr, FALSE);
+        break;
+    case WM_NCDESTROY:
+        gBeanFileLists.erase(hwnd);
+        RemoveWindowSubclass(hwnd, BeanFileListSubclassProc, 1);
+        break;
+    default:
+        break;
+    }
+    return DefSubclassProc(hwnd, message, wParam, lParam);
+}
+
+} // namespace
+
+HWND CreateBeanFileList(HWND parent, int controlId, AppContext* ctx, BeanFileListKind kind)
+{
+    if (!parent || !ctx) {
+        return nullptr;
+    }
+    HWND list = CreateWindowExW(
+        0,
+        L"STATIC",
+        L"",
+        WS_VISIBLE | WS_CHILD | WS_TABSTOP | SS_NOTIFY,
+        0,
+        0,
+        10,
+        10,
+        parent,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(controlId)),
+        nullptr,
+        nullptr);
+    if (!list) {
+        return nullptr;
+    }
+    gBeanFileLists[list] = BeanFileListState{ctx, kind, 0, false, 0};
+    SetWindowSubclass(list, BeanFileListSubclassProc, 1, 0);
+    return list;
+}
+
+void RefreshBeanFileList(HWND list)
+{
+    if (list) {
+        InvalidateRect(list, nullptr, FALSE);
+    }
+}
+
+int GetBeanFileListSelectedIndex(HWND list)
+{
+    const BeanFileListState* state = GetBeanFileListState(list);
+    return state && state->ctx ? BeanFileListSelection(*const_cast<BeanFileListState*>(state)) : -1;
 }
 
 namespace {
@@ -1464,11 +2383,20 @@ void ConfigureModernControls(AppContext* ctx)
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
         SendMessageW(combo, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), 24);
         SendMessageW(combo, CB_SETITEMHEIGHT, 0, 28);
-        if (controlId == IDC_CUSTOMIZE_THEME_COMBO) {
+        if (controlId == IDC_ENCODER_COMBO) {
+            SendMessageW(combo, CB_SETMINVISIBLE, 5, 0);
+        } else if (controlId == IDC_CUSTOMIZE_THEME_COMBO) {
             SendMessageW(combo, CB_SETMINVISIBLE, static_cast<WPARAM>(kThemeDefinitions.size()), 0);
         }
         SetWindowTheme(combo, L"", L"");
         SetWindowSubclass(combo, ModernComboSubclassProc, 1, reinterpret_cast<DWORD_PTR>(ctx));
+        if (controlId != IDC_CLIPS_SOURCE_COMBO && controlId != IDC_ENCODER_COMBO) {
+            COMBOBOXINFO comboInfo{};
+            comboInfo.cbSize = sizeof(comboInfo);
+            if (GetComboBoxInfo(combo, &comboInfo) && comboInfo.hwndList) {
+                ConfigureThemedScrollbars(comboInfo.hwndList);
+            }
+        }
     }
 }
 
@@ -1918,74 +2846,6 @@ void ConfigureConfigurationTooltips(AppContext* ctx)
         SendMessageW(ctx->configurationTooltip, WM_SETFONT, reinterpret_cast<WPARAM>(gTheme.uiFont), TRUE);
     }
     ShowWindow(ctx->configurationTooltip, SW_HIDE);
-}
-
-void DrawRecordingsGridLines(const NMLVCUSTOMDRAW* customDraw, const AppContext* ctx)
-{
-    if (!customDraw || !ctx || !ctx->recordingsList) {
-        return;
-    }
-    const int itemCount = ListView_GetItemCount(ctx->recordingsList);
-    if (itemCount <= 0) {
-        return;
-    }
-    RECT client{};
-    GetClientRect(ctx->recordingsList, &client);
-    RECT firstRow{};
-    if (!ListView_GetItemRect(ctx->recordingsList, 0, &firstRow, LVIR_BOUNDS)) {
-        return;
-    }
-    EnsureThemeResources();
-    HGDIOBJ oldPen = gTheme.listGridPen ? SelectObject(customDraw->nmcd.hdc, gTheme.listGridPen) : nullptr;
-    for (int i = 0; i < itemCount; ++i) {
-        RECT rowRect{};
-        if (!ListView_GetItemRect(ctx->recordingsList, i, &rowRect, LVIR_BOUNDS)) {
-            continue;
-        }
-        MoveToEx(customDraw->nmcd.hdc, client.left, rowRect.bottom - 1, nullptr);
-        LineTo(customDraw->nmcd.hdc, client.right, rowRect.bottom - 1);
-    }
-    const int scrollX = GetScrollPos(ctx->recordingsList, SB_HORZ);
-    HWND header = ListView_GetHeader(ctx->recordingsList);
-    const int columnCount = header ? Header_GetItemCount(header) : 0;
-    int x = -scrollX;
-    for (int col = 0; col < columnCount - 1; ++col) {
-        x += ListView_GetColumnWidth(ctx->recordingsList, col);
-        if (x <= client.left || x >= client.right) {
-            continue;
-        }
-        MoveToEx(customDraw->nmcd.hdc, x - 1, firstRow.top, nullptr);
-        LineTo(customDraw->nmcd.hdc, x - 1, client.bottom);
-    }
-    if (oldPen) SelectObject(customDraw->nmcd.hdc, oldPen);
-}
-
-LRESULT CALLBACK RecordingsHeaderSubclassProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR refData)
-{
-    auto* ctx = reinterpret_cast<AppContext*>(refData);
-    switch (message) {
-    case WM_ERASEBKGND:
-        return 1;
-    case WM_PAINT: {
-        PAINTSTRUCT ps{};
-        HDC hdc = BeginPaint(hwnd, &ps);
-        PaintRecordingsHeader(hwnd, hdc);
-        EndPaint(hwnd, &ps);
-        return 0;
-    }
-    case WM_NCDESTROY:
-        if (ctx && ctx->recordingsListHeader == hwnd) {
-            ctx->recordingsListHeader = nullptr;
-        }
-        if (ctx && ctx->youtubeMediaListHeader == hwnd) {
-            ctx->youtubeMediaListHeader = nullptr;
-        }
-        RemoveWindowSubclass(hwnd, RecordingsHeaderSubclassProc, 2);
-        break;
-    default:
-        break;
-    }
-    return DefSubclassProc(hwnd, message, wParam, lParam);
 }
 
 void DrawYouTubeLinkStatus(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
