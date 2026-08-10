@@ -853,7 +853,48 @@ namespace {
 
 void DrawCheckOrXGlyph(HDC dc, const RECT& bounds, bool valid)
 {
+    if (!dc) {
+        return;
+    }
     EnsureThemeResources();
+
+    if (EnsureAlertGdiplus()) {
+        Gdiplus::Graphics graphics(dc);
+        graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+        graphics.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
+        if (graphics.GetLastStatus() == Gdiplus::Ok) {
+            const Gdiplus::Color glyphColor(
+                255,
+                GetRValue(valid ? kColorSuccess : kColorFailure),
+                GetGValue(valid ? kColorSuccess : kColorFailure),
+                GetBValue(valid ? kColorSuccess : kColorFailure));
+            Gdiplus::Pen glyphPen(glyphColor, 2.0f);
+            glyphPen.SetStartCap(Gdiplus::LineCapRound);
+            glyphPen.SetEndCap(Gdiplus::LineCapRound);
+            glyphPen.SetLineJoin(Gdiplus::LineJoinRound);
+
+            const Gdiplus::REAL left = static_cast<Gdiplus::REAL>(bounds.left) + 1.5f;
+            const Gdiplus::REAL top = static_cast<Gdiplus::REAL>(bounds.top) + 1.5f;
+            const Gdiplus::REAL right = static_cast<Gdiplus::REAL>(bounds.right) - 1.5f;
+            const Gdiplus::REAL bottom = static_cast<Gdiplus::REAL>(bounds.bottom) - 1.5f;
+            const Gdiplus::REAL centerY = (top + bottom) / 2.0f;
+
+            if (valid) {
+                const Gdiplus::PointF points[] = {
+                    {left, centerY},
+                    {left + (right - left) * 0.34f, bottom - 0.5f},
+                    {right, top + 0.5f},
+                };
+                graphics.DrawLines(&glyphPen, points, 3);
+            } else {
+                graphics.DrawLine(&glyphPen, left, top, right, bottom);
+                graphics.DrawLine(&glyphPen, left, bottom, right, top);
+            }
+            return;
+        }
+    }
+
     HPEN pen = valid ? gTheme.successPen : gTheme.failurePen;
     HGDIOBJ oldPen = pen ? SelectObject(dc, pen) : nullptr;
     const int half = (bounds.right - bounds.left) / 2;
@@ -869,6 +910,53 @@ void DrawCheckOrXGlyph(HDC dc, const RECT& bounds, bool valid)
     }
     if (oldPen) {
         SelectObject(dc, oldPen);
+    }
+}
+
+void DrawStatusDot(HDC dc, const RECT& bounds, COLORREF color)
+{
+    if (!dc) {
+        return;
+    }
+
+    const int width = bounds.right - bounds.left;
+    const int height = bounds.bottom - bounds.top;
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+
+    if (EnsureAlertGdiplus()) {
+        Gdiplus::Graphics graphics(dc);
+        graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+        graphics.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
+        if (graphics.GetLastStatus() == Gdiplus::Ok) {
+            const Gdiplus::Color dotColor(
+                255,
+                GetRValue(color),
+                GetGValue(color),
+                GetBValue(color));
+            Gdiplus::SolidBrush dotBrush(dotColor);
+            const Gdiplus::REAL diameter = static_cast<Gdiplus::REAL>((std::min)(width, height)) - 1.0f;
+            const Gdiplus::REAL left = static_cast<Gdiplus::REAL>(bounds.left) + 0.5f;
+            const Gdiplus::REAL top = static_cast<Gdiplus::REAL>(bounds.top) + 0.5f;
+            graphics.FillEllipse(&dotBrush, left, top, diameter, diameter);
+            return;
+        }
+    }
+
+    EnsureThemeResources();
+    HBRUSH brush = CreateSolidBrush(color);
+    HGDIOBJ oldBrush = brush ? SelectObject(dc, brush) : nullptr;
+    const int diameter = (std::min)(width, height);
+    const int left = bounds.left + (width - diameter) / 2;
+    const int top = bounds.top + (height - diameter) / 2;
+    Ellipse(dc, left, top, left + diameter, top + diameter);
+    if (oldBrush) {
+        SelectObject(dc, oldBrush);
+    }
+    if (brush) {
+        DeleteObject(brush);
     }
 }
 
@@ -1559,14 +1647,15 @@ void DrawStatusLight(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
     }
     EnsureThemeResources();
     RECT rc = drawInfo->rcItem;
-    if (gTheme.inputBrush) {
-        FillRect(drawInfo->hDC, &rc, gTheme.inputBrush);
-    }
-    if (drawInfo->CtlID == IDC_WOW_WINDOW_ICON
+    const bool isPrerequisiteIcon = drawInfo->CtlID == IDC_WOW_WINDOW_ICON
         || drawInfo->CtlID == IDC_OBS_INSTALL_ICON
         || drawInfo->CtlID == IDC_FFMPEG_ICON
         || drawInfo->CtlID == IDC_WARCRAFT_RECORDER_ICON
-        || drawInfo->CtlID == IDC_ADVANCED_LOGGING_ICON) {
+        || drawInfo->CtlID == IDC_ADVANCED_LOGGING_ICON;
+    if (isPrerequisiteIcon) {
+        if (gTheme.inputBrush) {
+            FillRect(drawInfo->hDC, &rc, gTheme.inputBrush);
+        }
         bool isValid = false;
         for (const auto& row : kPrerequisiteRows) {
             if (row.iconId == drawInfo->CtlID) {
@@ -1586,32 +1675,17 @@ void DrawStatusLight(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
         DrawCheckOrXGlyph(drawInfo->hDC, glyphBounds, isValid);
         return;
     }
+
+    FillStyledButtonParentBackground(drawInfo->hDC, drawInfo->hwndItem, rc, ctx->mainWindow);
     const bool active = (drawInfo->CtlID == IDC_MONITOR_ICON) ? ctx->isMonitoring : ctx->isRecording;
     const bool isMonitor = drawInfo->CtlID == IDC_MONITOR_ICON;
-    HPEN pen = nullptr;
-    HBRUSH brush = nullptr;
+    COLORREF color = kThemeColors.mutedDot;
     if (active && isMonitor) {
-        pen = gTheme.successPen;
-        brush = gTheme.successBrush;
+        color = kColorSuccess;
     } else if (active) {
-        pen = gTheme.recordingDotPen;
-        brush = gTheme.recordingDotBrush;
-    } else {
-        pen = gTheme.mutedDotPen;
-        brush = gTheme.mutedDotBrush;
+        color = kThemeColors.recordingDot;
     }
-    const int width = rc.right - rc.left;
-    const int height = rc.bottom - rc.top;
-    const int diameter = (std::max)(6, (std::min)(10, (std::min)(width, height) - 2));
-    const int left = rc.left + (width - diameter) / 2;
-    const int top = rc.top + (height - diameter) / 2;
-    const int right = left + diameter;
-    const int bottom = top + diameter;
-    HGDIOBJ oldPen = pen ? SelectObject(drawInfo->hDC, pen) : nullptr;
-    HGDIOBJ oldBrush = brush ? SelectObject(drawInfo->hDC, brush) : nullptr;
-    Ellipse(drawInfo->hDC, left, top, right, bottom);
-    if (oldBrush) SelectObject(drawInfo->hDC, oldBrush);
-    if (oldPen) SelectObject(drawInfo->hDC, oldPen);
+    DrawStatusDot(drawInfo->hDC, rc, color);
 }
 
 void DrawLengthValue(const DRAWITEMSTRUCT* drawInfo)
@@ -1620,8 +1694,7 @@ void DrawLengthValue(const DRAWITEMSTRUCT* drawInfo)
         return;
     }
     RECT rc = drawInfo->rcItem;
-    HBRUSH clearBrush = CreateSolidBrush(kColorPanelBottom);
-    if (clearBrush) { FillRect(drawInfo->hDC, &rc, clearBrush); DeleteObject(clearBrush); }
+    FillStyledButtonParentBackground(drawInfo->hDC, drawInfo->hwndItem, rc, nullptr);
     wchar_t textBuffer[64] = {};
     GetWindowTextW(drawInfo->hwndItem, textBuffer, static_cast<int>(std::size(textBuffer)));
     SetBkMode(drawInfo->hDC, TRANSPARENT);

@@ -127,12 +127,12 @@ void LayoutStatusPanel(AppContext* ctx, int panelWidth, int panelHeight)
     y += 46;
 
     MoveControl(ctx->statusPanel, IDC_LIVE_LABEL, LayoutMetrics::kPanelInset, y, 90, LayoutMetrics::kRowHeight);
-    MoveControl(ctx->statusPanel, IDC_MONITOR_ICON, LayoutMetrics::kPanelInset + 98, y + 6, 12, 12);
-    MoveControl(ctx->statusPanel, IDC_MONITOR_TEXT, LayoutMetrics::kPanelInset + 115, y, 90, LayoutMetrics::kRowHeight);
-    MoveControl(ctx->statusPanel, IDC_RECORD_ICON, LayoutMetrics::kPanelInset + 218, y + 6, 12, 12);
-    MoveControl(ctx->statusPanel, IDC_RECORD_TEXT, LayoutMetrics::kPanelInset + 235, y, 90, LayoutMetrics::kRowHeight);
-    MoveControl(ctx->statusPanel, IDC_LENGTH_LABEL, LayoutMetrics::kPanelInset + 335, y, 60, LayoutMetrics::kRowHeight);
-    MoveControl(ctx->statusPanel, IDC_LENGTH_VALUE, LayoutMetrics::kPanelInset + 400, y, 110, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->statusPanel, IDC_MONITOR_ICON, LayoutMetrics::kPanelInset + 105, y + 5, 14, 14);
+    MoveControl(ctx->statusPanel, IDC_MONITOR_TEXT, LayoutMetrics::kPanelInset + 125, y, 92, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->statusPanel, IDC_RECORD_ICON, LayoutMetrics::kPanelInset + 225, y + 5, 14, 14);
+    MoveControl(ctx->statusPanel, IDC_RECORD_TEXT, LayoutMetrics::kPanelInset + 245, y, 80, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->statusPanel, IDC_LENGTH_LABEL, LayoutMetrics::kPanelInset + 345, y, 60, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->statusPanel, IDC_LENGTH_VALUE, LayoutMetrics::kPanelInset + 410, y, 110, LayoutMetrics::kRowHeight);
     y += 36;
 
     constexpr int wowTextX = LayoutMetrics::kPanelInset + 126;

@@ -5077,12 +5077,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         y += 44;
 
         CreateWindowW(L"STATIC", L"Live Status:", WS_VISIBLE | WS_CHILD, xLabel, y, 90, rowHeight, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_LIVE_LABEL), nullptr, nullptr);
-        ctx->monitorIcon = CreateWindowW(L"STATIC", L"", WS_VISIBLE | WS_CHILD | SS_OWNERDRAW, xLabel + 95, y, 18, rowHeight, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_MONITOR_ICON), nullptr, nullptr);
-        CreateWindowW(L"STATIC", L"Monitoring", WS_VISIBLE | WS_CHILD, xLabel + 115, y, 80, rowHeight, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_MONITOR_TEXT), nullptr, nullptr);
-        ctx->recordIcon = CreateWindowW(L"STATIC", L"", WS_VISIBLE | WS_CHILD | SS_OWNERDRAW, xLabel + 215, y, 18, rowHeight, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_RECORD_ICON), nullptr, nullptr);
-        CreateWindowW(L"STATIC", L"Recording", WS_VISIBLE | WS_CHILD, xLabel + 235, y, 70, rowHeight, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_RECORD_TEXT), nullptr, nullptr);
-        CreateWindowW(L"STATIC", L"Length:", WS_VISIBLE | WS_CHILD, xLabel + 330, y, 50, rowHeight, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_LENGTH_LABEL), nullptr, nullptr);
-        ctx->lengthValue = CreateWindowW(L"STATIC", L"00:00:00", WS_VISIBLE | WS_CHILD | SS_OWNERDRAW, xLabel + 385, y, 85, rowHeight, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_LENGTH_VALUE), nullptr, nullptr);
+        ctx->monitorIcon = CreateWindowW(L"STATIC", L"", WS_VISIBLE | WS_CHILD | SS_OWNERDRAW, xLabel + 105, y + 5, 14, 14, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_MONITOR_ICON), nullptr, nullptr);
+        CreateWindowW(L"STATIC", L"Monitoring", WS_VISIBLE | WS_CHILD, xLabel + 125, y, 92, rowHeight, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_MONITOR_TEXT), nullptr, nullptr);
+        ctx->recordIcon = CreateWindowW(L"STATIC", L"", WS_VISIBLE | WS_CHILD | SS_OWNERDRAW, xLabel + 225, y + 5, 14, 14, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_RECORD_ICON), nullptr, nullptr);
+        CreateWindowW(L"STATIC", L"Recording", WS_VISIBLE | WS_CHILD, xLabel + 245, y, 80, rowHeight, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_RECORD_TEXT), nullptr, nullptr);
+        CreateWindowW(L"STATIC", L"Length:", WS_VISIBLE | WS_CHILD, xLabel + 345, y, 60, rowHeight, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_LENGTH_LABEL), nullptr, nullptr);
+        ctx->lengthValue = CreateWindowW(L"STATIC", L"00:00:00", WS_VISIBLE | WS_CHILD | SS_OWNERDRAW, xLabel + 410, y, 110, rowHeight, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_LENGTH_VALUE), nullptr, nullptr);
         y += 34;
 
         CreateWindowW(L"STATIC", L"WoW:", WS_VISIBLE | WS_CHILD, xLabel, y, 90, rowHeight, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_WOW_WINDOW_LABEL), nullptr, nullptr);
