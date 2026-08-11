@@ -4442,7 +4442,8 @@ void DrawStyledButton(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
     HBRUSH fillBrush = CreateSolidBrush(fill);
     HGDIOBJ oldPen = borderPen ? SelectObject(drawInfo->hDC, borderPen) : nullptr;
     HGDIOBJ oldBrush = fillBrush ? SelectObject(drawInfo->hDC, fillBrush) : nullptr;
-    Rectangle(drawInfo->hDC, rc.left + 1, rc.top + 1, rc.right - 1, rc.bottom - 1);
+    const int borderInset = isTab && isActiveTab ? 2 : 1;
+    Rectangle(drawInfo->hDC, rc.left + borderInset, rc.top + borderInset, rc.right - borderInset, rc.bottom - borderInset);
     if (oldBrush) SelectObject(drawInfo->hDC, oldBrush);
     if (oldPen) SelectObject(drawInfo->hDC, oldPen);
     if (fillBrush) DeleteObject(fillBrush);

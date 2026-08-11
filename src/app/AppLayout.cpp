@@ -417,10 +417,10 @@ void LayoutMainUi(AppContext* ctx, int clientWidth, int clientHeight)
 
     constexpr int outer = 12;
     const int navWidth = (std::max)(120, (std::min)(160, clientWidth / 6));
-    constexpr int navY = 20;
     constexpr int navHeight = 34;
     const int panelX = outer + navWidth + 16;
     constexpr int panelY = 14;
+    constexpr int navY = panelY - 1;
     const int panelWidth = (std::max)(320, clientWidth - panelX - outer);
     const int panelHeight = (std::max)(240, clientHeight - panelY - outer);
 
