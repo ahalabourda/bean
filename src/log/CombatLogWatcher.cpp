@@ -94,8 +94,18 @@ public:
         if (handle_ == INVALID_HANDLE_VALUE) {
             return false;
         }
+        BY_HANDLE_FILE_INFORMATION fileInfo{};
+        if (!GetFileInformationByHandle(handle_, &fileInfo)) {
+            CloseHandle(handle_);
+            handle_ = INVALID_HANDLE_VALUE;
+            return false;
+        }
 
         path_ = path;
+        volumeSerialNumber_ = fileInfo.dwVolumeSerialNumber;
+        fileIndex_ = (static_cast<std::uint64_t>(fileInfo.nFileIndexHigh) << 32)
+            | fileInfo.nFileIndexLow;
+        identityValid_ = true;
         buffer_.resize(kReadBufferBytes);
         pending_.clear();
 
@@ -123,6 +133,9 @@ public:
         path_.clear();
         pending_.clear();
         offset_ = 0;
+        volumeSerialNumber_ = 0;
+        fileIndex_ = 0;
+        identityValid_ = false;
     }
 
     bool IsOpen() const
@@ -140,15 +153,48 @@ public:
         return offset_;
     }
 
-    // Delivers every complete line currently available. Returns how many.
-    std::size_t Drain(const CombatLogWatcher::LineCallback& callback, std::uint64_t& truncationRecoveries)
+    bool IsSameFileOnDisk(const std::filesystem::path& candidate) const
     {
+        if (!identityValid_ || candidate.empty()) {
+            return false;
+        }
+        const HANDLE candidateHandle = CreateFileW(
+            candidate.c_str(),
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr);
+        if (candidateHandle == INVALID_HANDLE_VALUE) {
+            return false;
+        }
+        BY_HANDLE_FILE_INFORMATION fileInfo{};
+        const bool readIdentity = GetFileInformationByHandle(candidateHandle, &fileInfo) != FALSE;
+        CloseHandle(candidateHandle);
+        if (!readIdentity) {
+            return false;
+        }
+        const auto fileIndex = (static_cast<std::uint64_t>(fileInfo.nFileIndexHigh) << 32)
+            | fileInfo.nFileIndexLow;
+        return fileInfo.dwVolumeSerialNumber == volumeSerialNumber_
+            && fileIndex == fileIndex_;
+    }
+
+    // Delivers every complete line currently available. Returns how many.
+    std::size_t Drain(
+        const CombatLogWatcher::LineCallback& callback,
+        std::uint64_t& truncationRecoveries,
+        bool& readError)
+    {
+        readError = false;
         if (!IsOpen()) {
             return 0;
         }
 
         LARGE_INTEGER sizeInfo{};
         if (!GetFileSizeEx(handle_, &sizeInfo)) {
+            readError = true;
             return 0;
         }
         const auto fileSize = static_cast<std::uintmax_t>(sizeInfo.QuadPart);
@@ -171,6 +217,7 @@ public:
         for (;;) {
             DWORD bytesRead = 0;
             if (!ReadFile(handle_, buffer_.data(), static_cast<DWORD>(buffer_.size()), &bytesRead, nullptr)) {
+                readError = true;
                 break;
             }
             if (bytesRead == 0) {
@@ -221,6 +268,9 @@ private:
     std::uintmax_t offset_ = 0;
     std::string pending_;
     std::vector<char> buffer_;
+    DWORD volumeSerialNumber_ = 0;
+    std::uint64_t fileIndex_ = 0;
+    bool identityValid_ = false;
 };
 
 } // namespace
@@ -359,7 +409,11 @@ void CombatLogWatcher::RunLoop(const LineCallback& callback)
             lastDirectoryScan = now;
 
             const auto latest = FindLatestLogFile();
-            if (!latest.empty() && latest != tail->Path()) {
+            const bool activeFileReplaced = tail->IsOpen()
+                && latest == tail->Path()
+                && !tail->IsSameFileOnDisk(latest);
+            if (!latest.empty()
+                && (!tail->IsOpen() || latest != tail->Path() || activeFileReplaced)) {
                 auto next = std::make_unique<LogFileTail>();
                 // A brand new log can be momentarily unopenable while WoW or an
                 // antivirus scanner is still touching it, so keep tailing the
@@ -372,7 +426,8 @@ void CombatLogWatcher::RunLoop(const LineCallback& callback)
                     if (tail->IsOpen()) {
                         // Final drain: on a crash these are the last lines
                         // written before the game died.
-                        tail->Drain(callback, truncationRecoveries);
+                        bool ignoredReadError = false;
+                        tail->Drain(callback, truncationRecoveries, ignoredReadError);
                     }
                     tail = std::move(next);
                     attachedBefore = true;
@@ -387,13 +442,19 @@ void CombatLogWatcher::RunLoop(const LineCallback& callback)
         }
 
         if (tail->IsOpen()) {
-            const auto delivered = tail->Drain(callback, truncationRecoveries);
+            bool readError = false;
+            const auto delivered = tail->Drain(callback, truncationRecoveries, readError);
+            if (readError) {
+                tail->Close();
+                attachedBefore = false;
+                rescanDirectory = true;
+            }
 
             // Snapshot once per batch rather than once per line; at dungeon log
             // rates the per-line version was pure overhead on the hot path.
             std::scoped_lock lock(debugMutex_);
             debugSnapshot_.activeFile = tail->Path();
-            debugSnapshot_.streamOpen = true;
+            debugSnapshot_.streamOpen = tail->IsOpen();
             debugSnapshot_.lastPosition = tail->Offset();
             debugSnapshot_.staleSeekRecoveries = truncationRecoveries;
             if (delivered > 0) {

@@ -149,6 +149,21 @@ void TestEnumerateYouTubeMediaFiles()
     Expect(EnumerateYouTubeMediaFiles({}).empty(), "Empty YouTube media folder should yield no files.");
 }
 
+void TestSortYouTubeMediaFiles()
+{
+    std::vector<YouTubeMediaFile> files{
+        {std::filesystem::path(L"zeta.mkv"), YouTubeMediaType::Recording, {}, 0},
+        {std::filesystem::path(L"alpha.mp4"), YouTubeMediaType::Clip, {}, 0},
+        {std::filesystem::path(L"Beta.mp4"), YouTubeMediaType::Recording, {}, 0},
+    };
+    SortYouTubeMediaFiles(files, YouTubeMediaSortColumn::Name, true);
+    Expect(files.front().path.filename() == L"alpha.mp4", "Name sorting should be case-insensitive ascending.");
+    Expect(files.back().path.filename() == L"zeta.mkv", "Name sorting should place zeta last.");
+
+    SortYouTubeMediaFiles(files, YouTubeMediaSortColumn::Type, false);
+    Expect(files.front().type == YouTubeMediaType::Clip, "Descending type sort should place clips first.");
+}
+
 } // namespace
 
 int main()
@@ -161,6 +176,7 @@ int main()
     TestClassColorForParticipant();
     TestEnumerateRecordingMediaFiles();
     TestEnumerateYouTubeMediaFiles();
+    TestSortYouTubeMediaFiles();
 
     if (gFailures == 0) {
         std::cout << "All app helper tests passed.\n";

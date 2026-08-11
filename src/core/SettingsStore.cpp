@@ -32,6 +32,57 @@ std::mutex& ConfigFileMutex()
     return mutex;
 }
 
+class CrossProcessConfigLock {
+public:
+    explicit CrossProcessConfigLock(std::string& error)
+    {
+        handle_ = CreateMutexW(nullptr, FALSE, L"Local\\Bean.SettingsStore");
+        if (!handle_) {
+            error = "Unable to create the settings writer mutex (error "
+                + std::to_string(GetLastError()) + ").";
+            return;
+        }
+        const DWORD waitResult = WaitForSingleObject(handle_, INFINITE);
+        if (waitResult != WAIT_OBJECT_0 && waitResult != WAIT_ABANDONED) {
+            error = "Unable to acquire the settings writer mutex (error "
+                + std::to_string(GetLastError()) + ").";
+            CloseHandle(handle_);
+            handle_ = nullptr;
+        }
+    }
+
+    ~CrossProcessConfigLock()
+    {
+        if (!handle_) {
+            return;
+        }
+        ReleaseMutex(handle_);
+        CloseHandle(handle_);
+    }
+
+    CrossProcessConfigLock(const CrossProcessConfigLock&) = delete;
+    CrossProcessConfigLock& operator=(const CrossProcessConfigLock&) = delete;
+
+    bool Acquired() const
+    {
+        return handle_ != nullptr;
+    }
+
+private:
+    HANDLE handle_ = nullptr;
+};
+
+bool RemoveTemporaryFile(const std::filesystem::path& path, std::string& error)
+{
+    std::error_code removeError;
+    if (std::filesystem::exists(path)
+        && !std::filesystem::remove(path, removeError)) {
+        error += " Cleanup also failed: " + removeError.message() + ".";
+        return false;
+    }
+    return true;
+}
+
 std::string HexEncode(const BYTE* data, DWORD size)
 {
     constexpr char digits[] = "0123456789abcdef";
@@ -389,6 +440,10 @@ std::filesystem::path SettingsStore::GetConfigPath() const
 bool SettingsStore::Load(AppSettings& settings, std::string& error) const
 {
     std::scoped_lock lock(ConfigFileMutex());
+    CrossProcessConfigLock crossProcessLock(error);
+    if (!crossProcessLock.Acquired()) {
+        return false;
+    }
     return LoadLocked(settings, error);
 }
 
@@ -525,8 +580,13 @@ bool SettingsStore::LoadLocked(AppSettings& settings, std::string& error) const
 
 bool SettingsStore::Save(const AppSettings& settings, std::string& error) const
 {
+    const AppSettings snapshot = settings;
     std::scoped_lock lock(ConfigFileMutex());
-    return SaveLocked(settings, error);
+    CrossProcessConfigLock crossProcessLock(error);
+    if (!crossProcessLock.Acquired()) {
+        return false;
+    }
+    return SaveLocked(snapshot, error);
 }
 
 bool SettingsStore::SaveLocked(const AppSettings& settings, std::string& error) const
@@ -547,11 +607,23 @@ bool SettingsStore::SaveLocked(const AppSettings& settings, std::string& error) 
     // Write to a sibling temp file and swap it in, so an interrupted write can
     // never leave a truncated config behind. This file holds the DPAPI-wrapped
     // YouTube refresh token, so losing it costs the user their account link.
-    auto tempPath = configPath_;
-    tempPath += L".tmp";
+    wchar_t tempPathBuffer[MAX_PATH] = {};
+    if (GetTempFileNameW(
+            configPath_.parent_path().c_str(),
+            L"bnf",
+            0,
+            tempPathBuffer)
+        == 0) {
+        error = "Unable to create a unique temporary config file (error "
+            + std::to_string(GetLastError()) + ").";
+        return false;
+    }
+    const std::filesystem::path tempPath(tempPathBuffer);
 
     std::ofstream stream(tempPath, std::ios::trunc | std::ios::binary);
     if (!stream.is_open()) {
+        std::string cleanupError;
+        RemoveTemporaryFile(tempPath, cleanupError);
         error = "Unable to open config file for write.";
         return false;
     }
@@ -599,12 +671,16 @@ bool SettingsStore::SaveLocked(const AppSettings& settings, std::string& error) 
     stream.flush();
     if (!stream.good()) {
         stream.close();
-        std::error_code removeEc;
-        std::filesystem::remove(tempPath, removeEc);
         error = "Failed while writing config file.";
+        RemoveTemporaryFile(tempPath, error);
         return false;
     }
     stream.close();
+    if (stream.fail()) {
+        error = "Failed while closing temporary config file.";
+        RemoveTemporaryFile(tempPath, error);
+        return false;
+    }
 
     // Push the bytes to disk before the swap, otherwise a power loss can leave
     // the rename applied to a file whose contents never landed.
@@ -616,9 +692,25 @@ bool SettingsStore::SaveLocked(const AppSettings& settings, std::string& error) 
         OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL,
         nullptr);
-    if (tempHandle != INVALID_HANDLE_VALUE) {
-        FlushFileBuffers(tempHandle);
+    if (tempHandle == INVALID_HANDLE_VALUE) {
+        error = "Unable to reopen temporary config file for flush (error "
+            + std::to_string(GetLastError()) + ").";
+        RemoveTemporaryFile(tempPath, error);
+        return false;
+    }
+    if (!FlushFileBuffers(tempHandle)) {
+        const DWORD flushError = GetLastError();
         CloseHandle(tempHandle);
+        error = "Failed to flush temporary config file (error "
+            + std::to_string(flushError) + ").";
+        RemoveTemporaryFile(tempPath, error);
+        return false;
+    }
+    if (!CloseHandle(tempHandle)) {
+        error = "Failed to close temporary config file (error "
+            + std::to_string(GetLastError()) + ").";
+        RemoveTemporaryFile(tempPath, error);
+        return false;
     }
 
     // Keep the previous config as a .bak so a bad write is recoverable by hand.
@@ -628,6 +720,11 @@ bool SettingsStore::SaveLocked(const AppSettings& settings, std::string& error) 
         std::error_code backupEc;
         std::filesystem::copy_file(
             configPath_, backupPath, std::filesystem::copy_options::overwrite_existing, backupEc);
+        if (backupEc) {
+            error = "Failed to create config backup: " + backupEc.message() + ".";
+            RemoveTemporaryFile(tempPath, error);
+            return false;
+        }
     }
 
     if (!MoveFileExW(
@@ -635,9 +732,8 @@ bool SettingsStore::SaveLocked(const AppSettings& settings, std::string& error) 
             configPath_.c_str(),
             MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
         const DWORD moveError = GetLastError();
-        std::error_code removeEc;
-        std::filesystem::remove(tempPath, removeEc);
         error = "Failed to replace config file (error " + std::to_string(moveError) + ").";
+        RemoveTemporaryFile(tempPath, error);
         return false;
     }
 

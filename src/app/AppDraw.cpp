@@ -12,7 +12,10 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cwctype>
 #include <cstdlib>
+#include <cstring>
+#include <memory>
 #include <sstream>
 #include <utility>
 #include <unordered_map>
@@ -228,6 +231,852 @@ void FillStyledButtonParentBackground(HDC hdc, HWND button, const RECT& buttonRc
     }
 
     RestoreDC(hdc, savedDc);
+}
+
+struct BeanTextBoxState {
+    AppContext* ctx = nullptr;
+    std::wstring text;
+    size_t caret = 0;
+    size_t anchor = 0;
+    std::wstring undoText;
+    size_t undoCaret = 0;
+    size_t undoAnchor = 0;
+    bool hasUndo = false;
+    bool numberOnly = false;
+    bool multiline = false;
+    bool readOnly = false;
+    bool selecting = false;
+    bool caretVisible = true;
+    int scrollX = 0;
+    int scrollY = 0;
+    bool draggingVerticalScrollbar = false;
+    int verticalScrollDragOffset = 0;
+    HFONT font = nullptr;
+    DWORD lastClickTime = 0;
+    POINT lastClickPoint{};
+    int clickCount = 0;
+};
+
+std::unordered_map<HWND, BeanTextBoxState> gBeanTextBoxes;
+constexpr wchar_t kBeanTextBoxClassName[] = L"Bean.TextBox";
+constexpr UINT_PTR kBeanTextBoxCaretTimerId = 1;
+
+BeanTextBoxState* GetBeanTextBoxState(HWND hwnd)
+{
+    const auto it = gBeanTextBoxes.find(hwnd);
+    return it == gBeanTextBoxes.end() ? nullptr : &it->second;
+}
+
+size_t BeanTextBoxSelectionStart(const BeanTextBoxState& state)
+{
+    return (std::min)(state.caret, state.anchor);
+}
+
+size_t BeanTextBoxSelectionEnd(const BeanTextBoxState& state)
+{
+    return (std::max)(state.caret, state.anchor);
+}
+
+void NotifyBeanTextBoxChanged(HWND hwnd)
+{
+    HWND parent = GetParent(hwnd);
+    if (parent) {
+        SendMessageW(
+            parent,
+            WM_COMMAND,
+            MAKEWPARAM(static_cast<WORD>(GetDlgCtrlID(hwnd)), EN_CHANGE),
+            reinterpret_cast<LPARAM>(hwnd));
+    }
+}
+
+void BeanTextBoxSaveUndo(BeanTextBoxState& state)
+{
+    state.undoText = state.text;
+    state.undoCaret = state.caret;
+    state.undoAnchor = state.anchor;
+    state.hasUndo = true;
+}
+
+bool BeanTextBoxReplaceSelection(BeanTextBoxState& state, std::wstring replacement)
+{
+    if (state.numberOnly) {
+        replacement.erase(
+            std::remove_if(
+                replacement.begin(),
+                replacement.end(),
+                [](wchar_t character) { return character < L'0' || character > L'9'; }),
+            replacement.end());
+    }
+    const size_t start = BeanTextBoxSelectionStart(state);
+    const size_t end = BeanTextBoxSelectionEnd(state);
+    if (start == end && replacement.empty()) {
+        return false;
+    }
+    BeanTextBoxSaveUndo(state);
+    state.text.replace(start, end - start, replacement);
+    state.caret = start + replacement.size();
+    state.anchor = state.caret;
+    return true;
+}
+
+void BeanTextBoxCopySelection(HWND hwnd, const BeanTextBoxState& state)
+{
+    const size_t start = BeanTextBoxSelectionStart(state);
+    const size_t end = BeanTextBoxSelectionEnd(state);
+    if (start == end || !OpenClipboard(hwnd)) {
+        return;
+    }
+    EmptyClipboard();
+    const size_t byteCount = (end - start + 1) * sizeof(wchar_t);
+    HGLOBAL data = GlobalAlloc(GMEM_MOVEABLE, byteCount);
+    if (data) {
+        void* destination = GlobalLock(data);
+        if (destination) {
+            std::memcpy(destination, state.text.data() + start, (end - start) * sizeof(wchar_t));
+            static_cast<wchar_t*>(destination)[end - start] = L'\0';
+            GlobalUnlock(data);
+            SetClipboardData(CF_UNICODETEXT, data);
+            data = nullptr;
+        }
+    }
+    if (data) {
+        GlobalFree(data);
+    }
+    CloseClipboard();
+}
+
+std::wstring BeanTextBoxClipboardText()
+{
+    std::wstring value;
+    if (!IsClipboardFormatAvailable(CF_UNICODETEXT) || !OpenClipboard(nullptr)) {
+        return value;
+    }
+    HANDLE data = GetClipboardData(CF_UNICODETEXT);
+    if (data) {
+        const auto* source = static_cast<const wchar_t*>(GlobalLock(data));
+        if (source) {
+            value = source;
+            GlobalUnlock(data);
+        }
+    }
+    CloseClipboard();
+    return value;
+}
+
+int BeanTextBoxMeasureWidth(HDC dc, const std::wstring& text, size_t length)
+{
+    if (!dc || length == 0) {
+        return 0;
+    }
+    SIZE size{};
+    GetTextExtentPoint32W(dc, text.data(), static_cast<int>(length), &size);
+    return size.cx;
+}
+
+size_t BeanTextBoxHitTest(HWND hwnd, BeanTextBoxState& state, int x)
+{
+    HDC dc = GetDC(hwnd);
+    if (!dc) {
+        return state.text.size();
+    }
+    HFONT font = state.font ? state.font : gTheme.uiFont;
+    HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
+    RECT clientRect{};
+    GetClientRect(hwnd, &clientRect);
+    const int contentLeft = 8;
+    const int contentRight = (std::max)(contentLeft, static_cast<int>(clientRect.right) - 8);
+    const int contentX = (std::clamp)(x, contentLeft, contentRight) - contentLeft + state.scrollX;
+    size_t result = state.text.size();
+    for (size_t index = 0; index < state.text.size(); ++index) {
+        const int left = BeanTextBoxMeasureWidth(dc, state.text, index);
+        const int right = BeanTextBoxMeasureWidth(dc, state.text, index + 1);
+        if (contentX < (left + right) / 2) {
+            result = index;
+            break;
+        }
+    }
+    if (oldFont) {
+        SelectObject(dc, oldFont);
+    }
+    ReleaseDC(hwnd, dc);
+    return result;
+}
+
+int BeanTextBoxRegisterClick(BeanTextBoxState& state, int x, int y)
+{
+    const DWORD now = GetTickCount();
+    const bool sameSequence = state.clickCount > 0
+        && now - state.lastClickTime <= GetDoubleClickTime()
+        && std::abs(x - state.lastClickPoint.x) <= GetSystemMetrics(SM_CXDOUBLECLK)
+        && std::abs(y - state.lastClickPoint.y) <= GetSystemMetrics(SM_CYDOUBLECLK);
+    state.clickCount = sameSequence && state.clickCount < 3 ? state.clickCount + 1 : 1;
+    state.lastClickTime = now;
+    state.lastClickPoint = POINT{x, y};
+    return state.clickCount;
+}
+
+bool BeanTextBoxIsWordCharacter(wchar_t character)
+{
+    return (character >= L'A' && character <= L'Z')
+        || (character >= L'a' && character <= L'z')
+        || (character >= L'0' && character <= L'9')
+        || character == L'_';
+}
+
+void BeanTextBoxSelectWord(BeanTextBoxState& state, size_t hit)
+{
+    if (state.text.empty()) {
+        state.anchor = state.caret = 0;
+        return;
+    }
+    size_t position = (std::min)(hit, state.text.size() - 1);
+    const bool wordCharacter = BeanTextBoxIsWordCharacter(state.text[position]);
+    size_t start = position;
+    size_t end = position + 1;
+    while (start > 0 && BeanTextBoxIsWordCharacter(state.text[start - 1]) == wordCharacter) {
+        --start;
+    }
+    while (end < state.text.size() && BeanTextBoxIsWordCharacter(state.text[end]) == wordCharacter) {
+        ++end;
+    }
+    state.anchor = start;
+    state.caret = end;
+}
+
+void BeanTextBoxEnsureCaretVisible(HWND hwnd, BeanTextBoxState& state, HDC dc)
+{
+    RECT clientRect{};
+    GetClientRect(hwnd, &clientRect);
+    const int contentLeft = 8;
+    const int contentRight = (std::max)(contentLeft, static_cast<int>(clientRect.right) - 8);
+    const int caretX = contentLeft + BeanTextBoxMeasureWidth(dc, state.text, state.caret) - state.scrollX;
+    if (caretX < contentLeft) {
+        state.scrollX -= contentLeft - caretX;
+    } else if (caretX > contentRight) {
+        state.scrollX += caretX - contentRight;
+    }
+    const int textWidth = BeanTextBoxMeasureWidth(dc, state.text, state.text.size());
+    const int maxScroll = (std::max)(0, textWidth - (contentRight - contentLeft));
+    state.scrollX = (std::clamp)(state.scrollX, 0, maxScroll);
+}
+
+struct BeanTextBoxMultilineMetrics {
+    int trackTop = 1;
+    int trackBottom = 1;
+    int thumbHeight = 0;
+    int thumbTravel = 0;
+    int thumbTop = 1;
+    int maxScroll = 0;
+};
+
+BeanTextBoxMultilineMetrics GetBeanTextBoxMultilineMetrics(HWND hwnd, BeanTextBoxState& state)
+{
+    BeanTextBoxMultilineMetrics result;
+    HDC dc = GetDC(hwnd);
+    if (!dc) {
+        return result;
+    }
+    const HFONT font = state.font ? state.font : gTheme.uiFont;
+    HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
+    RECT clientRect{};
+    GetClientRect(hwnd, &clientRect);
+    TEXTMETRICW metrics{};
+    GetTextMetricsW(dc, &metrics);
+    const int textLeft = 8;
+    const int textRight = (std::max)(textLeft, static_cast<int>(clientRect.right) - 14 - 2);
+    const int textTop = 4;
+    const int textBottom = (std::max)(textTop, static_cast<int>(clientRect.bottom) - 4);
+    RECT measuredRect{textLeft, textTop, textRight, textTop};
+    DrawTextW(
+        dc,
+        state.text.c_str(),
+        static_cast<int>(state.text.size()),
+        &measuredRect,
+        DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL | DT_CALCRECT);
+    const int textHeight = (std::max)(metrics.tmHeight, measuredRect.bottom - measuredRect.top);
+    const int viewportHeight = (std::max)(1, textBottom - textTop);
+    result.maxScroll = (std::max)(0, textHeight - viewportHeight);
+    result.trackBottom = (std::max)(result.trackTop + 1, static_cast<int>(clientRect.bottom) - 1);
+    const int trackHeight = result.trackBottom - result.trackTop;
+    result.thumbHeight = (std::max)(18, trackHeight * viewportHeight / textHeight);
+    result.thumbHeight = (std::min)(result.thumbHeight, trackHeight);
+    result.thumbTravel = (std::max)(0, trackHeight - result.thumbHeight);
+    result.thumbTop = result.trackTop
+        + (result.maxScroll > 0 ? result.thumbTravel * state.scrollY / result.maxScroll : 0);
+    if (oldFont) {
+        SelectObject(dc, oldFont);
+    }
+    ReleaseDC(hwnd, dc);
+    return result;
+}
+
+void DrawBeanTextBox(HWND hwnd, HDC dc)
+{
+    BeanTextBoxState* state = GetBeanTextBoxState(hwnd);
+    if (!state || !dc) {
+        return;
+    }
+    RECT clientRect{};
+    GetClientRect(hwnd, &clientRect);
+    HBRUSH backgroundBrush = CreateSolidBrush(
+        IsWindowEnabled(hwnd) ? kColorInputBg : kThemeColors.controlDisabledBackground);
+    if (backgroundBrush) {
+        FillRect(dc, &clientRect, backgroundBrush);
+        DeleteObject(backgroundBrush);
+    }
+
+    const COLORREF borderColor = !IsWindowEnabled(hwnd)
+        ? kThemeColors.controlDisabledBorder
+        : (GetFocus() == hwnd ? kThemeColors.accentBright : kColorInputBorder);
+    HBRUSH borderBrush = CreateSolidBrush(borderColor);
+    if (borderBrush) {
+        RECT top{0, 0, clientRect.right, 1};
+        RECT bottom{0, clientRect.bottom - 1, clientRect.right, clientRect.bottom};
+        RECT left{0, 0, 1, clientRect.bottom};
+        RECT right{clientRect.right - 1, 0, clientRect.right, clientRect.bottom};
+        FillRect(dc, &top, borderBrush);
+        FillRect(dc, &bottom, borderBrush);
+        FillRect(dc, &left, borderBrush);
+        FillRect(dc, &right, borderBrush);
+        DeleteObject(borderBrush);
+    }
+
+    const int contentLeft = 8;
+    const int contentRight = (std::max)(contentLeft, static_cast<int>(clientRect.right) - 8);
+    const int contentTop = 1;
+    const int contentBottom = (std::max)(contentTop, static_cast<int>(clientRect.bottom) - 1);
+    const HFONT font = state->font ? state->font : gTheme.uiFont;
+    HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
+    TEXTMETRICW metrics{};
+    GetTextMetricsW(dc, &metrics);
+    if (state->multiline) {
+        const int scrollbarWidth = 14;
+        const int textLeft = 8;
+        const int textRight = (std::max)(textLeft, static_cast<int>(clientRect.right) - scrollbarWidth - 2);
+        const int textTop = 4;
+        const int textBottom = (std::max)(textTop, static_cast<int>(clientRect.bottom) - 4);
+        RECT measuredRect{textLeft, textTop, textRight, textTop};
+        DrawTextW(
+            dc,
+            state->text.c_str(),
+            static_cast<int>(state->text.size()),
+            &measuredRect,
+            DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL | DT_CALCRECT);
+        const int textHeight = (std::max)(metrics.tmHeight, measuredRect.bottom - measuredRect.top);
+        const int viewportHeight = (std::max)(1, textBottom - textTop);
+        const int maxScroll = (std::max)(0, textHeight - viewportHeight);
+        state->scrollY = (std::clamp)(state->scrollY, 0, maxScroll);
+
+        const int savedDc = SaveDC(dc);
+        IntersectClipRect(dc, textLeft, textTop, textRight, textBottom);
+        SetWindowOrgEx(dc, 0, -state->scrollY, nullptr);
+        RECT textRect{textLeft, textTop, textRight, textTop + textHeight};
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(
+            dc,
+            IsWindowEnabled(hwnd) ? kColorTextPrimary : kThemeColors.controlDisabledText);
+        DrawTextW(
+            dc,
+            state->text.c_str(),
+            static_cast<int>(state->text.size()),
+            &textRect,
+            DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL);
+        RestoreDC(dc, savedDc);
+
+        if (maxScroll > 0) {
+            const int trackLeft = static_cast<int>(clientRect.right) - scrollbarWidth;
+            const int trackTop = 1;
+            const int trackBottom = (std::max)(trackTop + 1, static_cast<int>(clientRect.bottom) - 1);
+            HBRUSH trackBrush = CreateSolidBrush(kThemeColors.scrollbarTrack);
+            if (trackBrush) {
+                RECT trackRect{trackLeft, trackTop, static_cast<int>(clientRect.right), trackBottom};
+                FillRect(dc, &trackRect, trackBrush);
+                DeleteObject(trackBrush);
+            }
+            const int trackHeight = trackBottom - trackTop;
+            const int thumbHeight = (std::max)(18, trackHeight * viewportHeight / textHeight);
+            const int thumbTravel = (std::max)(0, trackHeight - thumbHeight);
+            const int thumbTop = trackTop + (maxScroll > 0 ? thumbTravel * state->scrollY / maxScroll : 0);
+            HBRUSH thumbBrush = CreateSolidBrush(kThemeColors.scrollbarThumb);
+            if (thumbBrush) {
+                RECT thumbRect{trackLeft + 2, thumbTop, static_cast<int>(clientRect.right) - 2, thumbTop + thumbHeight};
+                FillRect(dc, &thumbRect, thumbBrush);
+                DeleteObject(thumbBrush);
+            }
+        }
+        if (oldFont) {
+            SelectObject(dc, oldFont);
+        }
+        return;
+    }
+    const int textTop = contentTop + (contentBottom - contentTop - metrics.tmHeight) / 2;
+    BeanTextBoxEnsureCaretVisible(hwnd, *state, dc);
+
+    const int savedDc = SaveDC(dc);
+    IntersectClipRect(dc, contentLeft, contentTop, contentRight, contentBottom);
+    const size_t selectionStart = BeanTextBoxSelectionStart(*state);
+    const size_t selectionEnd = BeanTextBoxSelectionEnd(*state);
+    if (selectionStart != selectionEnd) {
+        const int selectionLeft = contentLeft
+            + BeanTextBoxMeasureWidth(dc, state->text, selectionStart)
+            - state->scrollX;
+        const int selectionRight = contentLeft
+            + BeanTextBoxMeasureWidth(dc, state->text, selectionEnd)
+            - state->scrollX;
+        HBRUSH selectionBrush = CreateSolidBrush(kColorListSelection);
+        if (selectionBrush) {
+            RECT selectionRect{selectionLeft, textTop, selectionRight, textTop + metrics.tmHeight};
+            FillRect(dc, &selectionRect, selectionBrush);
+            DeleteObject(selectionBrush);
+        }
+    }
+
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(
+        dc,
+        IsWindowEnabled(hwnd) ? kColorTextPrimary : kThemeColors.controlDisabledText);
+    const int textX = contentLeft - state->scrollX;
+    if (!state->text.empty()) {
+        TextOutW(dc, textX, textTop, state->text.c_str(), static_cast<int>(state->text.size()));
+    }
+    if (GetFocus() == hwnd && state->caretVisible) {
+        const int caretX = contentLeft
+            + BeanTextBoxMeasureWidth(dc, state->text, state->caret)
+            - state->scrollX;
+        HPEN caretPen = CreatePen(PS_SOLID, 1, kColorTextPrimary);
+        HGDIOBJ oldPen = caretPen ? SelectObject(dc, caretPen) : nullptr;
+        MoveToEx(dc, caretX, textTop, nullptr);
+        LineTo(dc, caretX, textTop + metrics.tmHeight);
+        if (oldPen) {
+            SelectObject(dc, oldPen);
+        }
+        if (caretPen) {
+            DeleteObject(caretPen);
+        }
+    }
+    RestoreDC(dc, savedDc);
+    if (oldFont) {
+        SelectObject(dc, oldFont);
+    }
+}
+
+void PaintBeanTextBoxBuffered(HWND hwnd, HDC target, const PAINTSTRUCT& paint)
+{
+    RECT clientRect{};
+    GetClientRect(hwnd, &clientRect);
+    const int width = static_cast<int>(clientRect.right);
+    const int height = static_cast<int>(clientRect.bottom);
+    HDC buffer = (width > 0 && height > 0) ? CreateCompatibleDC(target) : nullptr;
+    HBITMAP bitmap = buffer ? CreateCompatibleBitmap(target, width, height) : nullptr;
+    if (!buffer || !bitmap) {
+        if (bitmap) DeleteObject(bitmap);
+        if (buffer) DeleteDC(buffer);
+        DrawBeanTextBox(hwnd, target);
+        return;
+    }
+    HGDIOBJ oldBitmap = SelectObject(buffer, bitmap);
+    DrawBeanTextBox(hwnd, buffer);
+    const RECT& dirty = paint.rcPaint;
+    BitBlt(
+        target,
+        dirty.left,
+        dirty.top,
+        dirty.right - dirty.left,
+        dirty.bottom - dirty.top,
+        buffer,
+        dirty.left,
+        dirty.top,
+        SRCCOPY);
+    SelectObject(buffer, oldBitmap);
+    DeleteObject(bitmap);
+    DeleteDC(buffer);
+}
+
+void BeanTextBoxInvalidate(HWND hwnd)
+{
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+LRESULT CALLBACK BeanTextBoxWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    BeanTextBoxState* state = GetBeanTextBoxState(hwnd);
+    if (!state) {
+        return DefWindowProcW(hwnd, message, wParam, lParam);
+    }
+    switch (message) {
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(hwnd, &paint);
+        PaintBeanTextBoxBuffered(hwnd, dc, paint);
+        EndPaint(hwnd, &paint);
+        return 0;
+    }
+    case WM_PRINTCLIENT:
+        DrawBeanTextBox(hwnd, reinterpret_cast<HDC>(wParam));
+        return 0;
+    case WM_GETDLGCODE:
+        return DLGC_WANTCHARS | DLGC_WANTARROWS;
+    case WM_GETTEXTLENGTH:
+        return static_cast<LRESULT>(state->text.size());
+    case WM_GETTEXT: {
+        const size_t capacity = static_cast<size_t>(wParam);
+        if (capacity == 0 || !lParam) {
+            return 0;
+        }
+        const size_t length = (std::min)(state->text.size(), capacity - 1);
+        std::memcpy(reinterpret_cast<void*>(lParam), state->text.data(), length * sizeof(wchar_t));
+        reinterpret_cast<wchar_t*>(lParam)[length] = L'\0';
+        return static_cast<LRESULT>(length);
+    }
+    case WM_SETTEXT:
+        state->text = lParam ? reinterpret_cast<const wchar_t*>(lParam) : L"";
+        state->caret = state->anchor = state->text.size();
+        state->scrollX = 0;
+        state->scrollY = 0;
+        state->hasUndo = false;
+        BeanTextBoxInvalidate(hwnd);
+        return TRUE;
+    case WM_SETFONT:
+        state->font = reinterpret_cast<HFONT>(wParam);
+        if (lParam) {
+            BeanTextBoxInvalidate(hwnd);
+            UpdateWindow(hwnd);
+        }
+        return 0;
+    case WM_GETFONT:
+        return reinterpret_cast<LRESULT>(state->font);
+    case EM_SETSEL: {
+        const size_t length = state->text.size();
+        const size_t start = wParam == static_cast<WPARAM>(-1)
+            ? length
+            : (std::min)(static_cast<size_t>(wParam), length);
+        const size_t end = lParam == static_cast<LPARAM>(-1)
+            ? length
+            : (std::min)(static_cast<size_t>(lParam), length);
+        state->anchor = start;
+        state->caret = end;
+        state->caretVisible = true;
+        BeanTextBoxInvalidate(hwnd);
+        return 0;
+    }
+    case EM_GETSEL: {
+        if (wParam) *reinterpret_cast<DWORD*>(wParam) = static_cast<DWORD>(state->anchor);
+        if (lParam) *reinterpret_cast<DWORD*>(lParam) = static_cast<DWORD>(state->caret);
+        return 0;
+    }
+    case EM_REPLACESEL: {
+        const wchar_t* replacement = lParam ? reinterpret_cast<const wchar_t*>(lParam) : L"";
+        if (BeanTextBoxReplaceSelection(*state, replacement)) {
+            NotifyBeanTextBoxChanged(hwnd);
+            BeanTextBoxInvalidate(hwnd);
+        }
+        return 0;
+    }
+    case EM_SCROLLCARET:
+        if (state->multiline) {
+            state->scrollY = GetBeanTextBoxMultilineMetrics(hwnd, *state).maxScroll;
+            BeanTextBoxInvalidate(hwnd);
+        }
+        return 0;
+    case WM_COPY:
+        BeanTextBoxCopySelection(hwnd, *state);
+        return 0;
+    case WM_CUT:
+        if (state->readOnly) {
+            return 0;
+        }
+        BeanTextBoxCopySelection(hwnd, *state);
+        if (BeanTextBoxReplaceSelection(*state, L"")) {
+            NotifyBeanTextBoxChanged(hwnd);
+            BeanTextBoxInvalidate(hwnd);
+        }
+        return 0;
+    case WM_CLEAR:
+        if (state->readOnly) {
+            return 0;
+        }
+        if (BeanTextBoxReplaceSelection(*state, L"")) {
+            NotifyBeanTextBoxChanged(hwnd);
+            BeanTextBoxInvalidate(hwnd);
+        }
+        return 0;
+    case WM_PASTE: {
+        if (state->readOnly) {
+            return 0;
+        }
+        if (BeanTextBoxReplaceSelection(*state, BeanTextBoxClipboardText())) {
+            NotifyBeanTextBoxChanged(hwnd);
+            BeanTextBoxInvalidate(hwnd);
+        }
+        return 0;
+    }
+    case WM_MOUSEWHEEL:
+        if (state->multiline) {
+            const int wheelDelta = static_cast<short>(HIWORD(wParam));
+            state->scrollY = (std::max)(0, state->scrollY - wheelDelta / 2);
+            BeanTextBoxInvalidate(hwnd);
+            return 0;
+        }
+        break;
+    case WM_SETFOCUS:
+        state->caretVisible = true;
+        SetTimer(hwnd, kBeanTextBoxCaretTimerId, 500, nullptr);
+        BeanTextBoxInvalidate(hwnd);
+        return 0;
+    case WM_KILLFOCUS:
+        KillTimer(hwnd, kBeanTextBoxCaretTimerId);
+        state->selecting = false;
+        BeanTextBoxInvalidate(hwnd);
+        return 0;
+    case WM_TIMER:
+        if (wParam == kBeanTextBoxCaretTimerId) {
+            state->caretVisible = !state->caretVisible;
+            BeanTextBoxInvalidate(hwnd);
+            return 0;
+        }
+        break;
+    case WM_LBUTTONDOWN: {
+        const int x = static_cast<int>(static_cast<short>(LOWORD(lParam)));
+        const int y = static_cast<int>(static_cast<short>(HIWORD(lParam)));
+        if (state->multiline) {
+            RECT clientRect{};
+            GetClientRect(hwnd, &clientRect);
+            const BeanTextBoxMultilineMetrics metrics = GetBeanTextBoxMultilineMetrics(hwnd, *state);
+            const int scrollbarLeft = static_cast<int>(clientRect.right) - 14;
+            if (x >= scrollbarLeft && metrics.maxScroll > 0) {
+                if (y >= metrics.thumbTop && y < metrics.thumbTop + metrics.thumbHeight) {
+                    state->draggingVerticalScrollbar = true;
+                    state->verticalScrollDragOffset = y - metrics.thumbTop;
+                    SetCapture(hwnd);
+                } else {
+                    const int page = (std::max)(1, static_cast<int>(clientRect.bottom) - 8);
+                    state->scrollY += y < metrics.thumbTop ? -page : page;
+                    state->scrollY = (std::clamp)(state->scrollY, 0, metrics.maxScroll);
+                    BeanTextBoxInvalidate(hwnd);
+                }
+                return 0;
+            }
+        }
+        const int clickCount = BeanTextBoxRegisterClick(*state, x, y);
+        SetFocus(hwnd);
+        const size_t hit = BeanTextBoxHitTest(hwnd, *state, x);
+        if (clickCount == 2) {
+            BeanTextBoxSelectWord(*state, hit);
+            state->selecting = false;
+            state->caretVisible = true;
+            BeanTextBoxInvalidate(hwnd);
+            return 0;
+        }
+        if (clickCount >= 3) {
+            state->anchor = 0;
+            state->caret = state->text.size();
+            state->selecting = false;
+            state->caretVisible = true;
+            BeanTextBoxInvalidate(hwnd);
+            return 0;
+        }
+        if ((GetKeyState(VK_SHIFT) & 0x8000) == 0) {
+            state->anchor = hit;
+        }
+        state->caret = hit;
+        state->selecting = true;
+        state->caretVisible = true;
+        SetCapture(hwnd);
+        BeanTextBoxInvalidate(hwnd);
+        return 0;
+    }
+    case WM_LBUTTONDBLCLK: {
+        const int x = static_cast<int>(static_cast<short>(LOWORD(lParam)));
+        const int y = static_cast<int>(static_cast<short>(HIWORD(lParam)));
+        const int clickCount = BeanTextBoxRegisterClick(*state, x, y);
+        SetFocus(hwnd);
+        const size_t hit = BeanTextBoxHitTest(hwnd, *state, x);
+        if (clickCount >= 3) {
+            state->anchor = 0;
+            state->caret = state->text.size();
+        } else {
+            BeanTextBoxSelectWord(*state, hit);
+        }
+        state->selecting = false;
+        state->caretVisible = true;
+        BeanTextBoxInvalidate(hwnd);
+        return 0;
+    }
+    case WM_MOUSEMOVE:
+        if (state->draggingVerticalScrollbar && GetCapture() == hwnd) {
+            const BeanTextBoxMultilineMetrics metrics = GetBeanTextBoxMultilineMetrics(hwnd, *state);
+            const int trackPosition = static_cast<int>(static_cast<short>(HIWORD(lParam)))
+                - state->verticalScrollDragOffset
+                - metrics.trackTop;
+            const int clampedPosition = (std::clamp)(trackPosition, 0, metrics.thumbTravel);
+            state->scrollY = metrics.thumbTravel > 0
+                ? clampedPosition * metrics.maxScroll / metrics.thumbTravel
+                : 0;
+            BeanTextBoxInvalidate(hwnd);
+            return 0;
+        }
+        if (state->selecting && GetCapture() == hwnd) {
+            const size_t hit = BeanTextBoxHitTest(
+                hwnd,
+                *state,
+                static_cast<int>(static_cast<short>(LOWORD(lParam))));
+            state->caret = hit;
+            state->caretVisible = true;
+            BeanTextBoxInvalidate(hwnd);
+        }
+        return 0;
+    case WM_LBUTTONUP:
+        if (state->draggingVerticalScrollbar) {
+            state->draggingVerticalScrollbar = false;
+            if (GetCapture() == hwnd) {
+                ReleaseCapture();
+            }
+            BeanTextBoxInvalidate(hwnd);
+            return 0;
+        }
+        if (state->selecting) {
+            state->selecting = false;
+            if (GetCapture() == hwnd) {
+                ReleaseCapture();
+            }
+            BeanTextBoxInvalidate(hwnd);
+        }
+        return 0;
+    case WM_CAPTURECHANGED:
+        state->draggingVerticalScrollbar = false;
+        state->selecting = false;
+        BeanTextBoxInvalidate(hwnd);
+        return 0;
+    case WM_KEYDOWN: {
+        const bool control = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+        const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+        if (control) {
+            if (wParam == 'A') {
+                state->anchor = 0;
+                state->caret = state->text.size();
+                BeanTextBoxInvalidate(hwnd);
+                return 0;
+            }
+            if (wParam == 'C') {
+                BeanTextBoxCopySelection(hwnd, *state);
+                return 0;
+            }
+            if (wParam == 'X') {
+                SendMessageW(hwnd, WM_CUT, 0, 0);
+                return 0;
+            }
+            if (wParam == 'V') {
+                SendMessageW(hwnd, WM_PASTE, 0, 0);
+                return 0;
+            }
+            if (wParam == 'Z') {
+                if (state->readOnly) {
+                    return 0;
+                }
+                if (state->hasUndo) {
+                    std::swap(state->text, state->undoText);
+                    std::swap(state->caret, state->undoCaret);
+                    std::swap(state->anchor, state->undoAnchor);
+                    state->hasUndo = false;
+                    NotifyBeanTextBoxChanged(hwnd);
+                    BeanTextBoxInvalidate(hwnd);
+                }
+                return 0;
+            }
+        }
+        if (state->readOnly) {
+            return 0;
+        }
+        if (wParam == VK_LEFT || wParam == VK_RIGHT || wParam == VK_HOME || wParam == VK_END) {
+            const size_t selectionStart = BeanTextBoxSelectionStart(*state);
+            const size_t selectionEnd = BeanTextBoxSelectionEnd(*state);
+            if (!shift && selectionStart != selectionEnd) {
+                state->caret = wParam == VK_LEFT || wParam == VK_HOME ? selectionStart : selectionEnd;
+                state->anchor = state->caret;
+            } else if (wParam == VK_LEFT) {
+                if (state->caret > 0) --state->caret;
+            } else if (wParam == VK_RIGHT) {
+                if (state->caret < state->text.size()) ++state->caret;
+            } else if (wParam == VK_HOME) {
+                state->caret = 0;
+            } else {
+                state->caret = state->text.size();
+            }
+            if (!shift) {
+                state->anchor = state->caret;
+            }
+            state->caretVisible = true;
+            BeanTextBoxInvalidate(hwnd);
+            return 0;
+        }
+        if (wParam == VK_BACK || wParam == VK_DELETE) {
+            bool changed = false;
+            if (BeanTextBoxSelectionStart(*state) != BeanTextBoxSelectionEnd(*state)) {
+                changed = BeanTextBoxReplaceSelection(*state, L"");
+            } else if (wParam == VK_BACK && state->caret > 0) {
+                state->anchor = state->caret - 1;
+                changed = BeanTextBoxReplaceSelection(*state, L"");
+            } else if (wParam == VK_DELETE && state->caret < state->text.size()) {
+                state->anchor = state->caret + 1;
+                changed = BeanTextBoxReplaceSelection(*state, L"");
+            }
+            state->caretVisible = true;
+            if (changed) {
+                NotifyBeanTextBoxChanged(hwnd);
+            }
+            BeanTextBoxInvalidate(hwnd);
+            return 0;
+        }
+        break;
+    }
+    case WM_CHAR:
+        if (state->readOnly) {
+            return 0;
+        }
+        if (wParam == 1) {
+            state->anchor = 0;
+            state->caret = state->text.size();
+            BeanTextBoxInvalidate(hwnd);
+            return 0;
+        }
+        if (wParam >= 32 && (!state->numberOnly || (wParam >= L'0' && wParam <= L'9'))) {
+            if (BeanTextBoxReplaceSelection(*state, std::wstring(1, static_cast<wchar_t>(wParam)))) {
+                state->caretVisible = true;
+                NotifyBeanTextBoxChanged(hwnd);
+                BeanTextBoxInvalidate(hwnd);
+            }
+        }
+        return 0;
+    case WM_NCDESTROY:
+        KillTimer(hwnd, kBeanTextBoxCaretTimerId);
+        gBeanTextBoxes.erase(hwnd);
+        return DefWindowProcW(hwnd, message, wParam, lParam);
+    default:
+        break;
+    }
+    return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+bool EnsureBeanTextBoxClass()
+{
+    static bool registered = false;
+    if (registered) {
+        return true;
+    }
+    WNDCLASSEXW windowClass{};
+    windowClass.cbSize = sizeof(windowClass);
+    windowClass.style = CS_DBLCLKS;
+    windowClass.hInstance = GetModuleHandleW(nullptr);
+    windowClass.lpfnWndProc = BeanTextBoxWndProc;
+    windowClass.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(IDC_IBEAM));
+    windowClass.lpszClassName = kBeanTextBoxClassName;
+    if (!RegisterClassExW(&windowClass)) {
+        return false;
+    }
+    registered = true;
+    return true;
 }
 
 void DrawModernRadioGlyph(
@@ -646,8 +1495,832 @@ LRESULT CALLBACK ModernToggleSubclassProc(HWND hwnd, UINT message, WPARAM wParam
     return DefSubclassProc(hwnd, message, wParam, lParam);
 }
 
+constexpr int kCustomComboPopupScrollbarWidth = 14;
+constexpr int kCustomComboPopupRowHeight = 28;
+constexpr UINT kCustomComboPopupDragTimerId = 1;
+constexpr DWORD kCustomComboPopupTypeAheadTimeoutMs = 1000;
+
+enum class CustomComboPopupCloseReason {
+    Commit,
+    Cancel,
+    Dismiss,
+    Destroy,
+};
+
+struct CustomComboPopupState {
+    HWND popup = nullptr;
+    HWND combo = nullptr;
+    int originalIndex = -1;
+    int highlightedIndex = -1;
+    int scrollOffset = 0;
+    int visibleRowLimit = 8;
+    bool draggingScrollbar = false;
+    bool releasingCapture = false;
+    bool closing = false;
+    int scrollbarDragOffset = 0;
+    std::wstring typeAhead;
+    DWORD typeAheadTick = 0;
+};
+
+std::unique_ptr<CustomComboPopupState> gCustomComboPopup;
+
+CustomComboPopupState* GetCustomComboPopupState(HWND popup)
+{
+    if (!popup || !gCustomComboPopup || gCustomComboPopup->popup != popup) {
+        return nullptr;
+    }
+    return gCustomComboPopup.get();
+}
+
+HWND GetCustomComboForPopup(HWND popup)
+{
+    const CustomComboPopupState* state = GetCustomComboPopupState(popup);
+    return state ? state->combo : nullptr;
+}
+
+bool IsStyledComboIdInternal(int controlId)
+{
+    switch (controlId) {
+    case IDC_ENCODER_COMBO:
+    case IDC_PRESET_COMBO:
+    case IDC_CONTAINER_COMBO:
+    case IDC_MICROPHONE_COMBO:
+    case IDC_RECORDING_RESOLUTION_COMBO:
+    case IDC_CHAT_BLOCKER_IMAGE_COMBO:
+    case IDC_CHAT_BLOCKER_ANCHOR_COMBO:
+    case IDC_CUSTOMIZE_THEME_COMBO:
+    case IDC_YOUTUBE_PRIVACY_COMBO:
+    case IDC_CLIPS_SOURCE_COMBO:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool IsCustomComboControl(HWND combo)
+{
+    return combo && IsStyledComboIdInternal(GetDlgCtrlID(combo));
+}
+
+int CustomComboPopupRowLimit(HWND combo, int itemCount)
+{
+    int rowLimit = 8;
+    switch (GetDlgCtrlID(combo)) {
+    case IDC_ENCODER_COMBO:
+    case IDC_PRESET_COMBO:
+    case IDC_MICROPHONE_COMBO:
+    case IDC_RECORDING_RESOLUTION_COMBO:
+        rowLimit = 5;
+        break;
+    case IDC_CONTAINER_COMBO:
+        rowLimit = 2;
+        break;
+    case IDC_CHAT_BLOCKER_ANCHOR_COMBO:
+        rowLimit = 4;
+        break;
+    case IDC_CHAT_BLOCKER_IMAGE_COMBO:
+        rowLimit = 6;
+        break;
+    case IDC_YOUTUBE_PRIVACY_COMBO:
+        rowLimit = 3;
+        break;
+    case IDC_CUSTOMIZE_THEME_COMBO:
+        rowLimit = static_cast<int>(kThemeDefinitions.size());
+        break;
+    case IDC_CLIPS_SOURCE_COMBO:
+    default:
+        break;
+    }
+    return (std::max)(1, (std::min)(rowLimit, (std::max)(1, itemCount)));
+}
+
+struct CustomComboPopupMetrics {
+    RECT clientRect{};
+    int itemCount = 0;
+    int visibleRows = 0;
+    int maxOffset = 0;
+    int contentRight = 0;
+    int thumbHeight = 0;
+    int travel = 0;
+    int thumbTop = 0;
+    bool hasScrollbar = false;
+};
+
+bool GetCustomComboPopupMetrics(HWND popup, CustomComboPopupMetrics& metrics)
+{
+    const CustomComboPopupState* state = GetCustomComboPopupState(popup);
+    if (!state || !state->combo || !GetClientRect(popup, &metrics.clientRect)) {
+        return false;
+    }
+    metrics.itemCount = (std::max)(
+        0,
+        static_cast<int>(SendMessageW(state->combo, CB_GETCOUNT, 0, 0)));
+    const int contentHeight = (std::max)(
+        1,
+        static_cast<int>(metrics.clientRect.bottom) - 2);
+    metrics.visibleRows = (std::max)(
+        1,
+        (std::min)(
+            state->visibleRowLimit,
+            (contentHeight + kCustomComboPopupRowHeight - 1) / kCustomComboPopupRowHeight));
+    metrics.maxOffset = (std::max)(0, metrics.itemCount - metrics.visibleRows);
+    metrics.hasScrollbar = metrics.maxOffset > 0;
+    metrics.contentRight = metrics.hasScrollbar
+        ? (std::max)(1, static_cast<int>(metrics.clientRect.right) - kCustomComboPopupScrollbarWidth)
+        : static_cast<int>(metrics.clientRect.right);
+    if (!metrics.hasScrollbar) {
+        return true;
+    }
+    const int trackHeight = (std::max)(1, static_cast<int>(metrics.clientRect.bottom));
+    metrics.thumbHeight = (std::max)(
+        24,
+        (std::min)(
+            trackHeight,
+            trackHeight * metrics.visibleRows / (std::max)(1, metrics.itemCount)));
+    metrics.travel = (std::max)(1, trackHeight - metrics.thumbHeight);
+    metrics.thumbTop = metrics.maxOffset > 0
+        ? metrics.travel * state->scrollOffset / metrics.maxOffset
+        : 0;
+    return true;
+}
+
+int CustomComboPopupVisibleRows(HWND popup)
+{
+    CustomComboPopupMetrics metrics{};
+    return GetCustomComboPopupMetrics(popup, metrics) ? metrics.visibleRows : 1;
+}
+
+int CustomComboPopupMaxOffset(HWND popup)
+{
+    CustomComboPopupMetrics metrics{};
+    return GetCustomComboPopupMetrics(popup, metrics) ? metrics.maxOffset : 0;
+}
+
+int CustomComboPopupRowAtPoint(
+    const CustomComboPopupMetrics& metrics,
+    const CustomComboPopupState& state,
+    int x,
+    int y)
+{
+    if (x < 1 || x >= metrics.contentRight || y < 1) {
+        return -1;
+    }
+    const int row = (y - 1) / kCustomComboPopupRowHeight;
+    if (row < 0 || row >= metrics.visibleRows) {
+        return -1;
+    }
+    const int index = state.scrollOffset + row;
+    return index >= 0 && index < metrics.itemCount ? index : -1;
+}
+
+std::wstring GetComboItemText(HWND combo, int index)
+{
+    const int length = static_cast<int>(SendMessageW(combo, CB_GETLBTEXTLEN, index, 0));
+    if (length < 0) {
+        return {};
+    }
+    std::wstring text(static_cast<size_t>(length) + 1, L'\0');
+    SendMessageW(combo, CB_GETLBTEXT, index, reinterpret_cast<LPARAM>(text.data()));
+    text.resize(static_cast<size_t>(length));
+    return text;
+}
+
+void NotifyCustomCombo(HWND combo, WORD notification)
+{
+    if (!combo) {
+        return;
+    }
+    HWND parent = GetParent(combo);
+    if (parent) {
+        SendMessageW(
+            parent,
+            WM_COMMAND,
+            MAKEWPARAM(static_cast<WORD>(GetDlgCtrlID(combo)), notification),
+            reinterpret_cast<LPARAM>(combo));
+    }
+}
+
+void EnsureCustomComboPopupClass();
+void CloseCustomComboPopup(HWND popup, CustomComboPopupCloseReason reason);
+void CommitCustomComboPopupSelection(HWND popup, int index);
+void InvalidateCustomComboPopup(HWND popup);
+void StopCustomComboPopupDrag(HWND popup)
+{
+    CustomComboPopupState* state = GetCustomComboPopupState(popup);
+    if (!state) {
+        return;
+    }
+    state->draggingScrollbar = false;
+    state->scrollbarDragOffset = 0;
+    KillTimer(popup, kCustomComboPopupDragTimerId);
+    if (GetCapture() == popup) {
+        state->releasingCapture = true;
+        ReleaseCapture();
+        state->releasingCapture = false;
+    }
+    InvalidateCustomComboPopup(popup);
+}
+
+void UpdateCustomComboPopupDrag(HWND popup)
+{
+    CustomComboPopupState* state = GetCustomComboPopupState(popup);
+    if (!state || !state->draggingScrollbar) {
+        return;
+    }
+    if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0) {
+        StopCustomComboPopupDrag(popup);
+        return;
+    }
+    CustomComboPopupMetrics metrics{};
+    if (!GetCustomComboPopupMetrics(popup, metrics) || metrics.maxOffset <= 0) {
+        return;
+    }
+    POINT cursor{};
+    GetCursorPos(&cursor);
+    ScreenToClient(popup, &cursor);
+    state->scrollOffset = (std::clamp)(
+        (static_cast<int>(cursor.y) - state->scrollbarDragOffset)
+            * metrics.maxOffset / metrics.travel,
+        0,
+        metrics.maxOffset);
+    InvalidateCustomComboPopup(popup);
+}
+
+void EnsureCustomComboPopupHighlightVisible(HWND popup)
+{
+    CustomComboPopupState* state = GetCustomComboPopupState(popup);
+    if (!state) {
+        return;
+    }
+    CustomComboPopupMetrics metrics{};
+    if (!GetCustomComboPopupMetrics(popup, metrics)) {
+        return;
+    }
+    const int visibleRows = metrics.visibleRows;
+    const int maxOffset = metrics.maxOffset;
+    if (state->highlightedIndex >= 0) {
+        if (state->highlightedIndex < state->scrollOffset) {
+            state->scrollOffset = state->highlightedIndex;
+        } else if (state->highlightedIndex >= state->scrollOffset + visibleRows) {
+            state->scrollOffset = state->highlightedIndex - visibleRows + 1;
+        }
+    }
+    state->scrollOffset = (std::clamp)(state->scrollOffset, 0, maxOffset);
+}
+
+void DrawCustomComboPopup(HWND popup, HDC dc)
+{
+    CustomComboPopupState* state = GetCustomComboPopupState(popup);
+    if (!state || !dc) {
+        return;
+    }
+    CustomComboPopupMetrics metrics{};
+    if (!GetCustomComboPopupMetrics(popup, metrics)) {
+        return;
+    }
+    state->scrollOffset = (std::clamp)(state->scrollOffset, 0, metrics.maxOffset);
+
+    HBRUSH backgroundBrush = CreateSolidBrush(kColorInputBg);
+    if (backgroundBrush) {
+        FillRect(dc, &metrics.clientRect, backgroundBrush);
+        DeleteObject(backgroundBrush);
+    }
+
+    SetBkMode(dc, TRANSPARENT);
+    HGDIOBJ oldFont = gTheme.uiFont ? SelectObject(dc, gTheme.uiFont) : nullptr;
+    for (int row = 0; row < metrics.visibleRows; ++row) {
+        const int itemIndex = state->scrollOffset + row;
+        if (itemIndex >= metrics.itemCount) {
+            break;
+        }
+        RECT rowRect{
+            1,
+            1 + row * kCustomComboPopupRowHeight,
+            metrics.contentRight,
+            1 + (row + 1) * kCustomComboPopupRowHeight};
+        const bool highlighted = itemIndex == state->highlightedIndex;
+        HBRUSH rowBrush = CreateSolidBrush(
+            highlighted ? kThemeColors.dropdownHoverBackground : kColorInputBg);
+        if (rowBrush) {
+            FillRect(dc, &rowRect, rowBrush);
+            DeleteObject(rowBrush);
+        }
+        SetTextColor(dc, kColorTextPrimary);
+        RECT textRect = rowRect;
+        textRect.left += 10;
+        textRect.right -= 10;
+        DrawTextW(
+            dc,
+            GetComboItemText(state->combo, itemIndex).c_str(),
+            -1,
+            &textRect,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    }
+    if (oldFont) {
+        SelectObject(dc, oldFont);
+    }
+
+    if (metrics.hasScrollbar) {
+        HBRUSH trackBrush = CreateSolidBrush(kThemeColors.scrollbarTrack);
+        if (trackBrush) {
+            RECT trackRect{
+                metrics.contentRight,
+                0,
+                metrics.clientRect.right,
+                metrics.clientRect.bottom};
+            FillRect(dc, &trackRect, trackBrush);
+            DeleteObject(trackBrush);
+        }
+        HBRUSH thumbBrush = CreateSolidBrush(
+            state->draggingScrollbar
+                ? kThemeColors.scrollbarThumbHover
+                : kThemeColors.scrollbarThumb);
+        if (thumbBrush) {
+            RECT thumbRect{
+                metrics.contentRight + 2,
+                metrics.thumbTop + 2,
+                metrics.clientRect.right - 2,
+                metrics.thumbTop + metrics.thumbHeight - 2};
+            FillRect(dc, &thumbRect, thumbBrush);
+            DeleteObject(thumbBrush);
+        }
+    }
+
+    HBRUSH borderBrush = CreateSolidBrush(kColorInputBorder);
+    if (borderBrush) {
+        RECT top{0, 0, metrics.clientRect.right, 1};
+        RECT bottom{
+            0,
+            metrics.clientRect.bottom - 1,
+            metrics.clientRect.right,
+            metrics.clientRect.bottom};
+        RECT left{0, 0, 1, metrics.clientRect.bottom};
+        RECT right{
+            metrics.clientRect.right - 1,
+            0,
+            metrics.clientRect.right,
+            metrics.clientRect.bottom};
+        FillRect(dc, &top, borderBrush);
+        FillRect(dc, &bottom, borderBrush);
+        FillRect(dc, &left, borderBrush);
+        FillRect(dc, &right, borderBrush);
+        DeleteObject(borderBrush);
+    }
+}
+
+void PaintCustomComboPopupBuffered(HWND popup, HDC target, const PAINTSTRUCT& paint)
+{
+    RECT clientRect{};
+    GetClientRect(popup, &clientRect);
+    const int width = static_cast<int>(clientRect.right);
+    const int height = static_cast<int>(clientRect.bottom);
+    HDC buffer = (width > 0 && height > 0) ? CreateCompatibleDC(target) : nullptr;
+    HBITMAP bitmap = buffer ? CreateCompatibleBitmap(target, width, height) : nullptr;
+    if (!buffer || !bitmap) {
+        if (bitmap) DeleteObject(bitmap);
+        if (buffer) DeleteDC(buffer);
+        DrawCustomComboPopup(popup, target);
+        return;
+    }
+    HGDIOBJ oldBitmap = SelectObject(buffer, bitmap);
+    DrawCustomComboPopup(popup, buffer);
+    const RECT& dirty = paint.rcPaint;
+    BitBlt(
+        target,
+        dirty.left,
+        dirty.top,
+        dirty.right - dirty.left,
+        dirty.bottom - dirty.top,
+        buffer,
+        dirty.left,
+        dirty.top,
+        SRCCOPY);
+    SelectObject(buffer, oldBitmap);
+    DeleteObject(bitmap);
+    DeleteDC(buffer);
+}
+
+void SetCustomComboPopupHighlight(HWND popup, int index)
+{
+    CustomComboPopupState* state = GetCustomComboPopupState(popup);
+    if (!state) {
+        return;
+    }
+    const int count = static_cast<int>(SendMessageW(state->combo, CB_GETCOUNT, 0, 0));
+    state->highlightedIndex = count > 0 ? (std::clamp)(index, 0, count - 1) : -1;
+    EnsureCustomComboPopupHighlightVisible(popup);
+    InvalidateCustomComboPopup(popup);
+}
+
+void CommitCustomComboPopupSelection(HWND popup, int index)
+{
+    CustomComboPopupState* state = GetCustomComboPopupState(popup);
+    if (!state) {
+        return;
+    }
+    const HWND combo = state->combo;
+    const int count = static_cast<int>(SendMessageW(combo, CB_GETCOUNT, 0, 0));
+    const int previousIndex = static_cast<int>(SendMessageW(combo, CB_GETCURSEL, 0, 0));
+    const bool validIndex = index >= 0 && index < count;
+    const bool selectionChanged = validIndex && index != previousIndex;
+    if (selectionChanged) {
+        SendMessageW(combo, CB_SETCURSEL, static_cast<WPARAM>(index), 0);
+    }
+    CloseCustomComboPopup(
+        popup,
+        validIndex
+            ? CustomComboPopupCloseReason::Commit
+            : CustomComboPopupCloseReason::Dismiss);
+}
+
+int FindCustomComboPopupPrefixMatch(HWND combo, int startIndex, const std::wstring& prefix)
+{
+    const int count = static_cast<int>(SendMessageW(combo, CB_GETCOUNT, 0, 0));
+    if (count <= 0 || prefix.empty()) {
+        return -1;
+    }
+    const int first = (std::max)(0, (std::min)(startIndex, count - 1));
+    for (int offset = 0; offset < count; ++offset) {
+        const int index = (first + offset) % count;
+        const std::wstring text = GetComboItemText(combo, index);
+        if (text.size() < prefix.size()) {
+            continue;
+        }
+        bool matches = true;
+        for (size_t character = 0; character < prefix.size(); ++character) {
+            if (std::towlower(text[character]) != std::towlower(prefix[character])) {
+                matches = false;
+                break;
+            }
+        }
+        if (matches) {
+            return index;
+        }
+    }
+    return -1;
+}
+
+void UpdateCustomComboPopupHighlightFromPoint(HWND popup, int x, int y)
+{
+    CustomComboPopupState* state = GetCustomComboPopupState(popup);
+    CustomComboPopupMetrics metrics{};
+    if (!state || !GetCustomComboPopupMetrics(popup, metrics)) {
+        return;
+    }
+    const int index = CustomComboPopupRowAtPoint(metrics, *state, x, y);
+    if (index >= 0) {
+        SetCustomComboPopupHighlight(popup, index);
+    } else if (state->highlightedIndex != -1) {
+        state->highlightedIndex = -1;
+        InvalidateCustomComboPopup(popup);
+    }
+}
+
+bool HandleCustomComboPopupKey(HWND combo, WPARAM key)
+{
+    CustomComboPopupState* state = gCustomComboPopup
+        && gCustomComboPopup->combo == combo
+        ? gCustomComboPopup.get()
+        : nullptr;
+    if (!state) {
+        return false;
+    }
+    const HWND popup = state->popup;
+    const int count = static_cast<int>(SendMessageW(combo, CB_GETCOUNT, 0, 0));
+    if (key == VK_ESCAPE) {
+        CloseCustomComboPopup(popup, CustomComboPopupCloseReason::Cancel);
+        return true;
+    }
+    if (key == VK_F4 || (key == VK_UP && (GetKeyState(VK_MENU) & 0x8000) != 0)) {
+        CloseCustomComboPopup(popup, CustomComboPopupCloseReason::Dismiss);
+        return true;
+    }
+    if (key == VK_RETURN || key == VK_SPACE) {
+        CommitCustomComboPopupSelection(popup, state->highlightedIndex);
+        return true;
+    }
+    if (count <= 0) {
+        return true;
+    }
+    int next = state->highlightedIndex < 0
+        ? static_cast<int>(SendMessageW(combo, CB_GETCURSEL, 0, 0))
+        : state->highlightedIndex;
+    switch (key) {
+    case VK_UP: --next; break;
+    case VK_DOWN: ++next; break;
+    case VK_PRIOR: next -= CustomComboPopupVisibleRows(popup); break;
+    case VK_NEXT: next += CustomComboPopupVisibleRows(popup); break;
+    case VK_HOME: next = 0; break;
+    case VK_END: next = count - 1; break;
+    default: return false;
+    }
+    SetCustomComboPopupHighlight(popup, next);
+    return true;
+}
+
+LRESULT CALLBACK CustomComboPopupWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    CustomComboPopupState* state = GetCustomComboPopupState(hwnd);
+    switch (message) {
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(hwnd, &paint);
+        PaintCustomComboPopupBuffered(hwnd, dc, paint);
+        EndPaint(hwnd, &paint);
+        return 0;
+    }
+    case WM_MOUSEMOVE: {
+        if (!state) return 0;
+        const int x = static_cast<int>(static_cast<short>(LOWORD(lParam)));
+        const int y = static_cast<int>(static_cast<short>(HIWORD(lParam)));
+        if (state->draggingScrollbar) {
+            UpdateCustomComboPopupDrag(hwnd);
+            return 0;
+        }
+        CustomComboPopupMetrics metrics{};
+        if (!GetCustomComboPopupMetrics(hwnd, metrics)) {
+            return 0;
+        }
+        if (metrics.hasScrollbar && x >= metrics.contentRight) {
+            TRACKMOUSEEVENT track{};
+            track.cbSize = sizeof(track);
+            track.dwFlags = TME_LEAVE;
+            track.hwndTrack = hwnd;
+            TrackMouseEvent(&track);
+            if (state->highlightedIndex != -1) {
+                state->highlightedIndex = -1;
+                InvalidateCustomComboPopup(hwnd);
+            }
+            return 0;
+        }
+        UpdateCustomComboPopupHighlightFromPoint(hwnd, x, y);
+        return 0;
+    }
+    case WM_MOUSELEAVE:
+        if (state && !state->draggingScrollbar) {
+            state->highlightedIndex = -1;
+            InvalidateCustomComboPopup(hwnd);
+        }
+        return 0;
+    case WM_MOUSEWHEEL:
+        if (state) {
+            const int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+            const int lines = (std::max)(1, std::abs(delta) / WHEEL_DELTA);
+            const int maxOffset = CustomComboPopupMaxOffset(hwnd);
+            state->scrollOffset = (std::clamp)(
+                state->scrollOffset + (delta > 0 ? -lines : lines),
+                0,
+                maxOffset);
+            InvalidateCustomComboPopup(hwnd);
+            POINT cursor{};
+            GetCursorPos(&cursor);
+            ScreenToClient(hwnd, &cursor);
+            UpdateCustomComboPopupHighlightFromPoint(
+                hwnd,
+                static_cast<int>(cursor.x),
+                static_cast<int>(cursor.y));
+        }
+        return 0;
+    case WM_LBUTTONDOWN: {
+        if (!state) return 0;
+        const int x = static_cast<int>(static_cast<short>(LOWORD(lParam)));
+        const int y = static_cast<int>(static_cast<short>(HIWORD(lParam)));
+        CustomComboPopupMetrics metrics{};
+        if (!GetCustomComboPopupMetrics(hwnd, metrics)) {
+            CloseCustomComboPopup(hwnd, CustomComboPopupCloseReason::Dismiss);
+            return 0;
+        }
+        if (x < 0 || y < 0 || x >= metrics.clientRect.right || y >= metrics.clientRect.bottom) {
+            CloseCustomComboPopup(hwnd, CustomComboPopupCloseReason::Dismiss);
+            return 0;
+        }
+        if (metrics.hasScrollbar && x >= metrics.contentRight) {
+            if (y >= metrics.thumbTop && y < metrics.thumbTop + metrics.thumbHeight) {
+                state->draggingScrollbar = true;
+                state->scrollbarDragOffset = y - metrics.thumbTop;
+                SetCapture(hwnd);
+                SetTimer(hwnd, kCustomComboPopupDragTimerId, 10, nullptr);
+            } else {
+                state->scrollOffset = (std::clamp)(
+                    state->scrollOffset
+                        + (y < metrics.thumbTop ? -metrics.visibleRows : metrics.visibleRows),
+                    0,
+                    metrics.maxOffset);
+                InvalidateCustomComboPopup(hwnd);
+            }
+            return 0;
+        }
+        const int index = CustomComboPopupRowAtPoint(metrics, *state, x, y);
+        if (index >= 0) {
+            CommitCustomComboPopupSelection(hwnd, index);
+        }
+        return 0;
+    }
+    case WM_LBUTTONUP:
+        if (state && state->draggingScrollbar) {
+            StopCustomComboPopupDrag(hwnd);
+        }
+        return 0;
+    case WM_CAPTURECHANGED:
+        if (state) {
+            if (!state->releasingCapture) {
+                state->draggingScrollbar = false;
+                state->scrollbarDragOffset = 0;
+                KillTimer(hwnd, kCustomComboPopupDragTimerId);
+                if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0) {
+                    CloseCustomComboPopup(hwnd, CustomComboPopupCloseReason::Dismiss);
+                } else {
+                    InvalidateCustomComboPopup(hwnd);
+                }
+            }
+        }
+        return 0;
+    case WM_TIMER:
+        if (wParam == kCustomComboPopupDragTimerId) {
+            UpdateCustomComboPopupDrag(hwnd);
+            return 0;
+        }
+        break;
+    case WM_ACTIVATEAPP:
+        if (!wParam && state) {
+            CloseCustomComboPopup(hwnd, CustomComboPopupCloseReason::Dismiss);
+        }
+        return 0;
+    case WM_CANCELMODE:
+        CloseCustomComboPopup(hwnd, CustomComboPopupCloseReason::Cancel);
+        return 0;
+    case WM_NCLBUTTONDOWN:
+    case WM_NCLBUTTONDBLCLK:
+    case WM_RBUTTONDOWN:
+    case WM_NCRBUTTONDOWN:
+        CloseCustomComboPopup(hwnd, CustomComboPopupCloseReason::Dismiss);
+        return 0;
+    case WM_NCHITTEST:
+        return HTCLIENT;
+    case WM_MOUSEACTIVATE:
+        return MA_NOACTIVATE;
+    case WM_NCDESTROY:
+        KillTimer(hwnd, kCustomComboPopupDragTimerId);
+        if (GetCapture() == hwnd) {
+            ReleaseCapture();
+        }
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        return 0;
+    default:
+        break;
+    }
+    return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+void EnsureCustomComboPopupClass()
+{
+    static bool registered = false;
+    if (registered) return;
+    WNDCLASSEXW windowClass{};
+    windowClass.cbSize = sizeof(windowClass);
+    windowClass.hInstance = GetModuleHandleW(nullptr);
+    windowClass.lpfnWndProc = CustomComboPopupWndProc;
+    windowClass.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(IDC_ARROW));
+    windowClass.lpszClassName = L"BeanCustomComboPopup";
+    windowClass.hbrBackground = nullptr;
+    if (RegisterClassExW(&windowClass)) {
+        registered = true;
+    }
+}
+
+void OpenCustomComboPopup(HWND combo)
+{
+    if (!IsCustomComboControl(combo)) {
+        return;
+    }
+    if (gCustomComboPopup) {
+        CloseCustomComboPopup(
+            gCustomComboPopup->popup,
+            CustomComboPopupCloseReason::Dismiss);
+    }
+    EnsureCustomComboPopupClass();
+    RECT comboRect{};
+    if (!GetWindowRect(combo, &comboRect)) return;
+    const int itemCount = static_cast<int>(SendMessageW(combo, CB_GETCOUNT, 0, 0));
+    if (itemCount <= 0) return;
+    const int visibleRowLimit = CustomComboPopupRowLimit(combo, itemCount);
+    const int popupHeight = kCustomComboPopupRowHeight * visibleRowLimit + 2;
+    HMONITOR monitor = MonitorFromWindow(combo, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO monitorInfo{};
+    monitorInfo.cbSize = sizeof(monitorInfo);
+    if (!monitor || !GetMonitorInfoW(monitor, &monitorInfo)) {
+        return;
+    }
+    const int workLeft = static_cast<int>(monitorInfo.rcWork.left);
+    const int workRight = static_cast<int>(monitorInfo.rcWork.right);
+    const int workTop = static_cast<int>(monitorInfo.rcWork.top);
+    const int workBottom = static_cast<int>(monitorInfo.rcWork.bottom);
+    const int popupWidth = (std::min)(
+        (std::max)(120, static_cast<int>(comboRect.right - comboRect.left)),
+        (std::max)(120, workRight - workLeft));
+    int x = comboRect.left;
+    int y = comboRect.bottom;
+    if (y + popupHeight > monitorInfo.rcWork.bottom && comboRect.top - popupHeight >= monitorInfo.rcWork.top) {
+        y = comboRect.top - popupHeight;
+    }
+    x = (std::max)(workLeft, (std::min)(x, workRight - popupWidth));
+    y = (std::max)(workTop, (std::min)(y, workBottom - popupHeight));
+    HWND owner = GetAncestor(combo, GA_ROOT);
+    HWND popup = CreateWindowExW(
+        WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+        L"BeanCustomComboPopup",
+        L"",
+        WS_POPUP,
+        x,
+        y,
+        popupWidth,
+        popupHeight,
+        owner,
+        nullptr,
+        GetModuleHandleW(nullptr),
+        nullptr);
+    if (!popup) return;
+    auto state = std::make_unique<CustomComboPopupState>();
+    state->popup = popup;
+    state->combo = combo;
+    state->originalIndex = static_cast<int>(SendMessageW(combo, CB_GETCURSEL, 0, 0));
+    state->highlightedIndex = state->originalIndex;
+    state->visibleRowLimit = visibleRowLimit;
+    gCustomComboPopup = std::move(state);
+    SetWindowLongPtrW(
+        popup,
+        GWLP_USERDATA,
+        reinterpret_cast<LONG_PTR>(gCustomComboPopup.get()));
+    NotifyCustomCombo(combo, CBN_DROPDOWN);
+    if (!GetCustomComboPopupState(popup) || !IsWindow(popup)) {
+        return;
+    }
+    CustomComboPopupState* currentState = GetCustomComboPopupState(popup);
+    currentState->originalIndex = static_cast<int>(SendMessageW(combo, CB_GETCURSEL, 0, 0));
+    currentState->highlightedIndex = currentState->originalIndex;
+    EnsureCustomComboPopupHighlightVisible(popup);
+    SetWindowPos(
+        popup,
+        HWND_TOP,
+        x,
+        y,
+        popupWidth,
+        popupHeight,
+        SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    SetCapture(popup);
+}
+
+void CloseCustomComboPopup(HWND popup, CustomComboPopupCloseReason reason)
+{
+    CustomComboPopupState* state = GetCustomComboPopupState(popup);
+    if (!state || state->closing) {
+        return;
+    }
+    const HWND combo = state->combo;
+    const int originalIndex = state->originalIndex;
+    const bool commit = reason == CustomComboPopupCloseReason::Commit;
+    const bool destroy = reason == CustomComboPopupCloseReason::Destroy;
+    state->closing = true;
+    KillTimer(popup, kCustomComboPopupDragTimerId);
+    if (GetCapture() == popup) {
+        state->releasingCapture = true;
+        ReleaseCapture();
+        state->releasingCapture = false;
+    }
+    DestroyWindow(popup);
+    if (gCustomComboPopup && gCustomComboPopup->popup == popup) {
+        gCustomComboPopup.reset();
+    }
+    if (!destroy && combo && IsWindow(combo)) {
+        if (reason == CustomComboPopupCloseReason::Cancel
+            && static_cast<int>(SendMessageW(combo, CB_GETCURSEL, 0, 0)) != originalIndex) {
+            SendMessageW(combo, CB_SETCURSEL, static_cast<WPARAM>(originalIndex), 0);
+        }
+        NotifyCustomCombo(
+            combo,
+            commit ? CBN_SELENDOK : CBN_SELENDCANCEL);
+        if (commit) {
+            const int currentIndex = static_cast<int>(SendMessageW(combo, CB_GETCURSEL, 0, 0));
+            if (currentIndex != originalIndex) {
+                NotifyCustomCombo(combo, CBN_SELCHANGE);
+            }
+        }
+        NotifyCustomCombo(combo, CBN_CLOSEUP);
+    }
+}
+
+void InvalidateCustomComboPopup(HWND popup)
+{
+    if (popup) {
+        InvalidateRect(popup, nullptr, FALSE);
+    }
+}
+
 LRESULT CALLBACK ModernComboSubclassProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR)
 {
+    const bool isCustomCombo = IsCustomComboControl(hwnd);
     switch (message) {
     case WM_ERASEBKGND:
         return 1;
@@ -692,18 +2365,113 @@ LRESULT CALLBACK ModernComboSubclassProc(HWND hwnd, UINT message, WPARAM wParam,
     case WM_KILLFOCUS:
     case WM_ENABLE:
     case CB_SETCURSEL: {
+        if (message == WM_KILLFOCUS
+            && gCustomComboPopup
+            && gCustomComboPopup->combo == hwnd) {
+            CloseCustomComboPopup(
+                gCustomComboPopup->popup,
+                CustomComboPopupCloseReason::Dismiss);
+        }
+        LRESULT result = DefSubclassProc(hwnd, message, wParam, lParam);
+        if (message == CB_SETCURSEL
+            && gCustomComboPopup
+            && gCustomComboPopup->combo == hwnd) {
+            CustomComboPopupState* state = gCustomComboPopup.get();
+            if (state) {
+                state->highlightedIndex = static_cast<int>(wParam);
+                EnsureCustomComboPopupHighlightVisible(state->popup);
+                InvalidateCustomComboPopup(state->popup);
+            }
+        }
+        RefreshModernCombo(hwnd);
+        return result;
+    }
+    case CB_GETDROPPEDSTATE:
+        if (isCustomCombo) {
+            return gCustomComboPopup && gCustomComboPopup->combo == hwnd;
+        }
+        break;
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONDBLCLK: {
+        if (isCustomCombo) {
+            if (gCustomComboPopup && gCustomComboPopup->combo == hwnd) {
+                CloseCustomComboPopup(
+                    gCustomComboPopup->popup,
+                    CustomComboPopupCloseReason::Dismiss);
+            } else {
+                OpenCustomComboPopup(hwnd);
+            }
+            return 0;
+        }
         LRESULT result = DefSubclassProc(hwnd, message, wParam, lParam);
         RefreshModernCombo(hwnd);
         return result;
     }
-    case WM_LBUTTONDOWN:
-    case WM_LBUTTONUP:
-    case WM_LBUTTONDBLCLK: {
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:
+        if (isCustomCombo) {
+            if (gCustomComboPopup && HandleCustomComboPopupKey(hwnd, wParam)) {
+                return 0;
+            }
+            if (!gCustomComboPopup
+                && (wParam == VK_DOWN
+                    || wParam == VK_SPACE
+                    || wParam == VK_RETURN
+                    || wParam == VK_F4)) {
+                OpenCustomComboPopup(hwnd);
+                return 0;
+            }
+        }
+        break;
+    case WM_CHAR:
+        if (isCustomCombo && gCustomComboPopup && gCustomComboPopup->combo == hwnd
+            && wParam >= 0x20 && wParam != 0x7F) {
+            CustomComboPopupState* state = gCustomComboPopup.get();
+            const DWORD now = GetTickCount();
+            if (now - state->typeAheadTick > kCustomComboPopupTypeAheadTimeoutMs) {
+                state->typeAhead.clear();
+            }
+            state->typeAhead.push_back(static_cast<wchar_t>(wParam));
+            state->typeAheadTick = now;
+            const int current = state->highlightedIndex >= 0
+                ? state->highlightedIndex + 1
+                : static_cast<int>(SendMessageW(hwnd, CB_GETCURSEL, 0, 0));
+            int match = FindCustomComboPopupPrefixMatch(hwnd, current, state->typeAhead);
+            if (match < 0 && state->typeAhead.size() > 1) {
+                state->typeAhead.assign(1, state->typeAhead.back());
+                match = FindCustomComboPopupPrefixMatch(hwnd, current, state->typeAhead);
+            }
+            if (match >= 0) {
+                SetCustomComboPopupHighlight(state->popup, match);
+            }
+            return 0;
+        }
+        break;
+    case CB_SHOWDROPDOWN:
+        if (isCustomCombo) {
+            if (wParam) {
+                OpenCustomComboPopup(hwnd);
+            } else {
+                if (gCustomComboPopup && gCustomComboPopup->combo == hwnd) {
+                    CloseCustomComboPopup(
+                        gCustomComboPopup->popup,
+                        CustomComboPopupCloseReason::Dismiss);
+                }
+            }
+            return gCustomComboPopup && gCustomComboPopup->combo == hwnd;
+        }
+        break;
+    case WM_LBUTTONUP: {
         LRESULT result = DefSubclassProc(hwnd, message, wParam, lParam);
         RefreshModernCombo(hwnd);
         return result;
     }
     case WM_NCDESTROY:
+        if (gCustomComboPopup && gCustomComboPopup->combo == hwnd) {
+            CloseCustomComboPopup(
+                gCustomComboPopup->popup,
+                CustomComboPopupCloseReason::Destroy);
+        }
         if (gHoveredModernCombo == hwnd) {
             gHoveredModernCombo = nullptr;
         }
@@ -836,18 +2604,19 @@ void UpdateThemedScrollbar(HWND host)
     GetClientRect(host, &clientRect);
     const int scrollbarX = (std::max)(0, static_cast<int>(clientRect.right) - kThemedScrollbarWidth);
     const int hostHeight = (std::max)(0, static_cast<int>(clientRect.bottom));
-    ::MoveWindow(
+    const int itemCount = ThemedScrollHostItemCount(host);
+    const int pageSize = ThemedScrollHostPageSize(host);
+    const int maxPosition = (std::max)(0, itemCount - pageSize);
+    ::SetWindowPos(
         scrollbar,
+        HWND_TOP,
         scrollbarX,
         0,
         kThemedScrollbarWidth,
         hostHeight,
-        TRUE);
+        SWP_NOACTIVATE | (maxPosition > 0 ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
 
-    const int itemCount = ThemedScrollHostItemCount(host);
-    const int pageSize = ThemedScrollHostPageSize(host);
-    const int maxPosition = (std::max)(0, itemCount - pageSize);
-    ShowWindow(scrollbar, maxPosition > 0 ? SW_SHOW : SW_HIDE);
+    InvalidateRect(scrollbar, nullptr, FALSE);
 }
 
 struct ThemedScrollbarMetrics {
@@ -1016,6 +2785,7 @@ LRESULT CALLBACK ThemedScrollbarControlProc(HWND hwnd, UINT message, WPARAM wPar
         }
         return 0;
     case WM_CAPTURECHANGED:
+
         if (gDraggingThemedScrollbar == hwnd) {
             gDraggingThemedScrollbar = nullptr;
             gThemedScrollbarDragOffset = 0;
@@ -1043,10 +2813,9 @@ LRESULT CALLBACK ThemedScrollbarHostSubclassProc(HWND hwnd, UINT message, WPARAM
 {
     switch (message) {
     case WM_NCPAINT: {
-        LRESULT result = DefSubclassProc(hwnd, message, wParam, lParam);
         HideNativeScrollbars(hwnd);
         UpdateThemedScrollbar(hwnd);
-        return result;
+        return 0;
     }
     case WM_PAINT: {
         LRESULT result = DefSubclassProc(hwnd, message, wParam, lParam);
@@ -1054,6 +2823,12 @@ LRESULT CALLBACK ThemedScrollbarHostSubclassProc(HWND hwnd, UINT message, WPARAM
         return result;
     }
     case WM_SIZE: {
+        LRESULT result = DefSubclassProc(hwnd, message, wParam, lParam);
+        UpdateThemedScrollbar(hwnd);
+        return result;
+    }
+    case WM_SHOWWINDOW:
+    case WM_WINDOWPOSCHANGED: {
         LRESULT result = DefSubclassProc(hwnd, message, wParam, lParam);
         UpdateThemedScrollbar(hwnd);
         return result;
@@ -1202,6 +2977,59 @@ void ScheduleModernComboRedraw(HWND combo)
     }
 }
 
+void DismissCustomComboPopup()
+{
+    if (gCustomComboPopup) {
+        CloseCustomComboPopup(
+            gCustomComboPopup->popup,
+            CustomComboPopupCloseReason::Dismiss);
+    }
+}
+
+HWND CreateBeanTextBox(
+    HWND parent,
+    int controlId,
+    const wchar_t* initialText,
+    LONG_PTR style,
+    AppContext* ctx)
+{
+    if (!parent || !EnsureBeanTextBoxClass()) {
+        return nullptr;
+    }
+    const bool numberOnly = (style & ES_NUMBER) != 0;
+    const bool multiline = (style & ES_MULTILINE) != 0;
+    const bool readOnly = (style & ES_READONLY) != 0;
+    style &= ~(WS_BORDER | WS_VSCROLL | WS_HSCROLL);
+    HWND textBox = CreateWindowExW(
+        0,
+        kBeanTextBoxClassName,
+        L"",
+        static_cast<DWORD>(style),
+        0,
+        0,
+        10,
+        10,
+        parent,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(controlId)),
+        GetModuleHandleW(nullptr),
+        nullptr);
+    if (!textBox) {
+        return nullptr;
+    }
+    BeanTextBoxState state;
+    state.ctx = ctx;
+    state.text = initialText ? initialText : L"";
+    state.caret = state.anchor = state.text.size();
+    state.numberOnly = numberOnly;
+    state.multiline = multiline;
+    state.readOnly = readOnly;
+    state.font = gTheme.uiFont;
+    gBeanTextBoxes.emplace(textBox, std::move(state));
+    BeanTextBoxInvalidate(textBox);
+    return textBox;
+}
+
+#if 0
 void ConfigureThemedScrollbars(HWND hwnd)
 {
     if (!hwnd) {
@@ -1235,7 +3063,7 @@ void ConfigureThemedScrollbars(HWND hwnd)
         0,
         L"STATIC",
         L"",
-        WS_CHILD | WS_VISIBLE,
+        WS_CHILD | WS_VISIBLE | SS_NOTIFY,
         0,
         0,
         kThemedScrollbarWidth,
@@ -1264,6 +3092,7 @@ void ConfigureThemedScrollbars(HWND hwnd)
     UpdateThemedScrollbar(hwnd);
     InvalidateRect(hwnd, nullptr, TRUE);
 }
+#endif
 
 namespace {
 
@@ -2261,21 +4090,7 @@ bool IsStyledButtonId(int controlId)
 
 bool IsStyledComboId(int controlId)
 {
-    switch (controlId) {
-    case IDC_ENCODER_COMBO:
-    case IDC_PRESET_COMBO:
-    case IDC_CONTAINER_COMBO:
-    case IDC_MICROPHONE_COMBO:
-    case IDC_RECORDING_RESOLUTION_COMBO:
-    case IDC_CHAT_BLOCKER_IMAGE_COMBO:
-    case IDC_CHAT_BLOCKER_ANCHOR_COMBO:
-    case IDC_CUSTOMIZE_THEME_COMBO:
-    case IDC_YOUTUBE_PRIVACY_COMBO:
-    case IDC_CLIPS_SOURCE_COMBO:
-        return true;
-    default:
-        return false;
-    }
+    return IsStyledComboIdInternal(controlId);
 }
 
 bool IsStatusLightId(int controlId)
@@ -2410,20 +4225,8 @@ void ConfigureModernControls(AppContext* ctx)
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
         SendMessageW(combo, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), 24);
         SendMessageW(combo, CB_SETITEMHEIGHT, 0, 28);
-        if (controlId == IDC_ENCODER_COMBO) {
-            SendMessageW(combo, CB_SETMINVISIBLE, 5, 0);
-        } else if (controlId == IDC_CUSTOMIZE_THEME_COMBO) {
-            SendMessageW(combo, CB_SETMINVISIBLE, static_cast<WPARAM>(kThemeDefinitions.size()), 0);
-        }
         SetWindowTheme(combo, L"", L"");
         SetWindowSubclass(combo, ModernComboSubclassProc, 1, reinterpret_cast<DWORD_PTR>(ctx));
-        if (controlId != IDC_CLIPS_SOURCE_COMBO && controlId != IDC_ENCODER_COMBO) {
-            COMBOBOXINFO comboInfo{};
-            comboInfo.cbSize = sizeof(comboInfo);
-            if (GetComboBoxInfo(combo, &comboInfo) && comboInfo.hwndList) {
-                ConfigureThemedScrollbars(comboInfo.hwndList);
-            }
-        }
     }
 }
 

@@ -16,6 +16,8 @@ public:
     bool SetMicrophoneNoiseSuppressionEnabled(bool enabled, std::string& error) override;
     bool IsRecording() const override;
     std::string GetLastStartDiagnostics() const override;
+    void Shutdown() override;
+    bool IsInitialized() const;
 
     // Test hooks: inject the failure modes the real engine enforces so
     // orchestrator error paths are exercisable without OBS.

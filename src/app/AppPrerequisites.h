@@ -11,6 +11,7 @@ struct PrerequisiteRow {
     int iconId = 0;
     int textId = 0;
     const wchar_t* labelText = nullptr;
+    bool AppContext::*healthMember = nullptr;
     // When true, the row is only shown while the probe reports unhealthy/conflict.
     bool visibleOnlyWhenUnhealthy = false;
     // When true, the green check means the probe returned false (e.g. WCR absent).
@@ -18,11 +19,11 @@ struct PrerequisiteRow {
 };
 
 inline constexpr PrerequisiteRow kPrerequisiteRows[] = {
-    {IDC_WOW_WINDOW_LABEL, IDC_WOW_WINDOW_ICON, IDC_WOW_WINDOW_TEXT, L"WoW Window", false, false},
-    {IDC_OBS_INSTALL_LABEL, IDC_OBS_INSTALL_ICON, IDC_OBS_INSTALL_TEXT, L"OBS Install", false, false},
-    {IDC_FFMPEG_LABEL, IDC_FFMPEG_ICON, IDC_FFMPEG_TEXT, L"FFmpeg", false, false},
-    {IDC_WARCRAFT_RECORDER_LABEL, IDC_WARCRAFT_RECORDER_ICON, IDC_WARCRAFT_RECORDER_TEXT, L"WCR Conflict", true, true},
-    {IDC_ADVANCED_LOGGING_LABEL, IDC_ADVANCED_LOGGING_ICON, IDC_ADVANCED_LOGGING_TEXT, L"Advanced Logging", false, false},
+    {IDC_WOW_WINDOW_LABEL, IDC_WOW_WINDOW_ICON, IDC_WOW_WINDOW_TEXT, L"WoW Window", &AppContext::wowWindowDetected, false, false},
+    {IDC_OBS_INSTALL_LABEL, IDC_OBS_INSTALL_ICON, IDC_OBS_INSTALL_TEXT, L"OBS Install", &AppContext::obsInstallDetected, false, false},
+    {IDC_FFMPEG_LABEL, IDC_FFMPEG_ICON, IDC_FFMPEG_TEXT, L"FFmpeg", &AppContext::ffmpegDetected, false, false},
+    {IDC_WARCRAFT_RECORDER_LABEL, IDC_WARCRAFT_RECORDER_ICON, IDC_WARCRAFT_RECORDER_TEXT, L"WCR Conflict", &AppContext::warcraftRecorderDetected, true, true},
+    {IDC_ADVANCED_LOGGING_LABEL, IDC_ADVANCED_LOGGING_ICON, IDC_ADVANCED_LOGGING_TEXT, L"Advanced Logging", &AppContext::advancedCombatLoggingEnabled, false, false},
 };
 
 inline constexpr std::size_t kPrerequisiteRowCount = sizeof(kPrerequisiteRows) / sizeof(kPrerequisiteRows[0]);

@@ -55,6 +55,7 @@ public:
     virtual bool SetMicrophoneNoiseSuppressionEnabled(bool enabled, std::string& error) = 0;
     virtual bool IsRecording() const = 0;
     virtual std::string GetLastStartDiagnostics() const = 0;
+    virtual void Shutdown() {}
 };
 
 } // namespace bean::obs

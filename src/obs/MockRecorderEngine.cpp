@@ -143,6 +143,20 @@ bool MockRecorderEngine::SetMicrophoneNoiseSuppressionEnabled(bool enabled, std:
     return true;
 }
 
+void MockRecorderEngine::Shutdown()
+{
+    std::scoped_lock lock(mutex_);
+    recording_ = false;
+    initialized_ = false;
+    activeFileStem_.clear();
+}
+
+bool MockRecorderEngine::IsInitialized() const
+{
+    std::scoped_lock lock(mutex_);
+    return initialized_;
+}
+
 bool MockRecorderEngine::IsRecording() const
 {
     std::scoped_lock lock(mutex_);

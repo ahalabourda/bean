@@ -881,14 +881,14 @@ void BeginClipExport(AppContext* ctx, bool precise)
             auto* payload = new ClipExportCompletePayload();
             payload->message = std::wstring(L"Export failed to start (error ")
                 + std::to_wstring(process.launchError) + L").";
-            PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_EXPORT_COMPLETE, 0, reinterpret_cast<LPARAM>(payload));
+            PostOwnedAppMessage(ctx, WM_BEAN_CLIPS_EXPORT_COMPLETE, payload);
             PostStatus(
                 ctx,
                 std::wstring(L"Clip export failed to start (error ")
                     + std::to_wstring(process.launchError) + L") using "
                     + ffmpegExe.wstring() + L".");
             ctx->clipsExportInProgress.store(false);
-            PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_UI_REFRESH, 0, 0);
+            PostBeanAppMessage(ctx, WM_BEAN_CLIPS_UI_REFRESH);
             return;
         }
 
@@ -896,13 +896,13 @@ void BeginClipExport(AppContext* ctx, bool precise)
             auto* payload = new ClipExportCompletePayload();
             payload->success = true;
             payload->message = precise ? L"Precise export complete!" : L"Fast export complete!";
-            PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_EXPORT_COMPLETE, 0, reinterpret_cast<LPARAM>(payload));
+            PostOwnedAppMessage(ctx, WM_BEAN_CLIPS_EXPORT_COMPLETE, payload);
             PostStatus(ctx, std::wstring(L"Clip export complete: ") + outputPath.wstring());
         } else {
             auto* payload = new ClipExportCompletePayload();
             payload->message = std::wstring(L"Export failed (ffmpeg exit code ")
                 + std::to_wstring(process.exitCode) + L").";
-            PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_EXPORT_COMPLETE, 0, reinterpret_cast<LPARAM>(payload));
+            PostOwnedAppMessage(ctx, WM_BEAN_CLIPS_EXPORT_COMPLETE, payload);
             std::wstring diagnostic = process.output;
             while (!diagnostic.empty() && (diagnostic.back() == L'\r' || diagnostic.back() == L'\n' || diagnostic.back() == L' ')) {
                 diagnostic.pop_back();
@@ -916,7 +916,7 @@ void BeginClipExport(AppContext* ctx, bool precise)
                     + (diagnostic.empty() ? L"." : L"): " + diagnostic));
         }
         ctx->clipsExportInProgress.store(false);
-        PostMessageW(ctx->mainWindow, WM_BEAN_CLIPS_UI_REFRESH, 0, 0);
+        PostBeanAppMessage(ctx, WM_BEAN_CLIPS_UI_REFRESH);
     });
 }
 
@@ -1716,27 +1716,6 @@ LRESULT CALLBACK PanelMessageForwarder(HWND panel, UINT message, WPARAM wParam, 
     return DefSubclassProc(panel, message, wParam, lParam);
 }
 
-LRESULT CALLBACK EditSelectAllSubclassProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR)
-{
-    if (message == WM_KEYDOWN && wParam == 'A' && (GetKeyState(VK_CONTROL) & 0x8000) != 0) {
-        SendMessageW(hwnd, EM_SETSEL, 0, -1);
-        return 0;
-    }
-    if (message == WM_CHAR && wParam == 1) {
-        SendMessageW(hwnd, EM_SETSEL, 0, -1);
-        return 0;
-    }
-    return DefSubclassProc(hwnd, message, wParam, lParam);
-}
-
-void EnableCtrlASelectAll(HWND editControl)
-{
-    if (!editControl) {
-        return;
-    }
-    SetWindowSubclass(editControl, EditSelectAllSubclassProc, 1, 0);
-}
-
 std::wstring ChatBlockerAnchorLabel(bean::core::AppSettings::ChatBlockerAnchor anchor)
 {
     switch (anchor) {
@@ -2005,24 +1984,27 @@ struct FfmpegProbeResult {
 // UI thread. The result comes back via WM_BEAN_FFMPEG_PROBE_COMPLETE.
 void BeginFfmpegProbe(AppContext* ctx)
 {
-    if (!ctx || !ctx->mainWindow) {
+    if (!ctx
+        || !ctx->mainWindow
+        || ctx->shuttingDown.load(std::memory_order_acquire)) {
         return;
     }
     if (ctx->ffmpegProbeInFlight.exchange(true)) {
         return;
     }
 
-    const HWND targetWindow = ctx->mainWindow;
-    LaunchAppWorker(ctx, [targetWindow]() {
+    if (!LaunchAppWorker(ctx, [ctx]() {
         auto* result = new FfmpegProbeResult();
         // Resolve without the context: this thread must not touch AppContext.
         result->executablePath = ResolveFfmpegExecutablePath(nullptr);
         result->runnable = result->executablePath.has_value()
             && IsFfmpegExecutableRunnable(*result->executablePath);
-        if (!PostMessageW(targetWindow, WM_BEAN_FFMPEG_PROBE_COMPLETE, 0, reinterpret_cast<LPARAM>(result))) {
-            delete result;
+        if (!PostOwnedAppMessage(ctx, WM_BEAN_FFMPEG_PROBE_COMPLETE, result)) {
+            ctx->ffmpegProbeInFlight.store(false, std::memory_order_release);
         }
-    });
+    })) {
+        ctx->ffmpegProbeInFlight.store(false, std::memory_order_release);
+    }
 }
 
 bool DetectAdvancedCombatLoggingForUi(const AppContext* ctx)
@@ -2408,20 +2390,60 @@ struct UpdateAvailabilityPayload {
     std::wstring statusMessage;
 };
 
+void DiscardQueuedAppMessages(HWND targetWindow)
+{
+    if (!targetWindow) {
+        return;
+    }
+    MSG message{};
+    while (PeekMessageW(
+        &message,
+        targetWindow,
+        WM_APP + 100,
+        WM_APP + 110,
+        PM_REMOVE)) {
+        switch (message.message) {
+        case WM_BEAN_STATUS:
+            delete reinterpret_cast<std::wstring*>(message.lParam);
+            break;
+        case WM_BEAN_YOUTUBE_AUTH_COMPLETE:
+            delete reinterpret_cast<YouTubeAuthCompletionPayload*>(message.lParam);
+            break;
+        case WM_BEAN_YOUTUBE_UPLOAD_PROGRESS:
+            delete reinterpret_cast<YouTubeUploadProgressPayload*>(message.lParam);
+            break;
+        case WM_BEAN_YOUTUBE_IDENTITY_RESOLVED:
+            delete reinterpret_cast<YouTubeIdentityResolvedPayload*>(message.lParam);
+            break;
+        case WM_BEAN_CLIPS_EXPORT_COMPLETE:
+            delete reinterpret_cast<ClipExportCompletePayload*>(message.lParam);
+            break;
+        case WM_BEAN_UPDATE_AVAILABILITY_READY:
+            delete reinterpret_cast<UpdateAvailabilityPayload*>(message.lParam);
+            break;
+        case WM_BEAN_FFMPEG_PROBE_COMPLETE:
+            delete reinterpret_cast<FfmpegProbeResult*>(message.lParam);
+            break;
+        default:
+            break;
+        }
+    }
+}
+
 void PostYouTubeUploadProgress(
     AppContext* ctx,
     int percent,
     const std::wstring& text,
     const std::wstring& videoUrl = {})
 {
-    if (!ctx || !ctx->mainWindow) {
+    if (!ctx) {
         return;
     }
     auto* payload = new YouTubeUploadProgressPayload();
     payload->percent = std::clamp(percent, 0, 100);
     payload->text = text;
     payload->videoUrl = videoUrl;
-    PostMessageW(ctx->mainWindow, WM_BEAN_YOUTUBE_UPLOAD_PROGRESS, 0, reinterpret_cast<LPARAM>(payload));
+    PostOwnedAppMessage(ctx, WM_BEAN_YOUTUBE_UPLOAD_PROGRESS, payload);
 }
 
 LRESULT CALLBACK YouTubeUploadStatusSubclassProc(
@@ -2463,15 +2485,16 @@ LRESULT CALLBACK YouTubeUploadStatusSubclassProc(
 
 void RequestYouTubeUiRefresh(AppContext* ctx)
 {
-    if (!ctx || !ctx->mainWindow) {
-        return;
-    }
-    PostMessageW(ctx->mainWindow, WM_BEAN_YOUTUBE_UI_REFRESH, 0, 0);
+    PostBeanAppMessage(ctx, WM_BEAN_YOUTUBE_UI_REFRESH);
 }
 
 void ResolveLinkedYouTubeIdentityAsync(AppContext* ctx, bool postErrorToStatus)
 {
-    if (!ctx || !ctx->mainWindow || ctx->settings.youtubeRefreshToken.empty() || ctx->settings.youtubeClientId.empty()) {
+    if (!ctx
+        || !ctx->mainWindow
+        || ctx->shuttingDown.load(std::memory_order_acquire)
+        || ctx->settings.youtubeRefreshToken.empty()
+        || ctx->settings.youtubeClientId.empty()) {
         return;
     }
     bean::integrations::YouTubeCredentials creds;
@@ -2485,7 +2508,7 @@ void ResolveLinkedYouTubeIdentityAsync(AppContext* ctx, bool postErrorToStatus)
         payload->channelId = identity.channelId;
         payload->channelTitle = identity.channelTitle;
         payload->error = postErrorToStatus ? identity.error : std::string{};
-        PostMessageW(ctx->mainWindow, WM_BEAN_YOUTUBE_IDENTITY_RESOLVED, 0, reinterpret_cast<LPARAM>(payload));
+        PostOwnedAppMessage(ctx, WM_BEAN_YOUTUBE_IDENTITY_RESOLVED, payload);
     });
 }
 
@@ -2525,37 +2548,21 @@ void SortYouTubeMediaItems(AppContext* ctx)
     if (!ctx) {
         return;
     }
-    const auto column = ctx->youtubeSortColumn;
-    const bool ascending = ctx->youtubeSortAscending;
-    std::stable_sort(
-        ctx->youtubeMediaItems.begin(),
-        ctx->youtubeMediaItems.end(),
-        [column, ascending](const YouTubeMediaFile& left, const YouTubeMediaFile& right) {
-            int comparison = 0;
-            switch (column) {
-            case AppContext::YouTubeSortColumn::Type: {
-                const int leftType = left.type == YouTubeMediaType::Clip ? 1 : 0;
-                const int rightType = right.type == YouTubeMediaType::Clip ? 1 : 0;
-                comparison = leftType < rightType ? -1 : (leftType > rightType ? 1 : 0);
-                break;
-            }
-            case AppContext::YouTubeSortColumn::Name: {
-                const auto leftName = left.path.filename().wstring();
-                const auto rightName = right.path.filename().wstring();
-                comparison = _wcsicmp(leftName.c_str(), rightName.c_str());
-                break;
-            }
-            case AppContext::YouTubeSortColumn::Date:
-                comparison = left.modified < right.modified ? -1 : (left.modified > right.modified ? 1 : 0);
-                break;
-            }
-            if (comparison == 0) {
-                const auto leftPath = left.path.wstring();
-                const auto rightPath = right.path.wstring();
-                comparison = _wcsicmp(leftPath.c_str(), rightPath.c_str());
-            }
-            return ascending ? comparison < 0 : comparison > 0;
-        });
+    YouTubeMediaSortColumn sortColumn = YouTubeMediaSortColumn::Type;
+    switch (ctx->youtubeSortColumn) {
+    case AppContext::YouTubeSortColumn::Name:
+        sortColumn = YouTubeMediaSortColumn::Name;
+        break;
+    case AppContext::YouTubeSortColumn::Date:
+        sortColumn = YouTubeMediaSortColumn::Date;
+        break;
+    case AppContext::YouTubeSortColumn::Type:
+        break;
+    }
+    SortYouTubeMediaFiles(
+        ctx->youtubeMediaItems,
+        sortColumn,
+        ctx->youtubeSortAscending);
 }
 
 void RepopulateYouTubeMediaList(AppContext* ctx)
@@ -3066,6 +3073,7 @@ void SetActiveTab(AppContext* ctx, AppContext::MainTab tab)
         return;
     }
 
+    DismissCustomComboPopup();
     if (tab == AppContext::MainTab::Status || tab == AppContext::MainTab::Clips) {
         ctx->ffmpegCheckRequested = true;
     }
@@ -3202,16 +3210,14 @@ void RefreshAboutUpdateButtonState(AppContext* ctx)
     SetWindowTextW(updateButton, L"Checking...");
     UpdateTransparentStaticText(updateText, L"Checking for updates...");
 
-    LaunchAppWorker(ctx, [ctx, requestId]() {
+    if (!LaunchAppWorker(ctx, [ctx, requestId]() {
         auto* payload = new UpdateAvailabilityPayload();
         payload->requestId = requestId;
         payload->availability = bean::app::GetUpdateAvailability(payload->statusMessage);
-        if (!ctx->mainWindow) {
-            delete payload;
-            return;
-        }
-        PostMessageW(ctx->mainWindow, WM_BEAN_UPDATE_AVAILABILITY_READY, 0, reinterpret_cast<LPARAM>(payload));
-    });
+        PostOwnedAppMessage(ctx, WM_BEAN_UPDATE_AVAILABILITY_READY, payload);
+    })) {
+        ctx->aboutUpdateCheckInProgress.store(false, std::memory_order_release);
+    }
 }
 
 void RefreshStatusCommandButtons(AppContext* ctx);
@@ -3858,6 +3864,7 @@ void CommitChatBlockerSettings(AppContext* ctx)
         SetStatus(ctx, std::wstring(L"Auto-save failed: ") + ToWide(error));
         return;
     }
+    ctx->chatBlockerSettingsDirty = false;
     ctx->orchestrator->ApplySettings(ctx->settings);
 }
 
@@ -3875,6 +3882,7 @@ void CommitConfigurationSettings(AppContext* ctx)
         SetStatus(ctx, std::wstring(L"Auto-save failed: ") + ToWide(error));
         return;
     }
+    ctx->configurationSettingsDirty = false;
     ctx->orchestrator->ApplySettings(ctx->settings);
     if (ctx->orchestrator->IsMonitoring()
         && !ctx->isRecording
@@ -3889,8 +3897,15 @@ void CommitConfigurationSettings(AppContext* ctx)
 // user is still typing collapse into a single save once they pause.
 void ScheduleAutoSave(AppContext* ctx, UINT_PTR timerId)
 {
-    if (!ctx || !ctx->mainWindow) {
+    if (!ctx
+        || ctx->shuttingDown.load(std::memory_order_acquire)
+        || !ctx->mainWindow) {
         return;
+    }
+    if (timerId == kChatBlockerAutoSaveTimerId) {
+        ctx->chatBlockerSettingsDirty = true;
+    } else if (timerId == kConfigurationAutoSaveTimerId) {
+        ctx->configurationSettingsDirty = true;
     }
     SetTimer(ctx->mainWindow, timerId, kAutoSaveDebounceMs, nullptr);
 }
@@ -3912,10 +3927,12 @@ void FlushPendingAutoSaves(AppContext* ctx)
     if (!ctx || !ctx->mainWindow) {
         return;
     }
-    if (KillTimer(ctx->mainWindow, kConfigurationAutoSaveTimerId)) {
+    if (KillTimer(ctx->mainWindow, kConfigurationAutoSaveTimerId)
+        || ctx->configurationSettingsDirty) {
         CommitConfigurationSettings(ctx);
     }
-    if (KillTimer(ctx->mainWindow, kChatBlockerAutoSaveTimerId)) {
+    if (KillTimer(ctx->mainWindow, kChatBlockerAutoSaveTimerId)
+        || ctx->chatBlockerSettingsDirty) {
         CommitChatBlockerSettings(ctx);
     }
 }
@@ -4549,7 +4566,7 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         ctx->youtubeBusy.store(true);
         RefreshYouTubeUiState(ctx);
         SetStatus(ctx, L"Opening browser for YouTube authorization...");
-        LaunchAppWorker(ctx, [ctx, hwnd, authServerUrl]() {
+        if (!LaunchAppWorker(ctx, [ctx, hwnd, authServerUrl]() {
             const auto auth = bean::integrations::YouTubeUploader::AuthorizeDesktop(hwnd, authServerUrl);
             auto* payload = new YouTubeAuthCompletionPayload();
             payload->success = auth.success;
@@ -4558,8 +4575,11 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
             payload->channelId = auth.channelId;
             payload->channelTitle = auth.channelTitle;
             payload->error = auth.error;
-            PostMessageW(ctx->mainWindow, WM_BEAN_YOUTUBE_AUTH_COMPLETE, 0, reinterpret_cast<LPARAM>(payload));
-        });
+            PostOwnedAppMessage(ctx, WM_BEAN_YOUTUBE_AUTH_COMPLETE, payload);
+        })) {
+            ctx->youtubeBusy.store(false);
+            RefreshYouTubeUiState(ctx);
+        }
         break;
     }
     case IDC_YOUTUBE_UNLINK_BUTTON: {
@@ -4637,7 +4657,7 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         RefreshYouTubeUiState(ctx);
         SetYouTubeUploadUi(ctx, 0, std::wstring(L"Uploading: ") + path.filename().wstring());
         SetStatus(ctx, std::wstring(L"Uploading to YouTube: ") + path.filename().wstring());
-        LaunchAppWorker(ctx, [ctx, path, title, privacy, creds]() {
+        if (!LaunchAppWorker(ctx, [ctx, path, title, privacy, creds]() {
             bean::integrations::YouTubeUploadRequest req;
             req.videoPath = path;
             req.title = title;
@@ -4691,7 +4711,10 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
             PostYouTubeUploadProgress(ctx, 100, message, videoUrl);
             ctx->youtubeBusy.store(false);
             RequestYouTubeUiRefresh(ctx);
-        });
+        })) {
+            ctx->youtubeBusy.store(false);
+            RefreshYouTubeUiState(ctx);
+        }
         break;
     }
     case IDC_ABOUT_WEBSITE_BUTTON: {
@@ -4848,21 +4871,19 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         SetWindowSubclass(ctx->aboutPanel, PanelMessageForwarder, 7, 0);
 
         CreateWindowW(L"STATIC", L"Output Folder:", WS_VISIBLE | WS_CHILD, xLabel, y, labelWidth, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_OUTPUT_LABEL), nullptr, nullptr);
-        ctx->outputEdit = CreateWindowW(L"EDIT", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, xEdit, y, editWidth, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_OUTPUT_EDIT), nullptr, nullptr);
-        EnableCtrlASelectAll(ctx->outputEdit);
+        ctx->outputEdit = CreateBeanTextBox(ctx->recorderPanel, IDC_OUTPUT_EDIT, L"", WS_VISIBLE | WS_CHILD | ES_AUTOHSCROLL | WS_TABSTOP, ctx);
         CreateWindowW(L"BUTTON", L"Browse", WS_VISIBLE | WS_CHILD | WS_TABSTOP, xButton, y, buttonWidth, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_OUTPUT_BROWSE), nullptr, nullptr);
         ctx->outputStatus = CreateWindowW(L"STATIC", L"X", WS_VISIBLE | WS_CHILD | SS_NOTIFY | SS_CENTER | SS_CENTERIMAGE, xStatus, y, 40, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_OUTPUT_STATUS), nullptr, nullptr);
         y += rowSpacing;
 
         CreateWindowW(L"STATIC", L"WoW Install:", WS_VISIBLE | WS_CHILD, xLabel, y, labelWidth, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_LOG_LABEL), nullptr, nullptr);
-        ctx->wowLogEdit = CreateWindowW(L"EDIT", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, xEdit, y, editWidth, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_LOG_EDIT), nullptr, nullptr);
-        EnableCtrlASelectAll(ctx->wowLogEdit);
+        ctx->wowLogEdit = CreateBeanTextBox(ctx->recorderPanel, IDC_LOG_EDIT, L"", WS_VISIBLE | WS_CHILD | ES_AUTOHSCROLL | WS_TABSTOP, ctx);
         CreateWindowW(L"BUTTON", L"Browse", WS_VISIBLE | WS_CHILD | WS_TABSTOP, xButton, y, buttonWidth, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_LOG_BROWSE), nullptr, nullptr);
         ctx->wowLogStatus = CreateWindowW(L"STATIC", L"X", WS_VISIBLE | WS_CHILD | SS_CENTER | SS_CENTERIMAGE, xStatus, y, 40, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_LOG_STATUS), nullptr, nullptr);
         y += rowSpacing;
 
         CreateWindowW(L"STATIC", L"Video Encoder:", WS_VISIBLE | WS_CHILD, xLabel, y, labelWidth, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_ENCODER_LABEL), nullptr, nullptr);
-        ctx->encoderCombo = CreateWindowW(L"COMBOBOX", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP, xEdit, y, 230, 180, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_ENCODER_COMBO), nullptr, nullptr);
+        ctx->encoderCombo = CreateWindowW(L"COMBOBOX", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP, xEdit, y, 230, 180, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_ENCODER_COMBO), nullptr, nullptr);
         SendMessageW(ctx->encoderCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"GPU (Auto)"));
         SendMessageW(ctx->encoderCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"NVIDIA NVENC"));
         SendMessageW(ctx->encoderCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"AMD AMF"));
@@ -4989,18 +5010,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             nullptr);
         y += rowSpacing;
         CreateWindowW(L"STATIC", L"FPS:", WS_VISIBLE | WS_CHILD, xLabel, y, 40, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_FPS_LABEL), nullptr, nullptr);
-        ctx->fpsEdit = CreateWindowW(L"EDIT", L"60", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER | WS_TABSTOP, xLabel + 46, y, 60, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_FPS_EDIT), nullptr, nullptr);
-        EnableCtrlASelectAll(ctx->fpsEdit);
+        ctx->fpsEdit = CreateBeanTextBox(ctx->recorderPanel, IDC_FPS_EDIT, L"60", WS_VISIBLE | WS_CHILD | ES_NUMBER | WS_TABSTOP, ctx);
         y += rowSpacing;
 
         CreateWindowW(L"STATIC", L"Post-run tail (s):", WS_VISIBLE | WS_CHILD, xLabel, y, 104, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_POST_RUN_DELAY_LABEL), nullptr, nullptr);
-        ctx->postRunDelayEdit = CreateWindowW(L"EDIT", L"30", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER | WS_TABSTOP, xLabel + 104, y, 70, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_POST_RUN_DELAY_EDIT), nullptr, nullptr);
+        ctx->postRunDelayEdit = CreateBeanTextBox(ctx->recorderPanel, IDC_POST_RUN_DELAY_EDIT, L"30", WS_VISIBLE | WS_CHILD | ES_NUMBER | WS_TABSTOP, ctx);
         ctx->postRunDelayHelpIcon = CreateWindowW(L"STATIC", L"", WS_VISIBLE | WS_CHILD | SS_OWNERDRAW | SS_NOTIFY, xLabel + 180, y + 2, 20, 20, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_POST_RUN_DELAY_HELP), nullptr, nullptr);
-        EnableCtrlASelectAll(ctx->postRunDelayEdit);
         SetWindowSubclass(ctx->postRunDelayHelpIcon, HoverTooltipSubclassProc, 1, reinterpret_cast<DWORD_PTR>(ctx));
         CreateWindowW(L"STATIC", L"Clip duration (s):", WS_VISIBLE | WS_CHILD, xLabel + 230, y, 116, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_CLIP_DURATION_LABEL), nullptr, nullptr);
-        ctx->clipDurationEdit = CreateWindowW(L"EDIT", L"30", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER | WS_TABSTOP, xLabel + 350, y, 70, rowHeight, ctx->recorderPanel, reinterpret_cast<HMENU>(IDC_CLIP_DURATION_EDIT), nullptr, nullptr);
-        EnableCtrlASelectAll(ctx->clipDurationEdit);
+        ctx->clipDurationEdit = CreateBeanTextBox(ctx->recorderPanel, IDC_CLIP_DURATION_EDIT, L"30", WS_VISIBLE | WS_CHILD | ES_NUMBER | WS_TABSTOP, ctx);
         SetWindowSubclass(ctx->outputStatus, HoverTooltipSubclassProc, 1, reinterpret_cast<DWORD_PTR>(ctx));
         y += sectionSpacing;
         CreateWindowW(
@@ -5274,11 +5292,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             nullptr,
             nullptr);
         CreateWindowW(L"STATIC", L"Width:", WS_VISIBLE | WS_CHILD, 20, 122, 120, rowHeight, ctx->chatPrivacyPanel, reinterpret_cast<HMENU>(IDC_CHAT_BLOCKER_WIDTH_LABEL), nullptr, nullptr);
-        ctx->chatBlockerWidthEdit = CreateWindowW(L"EDIT", L"500", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER | WS_TABSTOP, 134, 122, 90, rowHeight, ctx->chatPrivacyPanel, reinterpret_cast<HMENU>(IDC_CHAT_BLOCKER_WIDTH_EDIT), nullptr, nullptr);
-        EnableCtrlASelectAll(ctx->chatBlockerWidthEdit);
+        ctx->chatBlockerWidthEdit = CreateBeanTextBox(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_WIDTH_EDIT, L"500", WS_VISIBLE | WS_CHILD | ES_NUMBER | WS_TABSTOP, ctx);
         CreateWindowW(L"STATIC", L"Height:", WS_VISIBLE | WS_CHILD, 238, 122, 120, rowHeight, ctx->chatPrivacyPanel, reinterpret_cast<HMENU>(IDC_CHAT_BLOCKER_HEIGHT_LABEL), nullptr, nullptr);
-        ctx->chatBlockerHeightEdit = CreateWindowW(L"EDIT", L"300", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_NUMBER | WS_TABSTOP, 352, 122, 90, rowHeight, ctx->chatPrivacyPanel, reinterpret_cast<HMENU>(IDC_CHAT_BLOCKER_HEIGHT_EDIT), nullptr, nullptr);
-        EnableCtrlASelectAll(ctx->chatBlockerHeightEdit);
+        ctx->chatBlockerHeightEdit = CreateBeanTextBox(ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_HEIGHT_EDIT, L"300", WS_VISIBLE | WS_CHILD | ES_NUMBER | WS_TABSTOP, ctx);
         CreateWindowW(L"STATIC", L"Anchor Corner:", WS_VISIBLE | WS_CHILD, 20, 156, 110, rowHeight, ctx->chatPrivacyPanel, reinterpret_cast<HMENU>(IDC_CHAT_BLOCKER_ANCHOR_LABEL), nullptr, nullptr);
         ctx->chatBlockerAnchorCombo = CreateWindowW(L"COMBOBOX", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP, 134, 156, 180, 120, ctx->chatPrivacyPanel, reinterpret_cast<HMENU>(IDC_CHAT_BLOCKER_ANCHOR_COMBO), nullptr, nullptr);
         SendMessageW(ctx->chatBlockerAnchorCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Bottom Left"));
@@ -5292,19 +5308,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         RefreshChatBlockerImageControls(ctx);
 
         CreateWindowW(L"STATIC", L"Status:", WS_VISIBLE | WS_CHILD, xLabel, y, 60, rowHeight, ctx->statusPanel, reinterpret_cast<HMENU>(IDC_STATUS_LABEL), nullptr, nullptr);
-        ctx->statusText = CreateWindowW(
-            L"EDIT",
-            L"",
-            WS_VISIBLE | WS_CHILD | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL,
-            xEdit,
-            y,
-            470,
-            rowHeight + 40,
+        ctx->statusText = CreateBeanTextBox(
             ctx->statusPanel,
-            reinterpret_cast<HMENU>(IDC_STATUS_TEXT),
-            nullptr,
-            nullptr);
-        EnableCtrlASelectAll(ctx->statusText);
+            IDC_STATUS_TEXT,
+            L"",
+            WS_VISIBLE | WS_CHILD | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL,
+            ctx);
         CreateWindowW(
             L"BUTTON",
             L"Open Status Log Folder",
@@ -5360,8 +5369,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ctx->youtubeAccountLink = CreateWindowW(L"BUTTON", L"", WS_CHILD | WS_TABSTOP | BS_OWNERDRAW, 170, 16, 350, rowHeight + 8, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_ACCOUNT_LINK), nullptr, nullptr);
 
         CreateWindowW(L"STATIC", L"Title:", WS_VISIBLE | WS_CHILD, 20, 20, 120, rowHeight, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_TITLE_LABEL), nullptr, nullptr);
-        ctx->youtubeTitleEdit = CreateWindowW(L"EDIT", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL, 150, 20, 370, rowHeight, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_TITLE_EDIT), nullptr, nullptr);
-        EnableCtrlASelectAll(ctx->youtubeTitleEdit);
+        ctx->youtubeTitleEdit = CreateBeanTextBox(ctx->youtubePanel, IDC_YOUTUBE_TITLE_EDIT, L"", WS_VISIBLE | WS_CHILD | ES_AUTOHSCROLL, ctx);
         CreateWindowW(L"STATIC", L"Visibility:", WS_VISIBLE | WS_CHILD, 540, 20, 70, rowHeight, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_PRIVACY_LABEL), nullptr, nullptr);
         ctx->youtubePrivacyCombo = CreateWindowW(L"COMBOBOX", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS, 612, 20, 148, 120, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_PRIVACY_COMBO), nullptr, nullptr);
         SendMessageW(ctx->youtubePrivacyCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"private"));
@@ -5391,7 +5399,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ctx->clipsSourceCombo = CreateWindowW(
             L"COMBOBOX",
             L"",
-            WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP,
+            WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP,
             134,
             20,
             520,
@@ -5469,34 +5477,20 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             SetWindowSubclass(ctx->clipsVolumeSlider, ClipsSliderSubclassProc, 1, reinterpret_cast<DWORD_PTR>(ctx));
         }
         CreateWindowW(L"STATIC", L"Start:", WS_VISIBLE | WS_CHILD, 20, 398, 50, rowHeight, ctx->clipsPanel, reinterpret_cast<HMENU>(IDC_CLIPS_START_LABEL), nullptr, nullptr);
-        ctx->clipsStartEdit = CreateWindowW(
-            L"EDIT",
-            L"00:00",
-            WS_VISIBLE | WS_CHILD | WS_BORDER | WS_TABSTOP,
-            74,
-            398,
-            74,
-            rowHeight,
+        ctx->clipsStartEdit = CreateBeanTextBox(
             ctx->clipsPanel,
-            reinterpret_cast<HMENU>(IDC_CLIPS_START_EDIT),
-            nullptr,
-            nullptr);
-        EnableCtrlASelectAll(ctx->clipsStartEdit);
+            IDC_CLIPS_START_EDIT,
+            L"00:00",
+            WS_VISIBLE | WS_CHILD | WS_TABSTOP,
+            ctx);
         CreateWindowW(L"BUTTON", L"Set Start", WS_VISIBLE | WS_CHILD | WS_TABSTOP, 156, 397, 94, rowHeight + 4, ctx->clipsPanel, reinterpret_cast<HMENU>(IDC_CLIPS_SET_START), nullptr, nullptr);
         CreateWindowW(L"STATIC", L"End:", WS_VISIBLE | WS_CHILD, 268, 398, 40, rowHeight, ctx->clipsPanel, reinterpret_cast<HMENU>(IDC_CLIPS_END_LABEL), nullptr, nullptr);
-        ctx->clipsEndEdit = CreateWindowW(
-            L"EDIT",
-            L"00:00",
-            WS_VISIBLE | WS_CHILD | WS_BORDER | WS_TABSTOP,
-            312,
-            398,
-            74,
-            rowHeight,
+        ctx->clipsEndEdit = CreateBeanTextBox(
             ctx->clipsPanel,
-            reinterpret_cast<HMENU>(IDC_CLIPS_END_EDIT),
-            nullptr,
-            nullptr);
-        EnableCtrlASelectAll(ctx->clipsEndEdit);
+            IDC_CLIPS_END_EDIT,
+            L"00:00",
+            WS_VISIBLE | WS_CHILD | WS_TABSTOP,
+            ctx);
         CreateWindowW(L"BUTTON", L"Set End", WS_VISIBLE | WS_CHILD | WS_TABSTOP, 394, 397, 94, rowHeight + 4, ctx->clipsPanel, reinterpret_cast<HMENU>(IDC_CLIPS_SET_END), nullptr, nullptr);
         CreateWindowW(L"BUTTON", L"Export Clip (Fast)", WS_VISIBLE | WS_CHILD | WS_TABSTOP, 20, 431, 150, rowHeight + 4, ctx->clipsPanel, reinterpret_cast<HMENU>(IDC_CLIPS_EXPORT), nullptr, nullptr);
         CreateWindowW(L"BUTTON", L"Export Clip (Precise)", WS_VISIBLE | WS_CHILD | WS_TABSTOP, 180, 431, 170, rowHeight + 4, ctx->clipsPanel, reinterpret_cast<HMENU>(IDC_CLIPS_EXPORT_PRECISE), nullptr, nullptr);
@@ -5594,6 +5588,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         return 0;
     }
     case WM_ACTIVATE:
+        if (LOWORD(wParam) == WA_INACTIVE) {
+            DismissCustomComboPopup();
+        }
         if (ctx) {
             if (ctx->recordingsList) {
                 InvalidateRect(ctx->recordingsList, nullptr, FALSE);
@@ -5769,21 +5766,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             return 0;
         }
         if (HIWORD(wParam) == CBN_SELCHANGE && LOWORD(wParam) == IDC_CHAT_BLOCKER_IMAGE_COMBO) {
-            if (ctx && ctx->chatBlockerImageCombo
-                && SendMessageW(ctx->chatBlockerImageCombo, CB_GETDROPPEDSTATE, 0, 0) != 0) {
-                // Ignore hover/navigation changes while dropdown is open.
-                return 0;
-            }
-            if (ctx) {
-                SyncChatBlockerSelectionToImageMetadata(ctx, true);
-                AutoSaveChatBlockerSettings(ctx);
-            }
-            if (ctx && ctx->chatPreview) {
-                InvalidateRect(ctx->chatPreview, nullptr, FALSE);
-            }
-            return 0;
-        }
-        if (HIWORD(wParam) == CBN_CLOSEUP && LOWORD(wParam) == IDC_CHAT_BLOCKER_IMAGE_COMBO) {
             if (ctx) {
                 SyncChatBlockerSelectionToImageMetadata(ctx, true);
                 AutoSaveChatBlockerSettings(ctx);
@@ -6273,18 +6255,36 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         }
         return 0;
     case WM_DESTROY:
+        if (ctx && ctx->shuttingDown.exchange(true, std::memory_order_acq_rel)) {
+            return 0;
+        }
+        DismissCustomComboPopup();
+        if (ctx) {
+            ctx->alwaysOnMonitoring = false;
+            if (ctx->orchestrator) {
+                ctx->orchestrator->SetStatusCallback({});
+            }
+        }
         FlushPendingAutoSaves(ctx);
+        if (ctx) {
+            ctx->configurationAutoSaveArmed = false;
+            ctx->chatBlockerAutoSaveArmed = false;
+        }
         bean::integrations::YouTubeUploader::RequestCancel();
         UnregisterHotKey(hwnd, kClipHotkeyId);
         UnregisterHotKey(hwnd, kManualStartHotkeyId);
         UnregisterHotKey(hwnd, kManualStopHotkeyId);
         if (ctx && ctx->orchestrator) {
-            ctx->alwaysOnMonitoring = false;
-            ctx->orchestrator->StopMonitoring();
             std::string stopError;
             ctx->orchestrator->StopManualRecording(stopError);
+            ctx->orchestrator->StopMonitoring();
         }
         JoinAppWorkers(ctx);
+        if (ctx) {
+            ctx->clipsExportInProgress.store(false);
+            ctx->youtubeBusy.store(false);
+            ctx->ffmpegProbeInFlight.store(false);
+        }
         CloseClipMedia(ctx);
         ShutdownTaskbarOverlay(ctx);
         if (ctx && ctx->configurationTooltip && IsWindow(ctx->configurationTooltip)) {
@@ -6304,6 +6304,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         KillTimer(hwnd, kClipsExportStatusTimerId);
         KillTimer(hwnd, kConfigurationAutoSaveTimerId);
         KillTimer(hwnd, kChatBlockerAutoSaveTimerId);
+        DiscardQueuedAppMessages(hwnd);
         DestroyParticipantSpecIcons(ctx);
         DestroyThemeResources();
         PostQuitMessage(0);
@@ -6376,13 +6377,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int cmdShow)
     InitializeAppIcons(&context);
 
     context.orchestrator->SetStatusCallback([&context](const std::string& status) {
-        if (!context.mainWindow) {
-            return;
-        }
-        auto* text = new std::wstring(ToWide(status));
-        PostMessageW(context.mainWindow, WM_BEAN_STATUS, 0, reinterpret_cast<LPARAM>(text));
+        PostStatus(&context, ToWide(status));
         if (status.rfind("Clip created:", 0) == 0) {
-            PostMessageW(context.mainWindow, WM_BEAN_CLIPS_UI_REFRESH, 0, 0);
+            PostBeanAppMessage(&context, WM_BEAN_CLIPS_UI_REFRESH);
         }
     });
 

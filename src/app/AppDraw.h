@@ -23,6 +23,12 @@ void ApplyRecordingsFonts(AppContext* ctx);
 HWND CreateBeanFileList(HWND parent, int controlId, AppContext* ctx, BeanFileListKind kind);
 void RefreshBeanFileList(HWND list);
 int GetBeanFileListSelectedIndex(HWND list);
+HWND CreateBeanTextBox(
+    HWND parent,
+    int controlId,
+    const wchar_t* initialText,
+    LONG_PTR style,
+    AppContext* ctx);
 
 bool IsStyledButtonId(int controlId);
 bool IsStyledComboId(int controlId);
@@ -30,6 +36,7 @@ bool IsStatusLightId(int controlId);
 bool IsOwnerDrawStaticId(int controlId);
 void ConfigureStyledButtons(AppContext* ctx);
 void ConfigureModernControls(AppContext* ctx);
+void DismissCustomComboPopup();
 void ScheduleModernComboRedraw(HWND combo);
 void DrawStyledButton(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx);
 void DrawStyledComboItem(const DRAWITEMSTRUCT* drawInfo);

@@ -5,26 +5,7 @@ bool PrerequisiteRowIsHealthy(const AppContext* ctx, const PrerequisiteRow& row)
     if (!ctx) {
         return false;
     }
-    bool healthy = false;
-    switch (row.iconId) {
-    case IDC_WOW_WINDOW_ICON:
-        healthy = ctx->wowWindowDetected;
-        break;
-    case IDC_OBS_INSTALL_ICON:
-        healthy = ctx->obsInstallDetected;
-        break;
-    case IDC_FFMPEG_ICON:
-        healthy = ctx->ffmpegDetected;
-        break;
-    case IDC_WARCRAFT_RECORDER_ICON:
-        healthy = ctx->warcraftRecorderDetected;
-        break;
-    case IDC_ADVANCED_LOGGING_ICON:
-        healthy = ctx->advancedCombatLoggingEnabled;
-        break;
-    default:
-        break;
-    }
+    const bool healthy = row.healthMember ? (ctx->*(row.healthMember)) : false;
     return row.invertHealthy ? !healthy : healthy;
 }
 

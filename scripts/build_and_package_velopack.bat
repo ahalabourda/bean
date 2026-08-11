@@ -2,6 +2,59 @@
 setlocal
 pushd "%~dp0.."
 
+set "VERSION=%~1"
+if not defined VERSION set "VERSION=%BEAN_VELOPACK_VERSION%"
+if not defined VERSION (
+  echo [bean] Usage: build_and_package_velopack.bat ^<semver-version^>
+  goto :fail
+)
+
+set "SDK_DIR=%BEAN_VELOPACK_SDK_DIR%"
+if not defined SDK_DIR set "SDK_DIR=%CD%\tools\velopack-sdk"
+if not exist "%SDK_DIR%\include\Velopack.h" (
+  echo [bean] Velopack SDK not found at "%SDK_DIR%".
+  echo [bean] Run scripts\download_velopack_sdk.bat first.
+  goto :fail
+)
+
+echo [bean] Configuring Velopack build...
+cmake -S . -B build-velopack -DBEAN_ENABLE_LIBOBS=ON -DBEAN_ENABLE_VELOPACK=ON -DBEAN_VELOPACK_SDK_DIR="%SDK_DIR%" -DBEAN_VELOPACK_UPDATE_URL="%BEAN_VELOPACK_UPDATE_URL%"
+if errorlevel 1 goto :fail
+
+echo [bean] Building application...
+cmake --build build-velopack --config Release --target bean_app
+if errorlevel 1 goto :fail
+
+set "PACK_DIR=dist\alpha-release"
+if exist "%PACK_DIR%" rmdir /S /Q "%PACK_DIR%"
+mkdir "%PACK_DIR%"
+copy /Y "build-velopack\Release\bean.exe" "%PACK_DIR%\bean.exe" >nul
+if errorlevel 1 goto :fail
+copy /Y "build-velopack\Release\velopack_libc.dll" "%PACK_DIR%\velopack_libc.dll" >nul
+if errorlevel 1 goto :fail
+xcopy /E /I /Y "build-velopack\Release\assets" "%PACK_DIR%\assets" >nul
+if errorlevel 1 goto :fail
+
+call "%~dp0package_velopack_release.bat" "%VERSION%"
+if errorlevel 1 goto :fail
+
+goto :done
+
+:fail
+echo.
+echo [bean] Velopack build/package failed.
+popd
+exit /b 1
+
+:done
+echo.
+echo [bean] Velopack build/package completed for %VERSION%.
+popd
+exit /b 0
+@echo off
+setlocal
+pushd "%~dp0.."
+
 set "PACK_VERSION=%~1"
 if not defined PACK_VERSION set "PACK_VERSION=%BEAN_VELOPACK_VERSION%"
 if not defined PACK_VERSION (

@@ -17,6 +17,7 @@ namespace {
 constexpr auto kMinCheapTrimSeconds = std::chrono::seconds(5);
 constexpr int kMinClipDurationSeconds = 1;
 constexpr int kMaxClipDurationSeconds = 3600;
+constexpr DWORD kFfmpegProcessTimeoutMs = 30 * 60 * 1000;
 
 std::string FormatWallClock(const std::chrono::system_clock::time_point& value)
 {
@@ -89,6 +90,22 @@ std::vector<std::filesystem::path> ResolveFfmpegExecutableCandidates()
     return candidates;
 }
 
+bool WaitForProcessExit(HANDLE process, DWORD& exitCode)
+{
+    const DWORD waitResult = WaitForSingleObject(process, kFfmpegProcessTimeoutMs);
+    if (waitResult == WAIT_TIMEOUT) {
+        TerminateProcess(process, ERROR_TIMEOUT);
+        WaitForSingleObject(process, 5000);
+        exitCode = ERROR_TIMEOUT;
+        return false;
+    }
+    if (waitResult != WAIT_OBJECT_0) {
+        exitCode = GetLastError();
+        return false;
+    }
+    return GetExitCodeProcess(process, &exitCode) != 0;
+}
+
 bool RunProcessAndWait(const std::wstring& commandLine, DWORD& exitCode)
 {
     STARTUPINFOW startupInfo{};
@@ -109,8 +126,7 @@ bool RunProcessAndWait(const std::wstring& commandLine, DWORD& exitCode)
         return false;
     }
 
-    WaitForSingleObject(processInfo.hProcess, INFINITE);
-    bool gotCode = (GetExitCodeProcess(processInfo.hProcess, &exitCode) != 0);
+    const bool gotCode = WaitForProcessExit(processInfo.hProcess, exitCode);
     CloseHandle(processInfo.hThread);
     CloseHandle(processInfo.hProcess);
     return gotCode;
@@ -160,8 +176,7 @@ bool RunProcessAndCapture(
         return false;
     }
 
-    WaitForSingleObject(processInfo.hProcess, INFINITE);
-    const bool gotCode = GetExitCodeProcess(processInfo.hProcess, &exitCode) != 0;
+    const bool gotCode = WaitForProcessExit(processInfo.hProcess, exitCode);
     CloseHandle(processInfo.hThread);
     CloseHandle(processInfo.hProcess);
     return gotCode;

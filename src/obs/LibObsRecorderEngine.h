@@ -7,6 +7,7 @@
 #include <atomic>
 #include <filesystem>
 #include <mutex>
+#include <string>
 
 namespace bean::obs {
 
@@ -20,6 +21,7 @@ public:
     bool SetMicrophoneNoiseSuppressionEnabled(bool enabled, std::string& error) override;
     bool IsRecording() const override;
     std::string GetLastStartDiagnostics() const override;
+    void Shutdown() override;
 
 private:
     bool ResolveObsInstallRoot(std::filesystem::path& root) const;
@@ -68,6 +70,11 @@ private:
     std::filesystem::path obsRoot_;
     std::filesystem::path obsBinDir_;
     HMODULE obsModule_ = nullptr;
+    std::wstring previousDllDirectory_;
+    std::wstring previousPath_;
+    bool hadPreviousDllDirectory_ = false;
+    bool hadPreviousPath_ = false;
+    bool processEnvironmentModified_ = false;
     ObsApi* api_ = nullptr;
     void* scene_ = nullptr;
     void* gameCaptureSource_ = nullptr;

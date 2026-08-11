@@ -867,6 +867,11 @@ struct LibObsRecorderEngine::ObsApi {
 
 LibObsRecorderEngine::~LibObsRecorderEngine()
 {
+    Shutdown();
+}
+
+void LibObsRecorderEngine::Shutdown()
+{
     std::scoped_lock lock(mutex_);
     if (recording_ && output_ && api_) {
         api_->obs_output_stop(output_);
@@ -1188,7 +1193,10 @@ bool LibObsRecorderEngine::SetupSceneAndChatBlocker(std::string& blockerDebug, s
         error = "Failed to create OBS scene.";
         return false;
     }
-    api_->obs_scene_add(scene_, gameCaptureSource_);
+    if (!api_->obs_scene_add(scene_, gameCaptureSource_)) {
+        error = "Failed to insert game capture source into OBS scene.";
+        return false;
+    }
     if (config_.chatBlockerEnabled && config_.chatBlockerWidth > 0 && config_.chatBlockerHeight > 0) {
         auto* blockerSettings = api_->obs_data_create();
         if (!blockerSettings) {
@@ -1228,6 +1236,10 @@ bool LibObsRecorderEngine::SetupSceneAndChatBlocker(std::string& blockerDebug, s
             return false;
         }
         blockerItem = api_->obs_scene_add(scene_, chatBlockerSource_);
+        if (!blockerItem) {
+            error = "Failed to insert chat blocker source into OBS scene.";
+            return false;
+        }
         if (blockerItem && api_->obs_sceneitem_set_pos) {
             const auto blockerPos = ResolveChatBlockerPosition(config_, videoWidth_, videoHeight_);
             api_->obs_sceneitem_set_pos(blockerItem, &blockerPos);
@@ -1580,6 +1592,43 @@ bool LibObsRecorderEngine::StartObsCore(const std::filesystem::path& obsRoot, st
 {
     ClearLastObsLogLine();
     obsRoot_ = obsRoot;
+    if (!processEnvironmentModified_) {
+        std::vector<wchar_t> dllDirectoryBuffer(256);
+        for (;;) {
+            const DWORD length = GetDllDirectoryW(
+                static_cast<DWORD>(dllDirectoryBuffer.size()),
+                dllDirectoryBuffer.data());
+            if (length == 0) {
+                hadPreviousDllDirectory_ = false;
+                break;
+            }
+            if (length < dllDirectoryBuffer.size()) {
+                previousDllDirectory_.assign(dllDirectoryBuffer.data(), length);
+                hadPreviousDllDirectory_ = true;
+                break;
+            }
+            dllDirectoryBuffer.resize(static_cast<size_t>(length) + 1);
+        }
+
+        std::vector<wchar_t> pathBuffer(512);
+        for (;;) {
+            const DWORD length = GetEnvironmentVariableW(
+                L"PATH",
+                pathBuffer.data(),
+                static_cast<DWORD>(pathBuffer.size()));
+            if (length == 0) {
+                hadPreviousPath_ = GetLastError() != ERROR_ENVVAR_NOT_FOUND;
+                break;
+            }
+            if (length < pathBuffer.size()) {
+                previousPath_.assign(pathBuffer.data(), length);
+                hadPreviousPath_ = true;
+                break;
+            }
+            pathBuffer.resize(static_cast<size_t>(length) + 1);
+        }
+        processEnvironmentModified_ = true;
+    }
     SetDllDirectoryW(obsBinDir_.wstring().c_str());
 
     const auto pluginsBin = ToUtf8(obsRoot_ / "obs-plugins" / "64bit");
@@ -1937,6 +1986,18 @@ void LibObsRecorderEngine::ShutdownObsCore()
     appliedVideoConfig_ = {};
     initialized_ = false;
     recording_ = false;
+    if (processEnvironmentModified_) {
+        SetDllDirectoryW(
+            hadPreviousDllDirectory_ ? previousDllDirectory_.c_str() : nullptr);
+        SetEnvironmentVariableW(
+            L"PATH",
+            hadPreviousPath_ ? previousPath_.c_str() : nullptr);
+        previousDllDirectory_.clear();
+        previousPath_.clear();
+        hadPreviousDllDirectory_ = false;
+        hadPreviousPath_ = false;
+        processEnvironmentModified_ = false;
+    }
 }
 
 } // namespace bean::obs

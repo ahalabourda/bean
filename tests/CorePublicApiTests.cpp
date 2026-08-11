@@ -452,6 +452,42 @@ void TestSettingsStoreAtomicSave()
     Expect(reloaded.fps == 30, "Reloaded settings should reflect the latest save.");
 }
 
+void TestSettingsStoreConcurrentSaves()
+{
+    const auto appData = MakeTempDir("settings-concurrent-appdata");
+    _putenv_s("APPDATA", appData.string().c_str());
+    const auto outputDirectory = MakeTempDir("settings-concurrent-output");
+
+    std::atomic<int> successfulSaves{0};
+    std::vector<std::thread> writers;
+    for (int index = 0; index < 8; ++index) {
+        writers.emplace_back([&, index]() {
+            bean::core::SettingsStore store;
+            bean::core::AppSettings settings;
+            settings.outputDirectory = outputDirectory;
+            settings.fps = 30 + index;
+            std::string error;
+            if (store.Save(settings, error)) {
+                ++successfulSaves;
+            }
+        });
+    }
+    for (auto& writer : writers) {
+        writer.join();
+    }
+
+    Expect(successfulSaves == 8, "Concurrent settings saves should all complete.");
+    bean::core::SettingsStore store;
+    bean::core::AppSettings loaded;
+    std::string error;
+    Expect(store.Load(loaded, error), "Settings should remain readable after concurrent saves.");
+    Expect(loaded.fps >= 30 && loaded.fps < 38, "Concurrent save should leave one complete snapshot.");
+    auto legacyTempPath = store.GetConfigPath();
+    legacyTempPath += L".tmp";
+    Expect(!std::filesystem::exists(legacyTempPath),
+        "Concurrent save should not leave the legacy shared temp file.");
+}
+
 void TestRecordingOrchestratorPublicMethods()
 {
     auto engine = std::make_unique<bean::obs::MockRecorderEngine>();
@@ -569,6 +605,25 @@ void TestRecordingOrchestratorReportsStartFailure()
     Expect(hasFailureStatus, "Status callback should report the failed start.");
 }
 
+void TestRecordingOrchestratorRollsBackWatcherStartFailure()
+{
+    auto engine = std::make_unique<bean::obs::MockRecorderEngine>();
+    auto* mock = engine.get();
+    bean::core::RecordingOrchestrator orchestrator(std::move(engine));
+    bean::core::AppSettings settings;
+    settings.outputDirectory = MakeTempDir("orchestrator-watcher-failure-output");
+    settings.wowInstallDirectory.clear();
+    orchestrator.ApplySettings(settings);
+
+    std::string error;
+    Expect(!orchestrator.StartMonitoring(error),
+        "Monitoring should fail when the combat-log directory is unavailable.");
+    Expect(!mock->IsInitialized(),
+        "Watcher startup failure should shut down the initialized recorder engine.");
+    Expect(!orchestrator.IsMonitoring(),
+        "Watcher startup failure should leave monitoring stopped.");
+}
+
 void TestYouTubeCancelFlag()
 {
     bean::integrations::YouTubeUploader::ClearCancel();
@@ -634,6 +689,7 @@ int main()
     TestMockRecorderEnginePublicMethods();
     TestSettingsStoreLoadSaveAndConversion();
     TestSettingsStoreAtomicSave();
+    TestSettingsStoreConcurrentSaves();
     TestSettingsSchemaVersionRoundTrip();
     TestBuildRecordingPath();
     TestRunRepositoryPublicMethods();
@@ -643,6 +699,7 @@ int main()
     TestCombatLogWatcherFollowsNewLogFile();
     TestRecordingOrchestratorPublicMethods();
     TestRecordingOrchestratorReportsStartFailure();
+    TestRecordingOrchestratorRollsBackWatcherStartFailure();
     TestYouTubeCancelFlag();
 
     if (gFailures == 0) {

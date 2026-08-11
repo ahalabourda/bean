@@ -138,7 +138,7 @@ void LayoutStatusPanel(AppContext* ctx, int panelWidth, int panelHeight)
     constexpr int wowTextX = LayoutMetrics::kPanelInset + 126;
     const int wowTextWidth = (std::max)(250, panelWidth - wowTextX - 20);
     for (const auto& row : kPrerequisiteRows) {
-        if (row.visibleOnlyWhenUnhealthy && !ctx->warcraftRecorderDetected) {
+        if (row.visibleOnlyWhenUnhealthy && PrerequisiteRowIsHealthy(ctx, row)) {
             continue;
         }
         const int labelWidth = row.iconId == IDC_WARCRAFT_RECORDER_ICON ? 126

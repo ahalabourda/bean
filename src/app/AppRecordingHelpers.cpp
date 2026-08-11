@@ -106,6 +106,42 @@ std::vector<YouTubeMediaFile> EnumerateYouTubeMediaFiles(const std::filesystem::
     return files;
 }
 
+void SortYouTubeMediaFiles(
+    std::vector<YouTubeMediaFile>& files,
+    YouTubeMediaSortColumn column,
+    bool ascending)
+{
+    std::stable_sort(
+        files.begin(),
+        files.end(),
+        [column, ascending](const YouTubeMediaFile& left, const YouTubeMediaFile& right) {
+            int comparison = 0;
+            switch (column) {
+            case YouTubeMediaSortColumn::Type: {
+                const int leftType = left.type == YouTubeMediaType::Clip ? 1 : 0;
+                const int rightType = right.type == YouTubeMediaType::Clip ? 1 : 0;
+                comparison = leftType < rightType ? -1 : (leftType > rightType ? 1 : 0);
+                break;
+            }
+            case YouTubeMediaSortColumn::Name: {
+                const auto leftName = left.path.filename().wstring();
+                const auto rightName = right.path.filename().wstring();
+                comparison = _wcsicmp(leftName.c_str(), rightName.c_str());
+                break;
+            }
+            case YouTubeMediaSortColumn::Date:
+                comparison = left.modified < right.modified ? -1 : (left.modified > right.modified ? 1 : 0);
+                break;
+            }
+            if (comparison == 0) {
+                const auto leftPath = left.path.wstring();
+                const auto rightPath = right.path.wstring();
+                comparison = _wcsicmp(leftPath.c_str(), rightPath.c_str());
+            }
+            return ascending ? comparison < 0 : comparison > 0;
+        });
+}
+
 std::wstring FormatElapsed(std::chrono::seconds elapsed)
 {
     const auto total = elapsed.count();

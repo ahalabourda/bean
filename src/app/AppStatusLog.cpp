@@ -284,9 +284,8 @@ void SetStatus(AppContext* ctx, const std::wstring& text)
 
 void PostStatus(AppContext* ctx, const std::wstring& text)
 {
-    if (!ctx || !ctx->mainWindow || text.empty()) {
+    if (!ctx || text.empty()) {
         return;
     }
-    auto* payload = new std::wstring(text);
-    PostMessageW(ctx->mainWindow, WM_BEAN_STATUS, 0, reinterpret_cast<LPARAM>(payload));
+    PostOwnedAppMessage(ctx, WM_BEAN_STATUS, new std::wstring(text));
 }

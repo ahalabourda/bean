@@ -208,8 +208,14 @@ bool RecordingOrchestrator::StartMonitoring(std::string& error)
     if (IsMonitoring()) {
         return true;
     }
-
     std::scoped_lock lock(mutex_);
+    if (watcher_.IsRunning()) {
+        return true;
+    }
+    if (engine_->IsRecording()) {
+        error = "Cannot start monitoring while a manual recording is active.";
+        return false;
+    }
 
     settings_.outputDirectory = settings_.outputDirectory.empty()
         ? std::filesystem::temp_directory_path() / "Battle Encounter Archival Nexus Recordings"
@@ -235,6 +241,7 @@ bool RecordingOrchestrator::StartMonitoring(std::string& error)
     watcher_.SetLogDirectory(wowLogDirectory);
     auto recordingConfig = ToRecordingConfig(settings_);
     if (!engine_->Initialize(recordingConfig, error)) {
+        engine_->Shutdown();
         PushStatus("OBS initialize failed: " + error);
         return false;
     }
@@ -245,6 +252,9 @@ bool RecordingOrchestrator::StartMonitoring(std::string& error)
     // Start the consumer before the producer so no line is dropped.
     StartCombatLogWorker();
     if (!watcher_.Start([this](const std::string& line) { HandleCombatLogLine(line); }, error)) {
+        StopCombatLogWorker();
+        engine_->Shutdown();
+        state_ = OrchestratorState::Idle;
         PushStatus("Monitoring start failed: " + error);
         return false;
     }
@@ -265,8 +275,11 @@ void RecordingOrchestrator::StopMonitoring()
 
     std::scoped_lock lock(mutex_);
     ResetMythicTrackingState();
-    if (state_ == OrchestratorState::Armed) {
-        state_ = OrchestratorState::Idle;
+    if (!engine_->IsRecording()) {
+        if (state_ == OrchestratorState::Armed) {
+            state_ = OrchestratorState::Idle;
+        }
+        engine_->Shutdown();
     }
     PushStatus("Monitoring disabled.");
 }
@@ -667,14 +680,17 @@ bool RecordingOrchestrator::StartRecordingInternal(
     recordingStartInProgress_ = false;
 
     if (!initialized) {
+        engine_->Shutdown();
         PushStatus("Initialize failed: " + error);
         return false;
     }
     if (!started) {
+        engine_->Shutdown();
         PushStatus("Start recording failed: " + error);
         return false;
     }
     if (!engine_->IsRecording()) {
+        engine_->Shutdown();
         error = "Recording stopped unexpectedly during start.";
         PushStatus(error);
         return false;
@@ -707,6 +723,10 @@ bool RecordingOrchestrator::StopRecordingInternal(
     std::string& error,
     std::optional<std::chrono::system_clock::time_point> logicalEndAt)
 {
+    if (recordingStartInProgress_) {
+        error = "Recording start is still in progress.";
+        return false;
+    }
     if (!engine_->IsRecording()) {
         error = "Not recording.";
         return false;

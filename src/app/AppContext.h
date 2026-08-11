@@ -2,6 +2,7 @@
 
 #include "app/ClipPreviewEngine.h"
 #include "app/AppRecordingHelpers.h"
+#include "app/AppWorkerRegistry.h"
 #include "core/RecordingOrchestrator.h"
 #include "core/RunRepository.h"
 #include "core/SettingsStore.h"
@@ -17,10 +18,8 @@
 #include <fstream>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
-#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -737,12 +736,14 @@ struct AppContext {
     bool warcraftRecorderWarningLogged = false;
     bool advancedCombatLoggingEnabled = false;
     bool chatBlockerAutoSaveArmed = false;
+    bool chatBlockerSettingsDirty = false;
     bool chatBlockerAspectAdjusting = false;
     bool chatBlockerIgnoreNextWidthChange = false;
     bool chatBlockerIgnoreNextHeightChange = false;
     int chatBlockerCustomSourceWidth = 0;
     int chatBlockerCustomSourceHeight = 0;
     bool configurationAutoSaveArmed = false;
+    bool configurationSettingsDirty = false;
     bool outputFolderWillBeCreatedOnRecordStart = false;
     bool ffmpegCheckRequested = false;
     // Probing ffmpeg means launching it, so it runs on a worker thread and
@@ -864,12 +865,40 @@ struct AppContext {
     };
     MainTab activeTab = MainTab::Status;
     std::vector<MicrophoneOption> microphoneOptions;
+    std::atomic<bool> shuttingDown{false};
 
-    // Detached work is forbidden: LaunchAppWorker stores joinable threads here
-    // and JoinAppWorkers runs from WM_DESTROY before the HWND is destroyed.
-    struct BackgroundWorkers {
-        std::mutex mutex;
-        std::vector<std::thread> threads;
-    };
-    BackgroundWorkers backgroundWorkers;
+    AppWorkerRegistry backgroundWorkers;
 };
+
+template <typename Payload>
+bool PostOwnedAppMessage(
+    AppContext* ctx,
+    UINT message,
+    Payload* payload,
+    WPARAM wParam = 0)
+{
+    if (!ctx
+        || ctx->shuttingDown.load(std::memory_order_acquire)
+        || !ctx->mainWindow
+        || !PostMessageW(
+            ctx->mainWindow,
+            message,
+            wParam,
+            reinterpret_cast<LPARAM>(payload))) {
+        delete payload;
+        return false;
+    }
+    return true;
+}
+
+inline bool PostBeanAppMessage(
+    AppContext* ctx,
+    UINT message,
+    WPARAM wParam = 0,
+    LPARAM lParam = 0)
+{
+    return ctx
+        && !ctx->shuttingDown.load(std::memory_order_acquire)
+        && ctx->mainWindow
+        && PostMessageW(ctx->mainWindow, message, wParam, lParam) != FALSE;
+}
