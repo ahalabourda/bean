@@ -174,10 +174,28 @@ void LayoutStatusPanel(AppContext* ctx, int panelWidth, int panelHeight)
     constexpr int statusGap = 8;
     const int statusHeight = (std::max)(90, panelHeight - y - statusBottomPadding - LayoutMetrics::kButtonHeight - statusGap);
     MoveControl(ctx->statusPanel, IDC_STATUS_TEXT, statusX, y, statusWidth, statusHeight);
-    const int openLogButtonWidth = (std::min)(200, (std::max)(140, statusWidth));
-    const int openLogButtonX = statusX + statusWidth - openLogButtonWidth;
+    constexpr int logButtonGap = 8;
+    const int logButtonWidth = (std::min)(
+        200,
+        (std::max)(140, (statusWidth - logButtonGap) / 2));
+    const int logButtonsWidth = logButtonWidth * 2 + logButtonGap;
+    const int copyLogButtonX = statusX + statusWidth - logButtonsWidth;
+    const int openLogButtonX = copyLogButtonX + logButtonWidth + logButtonGap;
     const int openLogButtonY = y + statusHeight + statusGap;
-    MoveControl(ctx->statusPanel, IDC_STATUS_OPEN_LOG_FOLDER, openLogButtonX, openLogButtonY, openLogButtonWidth, LayoutMetrics::kButtonHeight);
+    MoveControl(
+        ctx->statusPanel,
+        IDC_STATUS_COPY_LOG_TEXT,
+        copyLogButtonX,
+        openLogButtonY,
+        logButtonWidth,
+        LayoutMetrics::kButtonHeight);
+    MoveControl(
+        ctx->statusPanel,
+        IDC_STATUS_OPEN_LOG_FOLDER,
+        openLogButtonX,
+        openLogButtonY,
+        logButtonWidth,
+        LayoutMetrics::kButtonHeight);
 }
 
 void LayoutRecordingsPanel(AppContext* ctx, int panelWidth, int panelHeight)

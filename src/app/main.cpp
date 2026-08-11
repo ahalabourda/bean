@@ -4552,6 +4552,11 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         }
         break;
     }
+    case IDC_STATUS_COPY_LOG_TEXT:
+        if (!CopyBeanTextBoxText(ctx->statusText)) {
+            SetStatus(ctx, L"Failed to copy status log text.");
+        }
+        break;
     case IDC_YOUTUBE_LINK_BUTTON: {
         PullSettingsFromUi(ctx);
         const std::string authServerUrl = GetYouTubeAuthServerUrl();
@@ -5324,6 +5329,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             rowHeight + 4,
             ctx->statusPanel,
             reinterpret_cast<HMENU>(IDC_STATUS_OPEN_LOG_FOLDER),
+            nullptr,
+            nullptr);
+        CreateWindowW(
+            L"BUTTON",
+            L"Copy Log to Clipboard",
+            WS_VISIBLE | WS_CHILD | WS_TABSTOP,
+            300,
+            y + rowHeight + 44,
+            200,
+            rowHeight + 4,
+            ctx->statusPanel,
+            reinterpret_cast<HMENU>(IDC_STATUS_COPY_LOG_TEXT),
             nullptr,
             nullptr);
 

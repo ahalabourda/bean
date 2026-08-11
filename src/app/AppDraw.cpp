@@ -569,7 +569,7 @@ void DrawBeanTextBox(HWND hwnd, HDC dc)
 
         const int savedDc = SaveDC(dc);
         IntersectClipRect(dc, textLeft, textTop, textRight, textBottom);
-        SetWindowOrgEx(dc, 0, -state->scrollY, nullptr);
+        SetWindowOrgEx(dc, 0, state->scrollY, nullptr);
         RECT textRect{textLeft, textTop, textRight, textTop + textHeight};
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(
@@ -815,7 +815,11 @@ LRESULT CALLBACK BeanTextBoxWndProc(HWND hwnd, UINT message, WPARAM wParam, LPAR
     case WM_MOUSEWHEEL:
         if (state->multiline) {
             const int wheelDelta = static_cast<short>(HIWORD(wParam));
-            state->scrollY = (std::max)(0, state->scrollY - wheelDelta / 2);
+            const BeanTextBoxMultilineMetrics metrics = GetBeanTextBoxMultilineMetrics(hwnd, *state);
+            state->scrollY = (std::clamp)(
+                state->scrollY - wheelDelta / 2,
+                0,
+                metrics.maxScroll);
             BeanTextBoxInvalidate(hwnd);
             return 0;
         }
@@ -3064,6 +3068,34 @@ HWND CreateBeanTextBox(
     return textBox;
 }
 
+bool CopyBeanTextBoxText(HWND hwnd)
+{
+    const BeanTextBoxState* state = GetBeanTextBoxState(hwnd);
+    if (!state || !OpenClipboard(hwnd)) {
+        return false;
+    }
+    EmptyClipboard();
+    const size_t byteCount = (state->text.size() + 1) * sizeof(wchar_t);
+    HGLOBAL data = GlobalAlloc(GMEM_MOVEABLE, byteCount);
+    bool copied = false;
+    if (data) {
+        void* destination = GlobalLock(data);
+        if (destination) {
+            std::memcpy(destination, state->text.c_str(), byteCount);
+            GlobalUnlock(data);
+            if (SetClipboardData(CF_UNICODETEXT, data)) {
+                data = nullptr;
+                copied = true;
+            }
+        }
+    }
+    if (data) {
+        GlobalFree(data);
+    }
+    CloseClipboard();
+    return copied;
+}
+
 #if 0
 void ConfigureThemedScrollbars(HWND hwnd)
 {
@@ -4118,6 +4150,7 @@ bool IsStyledButtonId(int controlId)
     case IDC_RECORD_START:
     case IDC_RECORD_STOP:
     case IDC_STATUS_OPEN_LOG_FOLDER:
+    case IDC_STATUS_COPY_LOG_TEXT:
     case IDC_CHAT_BLOCKER_IMAGE_IMPORT_BUTTON:
     case IDC_CHAT_BLOCKER_IMAGE_OPEN_FOLDER_BUTTON:
     case IDC_RECORDINGS_REFRESH:
@@ -4196,7 +4229,11 @@ void ConfigureStyledButtons(AppContext* ctx)
     for (const int id : mainButtons) {
         EnableOwnerDrawButton(ctx->mainWindow, id);
     }
-    const std::array<int, 3> statusButtons = {IDC_RECORD_START, IDC_RECORD_STOP, IDC_STATUS_OPEN_LOG_FOLDER};
+    const std::array<int, 4> statusButtons = {
+        IDC_RECORD_START,
+        IDC_RECORD_STOP,
+        IDC_STATUS_COPY_LOG_TEXT,
+        IDC_STATUS_OPEN_LOG_FOLDER};
     for (const int id : statusButtons) {
         EnableOwnerDrawButton(ctx->statusPanel, id);
     }

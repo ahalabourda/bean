@@ -29,6 +29,7 @@ HWND CreateBeanTextBox(
     const wchar_t* initialText,
     LONG_PTR style,
     AppContext* ctx);
+bool CopyBeanTextBoxText(HWND hwnd);
 
 bool IsStyledButtonId(int controlId);
 bool IsStyledComboId(int controlId);
