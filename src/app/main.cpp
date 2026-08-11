@@ -2944,7 +2944,7 @@ void RefreshRecordingsList(AppContext* ctx)
             RefreshBeanFileList(ctx->recordingsList);
             UpdateRecordingInfoPane(ctx, -1);
         }
-        SetWindowTextW(ctx->recordingsLabel, L"Recordings folder is unavailable.");
+        UpdateTransparentStaticText(ctx->recordingsLabel, L"Recordings folder is unavailable.");
         return;
     }
 
@@ -3061,7 +3061,7 @@ void RefreshRecordingsList(AppContext* ctx)
         summary << L"s";
     }
     summary << L")";
-    SetWindowTextW(ctx->recordingsLabel, summary.str().c_str());
+    UpdateTransparentStaticText(ctx->recordingsLabel, summary.str().c_str());
 }
 
 void RefreshLiveStatus(AppContext* ctx);
