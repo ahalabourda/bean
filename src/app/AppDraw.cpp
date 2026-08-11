@@ -1960,6 +1960,24 @@ int FindCustomComboPopupPrefixMatch(HWND combo, int startIndex, const std::wstri
     return -1;
 }
 
+bool MoveClosedCustomComboSelection(HWND combo, int direction)
+{
+    const int count = static_cast<int>(SendMessageW(combo, CB_GETCOUNT, 0, 0));
+    if (count <= 0 || direction == 0) {
+        return true;
+    }
+    const int current = static_cast<int>(SendMessageW(combo, CB_GETCURSEL, 0, 0));
+    const int next = current < 0
+        ? (direction < 0 ? count - 1 : 0)
+        : (std::clamp)(current + direction, 0, count - 1);
+    if (next != current) {
+        SendMessageW(combo, CB_SETCURSEL, static_cast<WPARAM>(next), 0);
+        NotifyCustomCombo(combo, CBN_SELCHANGE);
+        RefreshModernCombo(combo);
+    }
+    return true;
+}
+
 void UpdateCustomComboPopupHighlightFromPoint(HWND popup, int x, int y)
 {
     CustomComboPopupState* state = GetCustomComboPopupState(popup);
@@ -2126,6 +2144,13 @@ LRESULT CALLBACK CustomComboPopupWndProc(HWND hwnd, UINT message, WPARAM wParam,
     case WM_CAPTURECHANGED:
         if (state) {
             if (!state->releasingCapture) {
+                if (state->draggingScrollbar
+                    && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0) {
+                    SetCapture(hwnd);
+                    SetTimer(hwnd, kCustomComboPopupDragTimerId, 10, nullptr);
+                    InvalidateCustomComboPopup(hwnd);
+                    return 0;
+                }
                 state->draggingScrollbar = false;
                 state->scrollbarDragOffset = 0;
                 KillTimer(hwnd, kCustomComboPopupDragTimerId);
@@ -2394,6 +2419,9 @@ LRESULT CALLBACK ModernComboSubclassProc(HWND hwnd, UINT message, WPARAM wParam,
     case WM_LBUTTONDOWN:
     case WM_LBUTTONDBLCLK: {
         if (isCustomCombo) {
+            if (IsWindowEnabled(hwnd) && GetFocus() != hwnd) {
+                SetFocus(hwnd);
+            }
             if (gCustomComboPopup && gCustomComboPopup->combo == hwnd) {
                 CloseCustomComboPopup(
                     gCustomComboPopup->popup,
@@ -2413,11 +2441,18 @@ LRESULT CALLBACK ModernComboSubclassProc(HWND hwnd, UINT message, WPARAM wParam,
             if (gCustomComboPopup && HandleCustomComboPopupKey(hwnd, wParam)) {
                 return 0;
             }
+            const bool altDown = (GetKeyState(VK_MENU) & 0x8000) != 0;
             if (!gCustomComboPopup
-                && (wParam == VK_DOWN
-                    || wParam == VK_SPACE
+                && !altDown
+                && (wParam == VK_UP || wParam == VK_DOWN)) {
+                MoveClosedCustomComboSelection(hwnd, wParam == VK_UP ? -1 : 1);
+                return 0;
+            }
+            if (!gCustomComboPopup
+                && (wParam == VK_SPACE
                     || wParam == VK_RETURN
-                    || wParam == VK_F4)) {
+                    || wParam == VK_F4
+                    || (wParam == VK_DOWN && altDown))) {
                 OpenCustomComboPopup(hwnd);
                 return 0;
             }
@@ -3183,6 +3218,12 @@ int BeanFileListVisibleRows(int clientHeight)
     return (std::max)(1, (contentHeight + kBeanFileListRowHeight - 1) / kBeanFileListRowHeight);
 }
 
+int BeanFileListScrollRows(int clientHeight)
+{
+    const int contentHeight = (std::max)(0, clientHeight - kBeanFileListHeaderHeight);
+    return (std::max)(1, contentHeight / kBeanFileListRowHeight);
+}
+
 bool BeanFileListColumnCentered(BeanFileListKind kind, size_t column)
 {
     return kind == BeanFileListKind::YouTube ? column == 2 : column > 0;
@@ -3267,7 +3308,9 @@ void DrawBeanFileList(HWND hwnd, HDC dc)
     const size_t itemCount = BeanFileListItemCount(*state);
     const int clientHeight = static_cast<int>(clientRect.bottom);
     const int visibleRows = BeanFileListVisibleRows(clientHeight);
-    const int maxOffset = (std::max)(0, static_cast<int>(itemCount) - visibleRows);
+    const int maxOffset = (std::max)(
+        0,
+        static_cast<int>(itemCount) - BeanFileListScrollRows(clientHeight));
     state->scrollOffset = (std::clamp)(state->scrollOffset, 0, maxOffset);
     const int selectedIndex = BeanFileListSelection(*state);
     for (int row = 0; row < visibleRows; ++row) {
@@ -3328,9 +3371,10 @@ void DrawBeanFileList(HWND hwnd, HDC dc)
     }
     if (maxOffset > 0) {
         const int trackHeight = clientHeight;
+        const int scrollRows = BeanFileListScrollRows(clientHeight);
         const int thumbHeight = (std::max)(
             24,
-            (std::min)(trackHeight, trackHeight * visibleRows / (std::max)(1, static_cast<int>(itemCount))));
+            (std::min)(trackHeight, trackHeight * scrollRows / (std::max)(1, static_cast<int>(itemCount))));
         const int travel = (std::max)(1, trackHeight - thumbHeight);
         const int thumbTop = travel * state->scrollOffset / maxOffset;
         const COLORREF thumbColor = state->draggingScrollbar
@@ -3371,7 +3415,7 @@ void EnsureBeanFileListSelectionVisible(HWND hwnd, BeanFileListState& state)
     RECT clientRect{};
     GetClientRect(hwnd, &clientRect);
     const int clientHeight = static_cast<int>(clientRect.bottom);
-    const int visibleRows = BeanFileListVisibleRows(clientHeight);
+    const int visibleRows = BeanFileListScrollRows(clientHeight);
     const int selected = BeanFileListSelection(state);
     if (selected >= 0) {
         if (selected < state.scrollOffset) {
@@ -3380,7 +3424,9 @@ void EnsureBeanFileListSelectionVisible(HWND hwnd, BeanFileListState& state)
             state.scrollOffset = selected - visibleRows + 1;
         }
     }
-    const int maxOffset = (std::max)(0, static_cast<int>(BeanFileListItemCount(state)) - visibleRows);
+    const int maxOffset = (std::max)(
+        0,
+        static_cast<int>(BeanFileListItemCount(state)) - visibleRows);
     state.scrollOffset = (std::clamp)(state.scrollOffset, 0, maxOffset);
 }
 
@@ -3445,11 +3491,27 @@ LRESULT CALLBACK BeanFileListSubclassProc(HWND hwnd, UINT message, WPARAM wParam
         EnsureBeanFileListSelectionVisible(hwnd, *state);
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
+    case WM_GETDLGCODE: {
+        LRESULT code = DefSubclassProc(hwnd, message, wParam, lParam) | DLGC_WANTARROWS;
+        const MSG* keyMessage = reinterpret_cast<const MSG*>(lParam);
+        if (keyMessage
+            && keyMessage->message == WM_KEYDOWN
+            && keyMessage->wParam == VK_RETURN) {
+            code |= DLGC_WANTMESSAGE;
+        }
+        return code;
+    }
     case WM_MOUSEWHEEL: {
         const int delta = GET_WHEEL_DELTA_WPARAM(wParam);
         const int lines = (std::max)(1, std::abs(delta) / WHEEL_DELTA);
         state->scrollOffset += delta > 0 ? -lines : lines;
-        EnsureBeanFileListSelectionVisible(hwnd, *state);
+        RECT clientRect{};
+        GetClientRect(hwnd, &clientRect);
+        const int maxOffset = (std::max)(
+            0,
+            static_cast<int>(BeanFileListItemCount(*state))
+                - BeanFileListScrollRows(static_cast<int>(clientRect.bottom)));
+        state->scrollOffset = (std::clamp)(state->scrollOffset, 0, maxOffset);
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
     }
@@ -3462,7 +3524,7 @@ LRESULT CALLBACK BeanFileListSubclassProc(HWND hwnd, UINT message, WPARAM wParam
         const int y = static_cast<int>(static_cast<short>(HIWORD(lParam)));
         const int contentWidth = rc.right - kBeanFileListScrollbarWidth;
         const size_t itemCount = BeanFileListItemCount(*state);
-        const int visibleRows = BeanFileListVisibleRows(clientHeight);
+        const int visibleRows = BeanFileListScrollRows(clientHeight);
         const int maxOffset = (std::max)(0, static_cast<int>(itemCount) - visibleRows);
         if (x >= contentWidth && maxOffset > 0) {
             const int trackHeight = clientHeight;
@@ -3510,7 +3572,7 @@ LRESULT CALLBACK BeanFileListSubclassProc(HWND hwnd, UINT message, WPARAM wParam
             GetClientRect(hwnd, &rc);
             const int clientHeight = static_cast<int>(rc.bottom);
             const int itemCount = static_cast<int>(BeanFileListItemCount(*state));
-            const int visibleRows = BeanFileListVisibleRows(clientHeight);
+            const int visibleRows = BeanFileListScrollRows(clientHeight);
             const int maxOffset = (std::max)(0, itemCount - visibleRows);
             const int thumbHeight = (std::max)(
                 24,
@@ -3536,10 +3598,16 @@ LRESULT CALLBACK BeanFileListSubclassProc(HWND hwnd, UINT message, WPARAM wParam
             return 0;
         }
         int& selected = BeanFileListSelection(*state);
+        if (wParam == VK_RETURN) {
+            if (selected >= 0 && selected < itemCount) {
+                NotifyBeanFileList(hwnd, WM_BEAN_FILE_LIST_DOUBLE_CLICK, selected);
+            }
+            return 0;
+        }
         int next = selected < 0 ? 0 : selected;
         RECT rc{};
         GetClientRect(hwnd, &rc);
-        const int visibleRows = BeanFileListVisibleRows(static_cast<int>(rc.bottom));
+        const int visibleRows = BeanFileListScrollRows(static_cast<int>(rc.bottom));
         if (wParam == VK_UP) next -= 1;
         else if (wParam == VK_DOWN) next += 1;
         else if (wParam == VK_PRIOR) next -= visibleRows;

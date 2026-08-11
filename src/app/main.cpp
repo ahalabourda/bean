@@ -2606,7 +2606,7 @@ void RefreshYouTubeMediaList(AppContext* ctx)
         ctx->youtubeMediaItems.clear();
         RepopulateYouTubeMediaList(ctx);
         UpdateYouTubeMediaSelection(ctx);
-        SetWindowTextW(ctx->youtubeLabel, L"Recordings folder is unavailable.");
+        UpdateTransparentStaticText(ctx->youtubeLabel, L"Recordings folder is unavailable.");
         return;
     }
 
@@ -2634,7 +2634,7 @@ void RefreshYouTubeMediaList(AppContext* ctx)
         summary << L"s";
     }
     summary << L")";
-    SetWindowTextW(ctx->youtubeLabel, summary.str().c_str());
+    UpdateTransparentStaticText(ctx->youtubeLabel, summary.str().c_str());
 }
 
 void RefreshYouTubeUiState(AppContext* ctx)
@@ -2683,15 +2683,16 @@ void RefreshYouTubeUiState(AppContext* ctx)
         EnableWindow(ctx->youtubeUnlinkNoButton, ctx->youtubeBusy.load() ? FALSE : TRUE);
     }
     if (ctx->youtubeAccountLabel) {
+        // Transparent STATIC: use UpdateTransparentStaticText so repeated refreshes
+        // don't stack glyphs (SetWindowText alone doesn't erase under NULL_BRUSH).
+        UpdateTransparentStaticText(ctx->youtubeAccountLabel, L"YouTube Account:");
         if (!linked) {
-            SetWindowTextW(ctx->youtubeAccountLabel, L"YouTube Account:");
             if (ctx->youtubeAccountLink) {
                 SetWindowTextW(ctx->youtubeAccountLink, L"Not linked");
                 EnableWindow(ctx->youtubeAccountLink, FALSE);
                 ShowWindow(ctx->youtubeAccountLink, SW_SHOW);
             }
         } else if (!ctx->settings.youtubeChannelId.empty()) {
-            SetWindowTextW(ctx->youtubeAccountLabel, L"YouTube Account:");
             if (ctx->youtubeAccountLink) {
                 std::wstring text = ToWide(ctx->settings.youtubeChannelTitle.empty() ? ctx->settings.youtubeChannelId : ctx->settings.youtubeChannelTitle);
                 SetWindowTextW(ctx->youtubeAccountLink, text.c_str());
@@ -2699,7 +2700,6 @@ void RefreshYouTubeUiState(AppContext* ctx)
                 ShowWindow(ctx->youtubeAccountLink, SW_SHOW);
             }
         } else {
-            SetWindowTextW(ctx->youtubeAccountLabel, L"YouTube Account:");
             if (ctx->youtubeAccountLink) {
                 SetWindowTextW(ctx->youtubeAccountLink, ctx->youtubeBusy.load() ? L"Resolving..." : L"Linked");
                 EnableWindow(ctx->youtubeAccountLink, FALSE);
