@@ -711,6 +711,7 @@ void CloseClipMedia(AppContext* ctx)
     ctx->clipsVideoSourceWidth = 0;
     ctx->clipsVideoSourceHeight = 0;
     ctx->clipsLoadedPath.clear();
+    ctx->clipsTimelinePosition = 0;
     ctx->clipsTimelineScrubbing = false;
 }
 
@@ -734,45 +735,63 @@ void RefreshClipsPlaybackControls(AppContext* ctx)
     }
     const bool previewBusy = false;
     const bool ffmpegAvailable = ctx->ffmpegDetected;
+    const BOOL clipControlsEnabled = (ctx->clipsLoaded && !previewBusy) ? TRUE : FALSE;
+    const auto setEnabledIfChanged = [](HWND control, BOOL enabled) {
+        if (!control || IsWindowEnabled(control) == enabled) {
+            return false;
+        }
+        EnableWindow(control, enabled);
+        return true;
+    };
     if (ctx->clipsFfmpegWarning) {
         if (ctx->clipsExportStatus == AppContext::ClipExportStatus::Idle) {
             const wchar_t* warningText = ffmpegAvailable
                 ? L""
                 : L"FFmpeg is required to export clips.";
             UpdateTransparentStaticText(ctx->clipsFfmpegWarning, warningText);
-            ShowWindow(ctx->clipsFfmpegWarning, ffmpegAvailable ? SW_HIDE : SW_SHOW);
+            const bool shouldShow = !ffmpegAvailable;
+            if ((IsWindowVisible(ctx->clipsFfmpegWarning) != FALSE) != shouldShow) {
+                ShowWindow(ctx->clipsFfmpegWarning, shouldShow ? SW_SHOW : SW_HIDE);
+            }
         } else {
-            ShowWindow(ctx->clipsFfmpegWarning, SW_SHOW);
+            if (!IsWindowVisible(ctx->clipsFfmpegWarning)) {
+                ShowWindow(ctx->clipsFfmpegWarning, SW_SHOW);
+            }
         }
     }
     if (ctx->clipsSourceCombo) {
-        EnableWindow(ctx->clipsSourceCombo, TRUE);
+        setEnabledIfChanged(ctx->clipsSourceCombo, TRUE);
     }
-    EnableWindow(GetDlgItem(ctx->clipsPanel, IDC_CLIPS_REFRESH), previewBusy ? FALSE : TRUE);
+    setEnabledIfChanged(GetDlgItem(ctx->clipsPanel, IDC_CLIPS_REFRESH), previewBusy ? FALSE : TRUE);
     if (ctx->clipsPlayPauseButton) {
-        SetWindowTextW(ctx->clipsPlayPauseButton, ctx->clipsIsPlaying ? L"Pause" : L"Play");
-        EnableWindow(ctx->clipsPlayPauseButton, (ctx->clipsLoaded && !previewBusy) ? TRUE : FALSE);
+        const wchar_t* playPauseText = ctx->clipsIsPlaying ? L"Pause" : L"Play";
+        if (GetWindowTextString(ctx->clipsPlayPauseButton) != playPauseText) {
+            SetWindowTextW(ctx->clipsPlayPauseButton, playPauseText);
+        }
+        setEnabledIfChanged(ctx->clipsPlayPauseButton, clipControlsEnabled);
     }
     if (ctx->clipsTimeline) {
-        EnableWindow(ctx->clipsTimeline, (ctx->clipsLoaded && !previewBusy) ? TRUE : FALSE);
-        InvalidateControlAndParentRegion(ctx->clipsTimeline);
+        if (setEnabledIfChanged(ctx->clipsTimeline, clipControlsEnabled)) {
+            InvalidateControlAndParentRegion(ctx->clipsTimeline);
+        }
     }
     if (ctx->clipsVolumeSlider) {
-        EnableWindow(ctx->clipsVolumeSlider, (ctx->clipsLoaded && !previewBusy) ? TRUE : FALSE);
-        InvalidateControlAndParentRegion(ctx->clipsVolumeSlider);
+        if (setEnabledIfChanged(ctx->clipsVolumeSlider, clipControlsEnabled)) {
+            InvalidateControlAndParentRegion(ctx->clipsVolumeSlider);
+        }
     }
     if (ctx->clipsStartEdit) {
-        EnableWindow(ctx->clipsStartEdit, (ctx->clipsLoaded && !previewBusy) ? TRUE : FALSE);
+        setEnabledIfChanged(ctx->clipsStartEdit, clipControlsEnabled);
     }
     if (ctx->clipsEndEdit) {
-        EnableWindow(ctx->clipsEndEdit, (ctx->clipsLoaded && !previewBusy) ? TRUE : FALSE);
+        setEnabledIfChanged(ctx->clipsEndEdit, clipControlsEnabled);
     }
-    EnableWindow(GetDlgItem(ctx->clipsPanel, IDC_CLIPS_SET_START), (ctx->clipsLoaded && !previewBusy) ? TRUE : FALSE);
-    EnableWindow(GetDlgItem(ctx->clipsPanel, IDC_CLIPS_SET_END), (ctx->clipsLoaded && !previewBusy) ? TRUE : FALSE);
+    setEnabledIfChanged(GetDlgItem(ctx->clipsPanel, IDC_CLIPS_SET_START), clipControlsEnabled);
+    setEnabledIfChanged(GetDlgItem(ctx->clipsPanel, IDC_CLIPS_SET_END), clipControlsEnabled);
     const BOOL exportEnabled =
         (ctx->clipsLoaded && ffmpegAvailable && !previewBusy && !ctx->clipsExportInProgress.load()) ? TRUE : FALSE;
-    EnableWindow(GetDlgItem(ctx->clipsPanel, IDC_CLIPS_EXPORT), exportEnabled);
-    EnableWindow(GetDlgItem(ctx->clipsPanel, IDC_CLIPS_EXPORT_PRECISE), exportEnabled);
+    setEnabledIfChanged(GetDlgItem(ctx->clipsPanel, IDC_CLIPS_EXPORT), exportEnabled);
+    setEnabledIfChanged(GetDlgItem(ctx->clipsPanel, IDC_CLIPS_EXPORT_PRECISE), exportEnabled);
     UpdateClipsPositionLabel(ctx);
 }
 
@@ -1068,6 +1087,10 @@ bool LoadClipFromSelection(AppContext* ctx, bool reportStatus = true)
         return false;
     }
 
+    // Media Foundation may retain the previous source's current time while
+    // the new source is loading. Force the newly selected clip to its start
+    // before syncing the UI playhead from the engine.
+    ctx->clipsPreviewEngine->SeekMilliseconds(0);
     const auto nativeSize = ctx->clipsPreviewEngine->NativeVideoSize();
     ctx->clipsVideoSourceWidth = nativeSize.first;
     ctx->clipsVideoSourceHeight = nativeSize.second;
@@ -1099,6 +1122,21 @@ bool LoadClipFromSelection(AppContext* ctx, bool reportStatus = true)
     return true;
 }
 
+bool ClipSourceListsEqual(
+    const std::vector<std::filesystem::path>& current,
+    const std::vector<std::filesystem::path>& next)
+{
+    if (current.size() != next.size()) {
+        return false;
+    }
+    for (size_t index = 0; index < current.size(); ++index) {
+        if (current[index].lexically_normal() != next[index].lexically_normal()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void RefreshClipsSourceList(AppContext* ctx)
 {
     if (!ctx || !ctx->clipsSourceCombo) {
@@ -1106,36 +1144,54 @@ void RefreshClipsSourceList(AppContext* ctx)
     }
 
     const auto folderPath = ResolveRecordingsFolderPath(ctx);
-    const std::wstring existingSelection = GetWindowTextString(ctx->clipsSourceCombo);
-    ctx->clipSourceItems.clear();
-    SendMessageW(ctx->clipsSourceCombo, CB_RESETCONTENT, 0, 0);
-
     if (folderPath.empty() || !std::filesystem::exists(folderPath)) {
-        CloseClipMedia(ctx);
-        RefreshClipsPlaybackControls(ctx);
+        const bool hasComboItems = SendMessageW(ctx->clipsSourceCombo, CB_GETCOUNT, 0, 0) > 0;
+        if (!ctx->clipSourceItems.empty() || hasComboItems
+            || ctx->clipsLoaded || !ctx->clipsLoadedPath.empty()) {
+            ctx->clipSourceItems.clear();
+            if (hasComboItems) {
+                SendMessageW(ctx->clipsSourceCombo, CB_RESETCONTENT, 0, 0);
+            }
+            CloseClipMedia(ctx);
+            RefreshClipsPlaybackControls(ctx);
+        }
         SetStatus(ctx, L"Recordings folder unavailable for clips.");
         return;
     }
 
     const std::vector<std::filesystem::path> files = EnumerateRecordingMediaFiles(folderPath);
-
+    const bool sourceListChanged = !ClipSourceListsEqual(ctx->clipSourceItems, files);
+    const std::wstring existingSelection = GetWindowTextString(ctx->clipsSourceCombo);
+    if (sourceListChanged) {
+        ctx->clipSourceItems.clear();
+        SendMessageW(ctx->clipsSourceCombo, CB_RESETCONTENT, 0, 0);
+        ctx->clipSourceItems = files;
+        for (const auto& file : files) {
+            const auto display = file.filename().wstring();
+            SendMessageW(ctx->clipsSourceCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(display.c_str()));
+        }
+    }
     int restoreSelectionIndex = -1;
     for (size_t i = 0; i < files.size(); ++i) {
-        const auto& file = files[i];
-        ctx->clipSourceItems.push_back(file);
-        const auto display = file.filename().wstring();
-        const LRESULT row = SendMessageW(ctx->clipsSourceCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(display.c_str()));
-        if (row >= 0 && _wcsicmp(existingSelection.c_str(), display.c_str()) == 0) {
+        const auto display = files[i].filename().wstring();
+        if (_wcsicmp(existingSelection.c_str(), display.c_str()) == 0) {
             restoreSelectionIndex = static_cast<int>(i);
         }
     }
 
-    if (!ctx->clipSourceItems.empty()) {
+    if (!files.empty()) {
         if (restoreSelectionIndex < 0) {
             restoreSelectionIndex = 0;
         }
-        SendMessageW(ctx->clipsSourceCombo, CB_SETCURSEL, static_cast<WPARAM>(restoreSelectionIndex), 0);
-        const auto selectedPath = ctx->clipSourceItems[static_cast<size_t>(restoreSelectionIndex)];
+        const int currentSelection = static_cast<int>(SendMessageW(
+            ctx->clipsSourceCombo,
+            CB_GETCURSEL,
+            0,
+            0));
+        if (currentSelection != restoreSelectionIndex) {
+            SendMessageW(ctx->clipsSourceCombo, CB_SETCURSEL, static_cast<WPARAM>(restoreSelectionIndex), 0);
+        }
+        const auto selectedPath = files[static_cast<size_t>(restoreSelectionIndex)];
         bool alreadyLoadedSelection = false;
         if (ctx->clipsLoaded && !ctx->clipsLoadedPath.empty()) {
             alreadyLoadedSelection = (ctx->clipsLoadedPath.lexically_normal() == selectedPath.lexically_normal());
@@ -1147,14 +1203,23 @@ void RefreshClipsSourceList(AppContext* ctx)
             RefreshClipsPlaybackControls(ctx);
         }
     } else {
-        CloseClipMedia(ctx);
-        RefreshClipsPlaybackControls(ctx);
+        if (ctx->clipsLoaded || !ctx->clipsLoadedPath.empty() || ctx->clipsDurationMs != 0) {
+            CloseClipMedia(ctx);
+            RefreshClipsPlaybackControls(ctx);
+        }
     }
 }
 
 void SyncClipTimelineFromPlayback(AppContext* ctx)
 {
     if (!ctx || !ctx->clipsLoaded || !ctx->clipsTimeline || ctx->clipsTimelineScrubbing || ctx->clipsDurationMs <= 0) {
+        return;
+    }
+    // A newly loaded clip is paused at the start. Media Foundation can report
+    // a tiny nonzero startup timestamp; converting that against a very short
+    // duration makes the playhead visibly jump forward. Keep an explicitly
+    // left-positioned paused clip at zero until playback or a user seek moves it.
+    if (!ctx->clipsIsPlaying && ctx->clipsTimelinePosition == 0) {
         return;
     }
     const int currentMs = QueryClipPositionMs(ctx, 0);
@@ -1164,8 +1229,14 @@ void SyncClipTimelineFromPlayback(AppContext* ctx)
         // value; the next media event/timer tick will provide the real time.
         return;
     }
-    ctx->clipsTimelinePosition = (std::clamp)(static_cast<int>((static_cast<long long>(currentMs) * kClipsTimelineMax) / (std::max)(1, ctx->clipsDurationMs)), 0, kClipsTimelineMax);
-    InvalidateControlAndParentRegion(ctx->clipsTimeline);
+    const int nextTimelinePosition = (std::clamp)(
+        static_cast<int>((static_cast<long long>(currentMs) * kClipsTimelineMax) / (std::max)(1, ctx->clipsDurationMs)),
+        0,
+        kClipsTimelineMax);
+    if (ctx->clipsTimelinePosition != nextTimelinePosition) {
+        ctx->clipsTimelinePosition = nextTimelinePosition;
+        InvalidateControlAndParentRegion(ctx->clipsTimeline);
+    }
     UpdateClipsPositionLabel(ctx);
 }
 
@@ -3247,6 +3318,7 @@ void SetActiveTab(AppContext* ctx, AppContext::MainTab tab)
     }
     if (showClips) {
         RefreshClipsSourceList(ctx);
+        SyncClipTimelineFromPlayback(ctx);
     }
     if (showChatPrivacy) {
         RefreshChatBlockerImageCombo(ctx, {});
@@ -6255,7 +6327,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 ctx->orchestrator->Tick();
             }
             RefreshLiveStatus(ctx);
-            if (ctx && ctx->clipsLoaded) {
+            if (ctx
+                && ctx->clipsLoaded
+                && ctx->activeTab == AppContext::MainTab::Clips) {
                 if (ctx->clipsPreviewEngine) {
                     const bool isRunning = ctx->clipsPreviewEngine->IsPlaying();
                     if (ctx->clipsIsPlaying != isRunning) {
