@@ -1,12 +1,12 @@
 cmake_minimum_required(VERSION 3.24)
-project(bean VERSION 0.4.0 LANGUAGES CXX)
+project(bean VERSION 0.4.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # When ON (default), the app wires LibObsRecorderEngine at startup. When OFF,
-# it uses MockRecorderEngine instead ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â useful for CI machines without OBS.
+# it uses MockRecorderEngine instead ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â useful for CI machines without OBS.
 option(BEAN_ENABLE_LIBOBS "Use LibObsRecorderEngine in the app (OFF = MockRecorderEngine)" ON)
 option(BEAN_ENABLE_VELOPACK "Enable Velopack updater integration" OFF)
 
