@@ -1229,6 +1229,31 @@ std::wstring GetSelectedComboText(HWND combo)
     return text;
 }
 
+std::wstring GetComboItemText(HWND combo, int index)
+{
+    if (!combo || index < 0) {
+        return {};
+    }
+    const int textLength = static_cast<int>(SendMessageW(
+        combo,
+        CB_GETLBTEXTLEN,
+        static_cast<WPARAM>(index),
+        0));
+    if (textLength < 0) {
+        return {};
+    }
+    std::wstring text(static_cast<size_t>(textLength) + 1, L'\0');
+    if (SendMessageW(
+            combo,
+            CB_GETLBTEXT,
+            static_cast<WPARAM>(index),
+            reinterpret_cast<LPARAM>(text.data())) == CB_ERR) {
+        return {};
+    }
+    text.resize(static_cast<size_t>(textLength));
+    return text;
+}
+
 bool IsSupportedChatBlockerImageExtension(std::wstring extension)
 {
     std::transform(extension.begin(), extension.end(), extension.begin(), towlower);
@@ -1370,6 +1395,58 @@ void RefreshChatBlockerImageCombo(AppContext* ctx, const std::wstring& preferred
         : preferredFileName;
 
     const auto imageFileNames = EnumerateChatBlockerImageFileNames(ctx);
+    const int existingItemCount = static_cast<int>(SendMessageW(
+        ctx->chatBlockerImageCombo,
+        CB_GETCOUNT,
+        0,
+        0));
+    const int expectedItemCount = imageFileNames.empty()
+        ? 1
+        : static_cast<int>(imageFileNames.size());
+    bool contentsMatch = existingItemCount == expectedItemCount;
+    if (contentsMatch && imageFileNames.empty()) {
+        contentsMatch = _wcsicmp(
+                GetComboItemText(ctx->chatBlockerImageCombo, 0).c_str(),
+                L"No images imported") == 0;
+    } else if (contentsMatch) {
+        for (size_t index = 0; index < imageFileNames.size(); ++index) {
+            if (_wcsicmp(
+                    GetComboItemText(ctx->chatBlockerImageCombo, static_cast<int>(index)).c_str(),
+                    imageFileNames[index].c_str()) != 0) {
+                contentsMatch = false;
+                break;
+            }
+        }
+    }
+    if (contentsMatch) {
+        const std::wstring currentSelection = GetSelectedComboText(ctx->chatBlockerImageCombo);
+        const std::wstring desiredSelection = preferredFileName.empty()
+            ? currentSelection
+            : preferredFileName;
+        int desiredIndex = 0;
+        if (!imageFileNames.empty() && !desiredSelection.empty()) {
+            for (size_t index = 0; index < imageFileNames.size(); ++index) {
+                if (_wcsicmp(imageFileNames[index].c_str(), desiredSelection.c_str()) == 0) {
+                    desiredIndex = static_cast<int>(index);
+                    break;
+                }
+            }
+        }
+        const int currentIndex = static_cast<int>(SendMessageW(
+            ctx->chatBlockerImageCombo,
+            CB_GETCURSEL,
+            0,
+            0));
+        if (currentIndex != desiredIndex) {
+            SendMessageW(
+                ctx->chatBlockerImageCombo,
+                CB_SETCURSEL,
+                static_cast<WPARAM>(desiredIndex),
+                0);
+        }
+        return;
+    }
+
     SendMessageW(ctx->chatBlockerImageCombo, CB_RESETCONTENT, 0, 0);
 
     if (imageFileNames.empty()) {
@@ -1421,13 +1498,20 @@ void RefreshChatBlockerImageControls(AppContext* ctx)
     const bool customSelected = ctx->chatBlockerImageCustomRadio
         && SendMessageW(ctx->chatBlockerImageCustomRadio, BM_GETCHECK, 0, 0) == BST_CHECKED;
     if (ctx->chatBlockerImageCombo) {
-        EnableWindow(ctx->chatBlockerImageCombo, customSelected ? TRUE : FALSE);
+        const BOOL shouldEnable = customSelected ? TRUE : FALSE;
+        if (IsWindowEnabled(ctx->chatBlockerImageCombo) != shouldEnable) {
+            EnableWindow(ctx->chatBlockerImageCombo, shouldEnable);
+        }
     }
     if (ctx->chatBlockerImageImportButton) {
-        EnableWindow(ctx->chatBlockerImageImportButton, TRUE);
+        if (!IsWindowEnabled(ctx->chatBlockerImageImportButton)) {
+            EnableWindow(ctx->chatBlockerImageImportButton, TRUE);
+        }
     }
     if (ctx->chatBlockerImageOpenFolderButton) {
-        EnableWindow(ctx->chatBlockerImageOpenFolderButton, TRUE);
+        if (!IsWindowEnabled(ctx->chatBlockerImageOpenFolderButton)) {
+            EnableWindow(ctx->chatBlockerImageOpenFolderButton, TRUE);
+        }
     }
 }
 
