@@ -832,6 +832,8 @@ struct AppContext {
     bool youtubeLinked = false;
     bool youtubeUnlinkConfirmPending = false;
     std::wstring youtubeLastVideoUrl;
+    int youtubeUploadPercent = -1;
+    std::wstring youtubeUploadStatusText;
     RECT youtubeUploadLinkBounds{};
     bool clipsLoaded = false;
     bool clipsIsPlaying = false;

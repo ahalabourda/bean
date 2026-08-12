@@ -2719,11 +2719,18 @@ void SetYouTubeUploadUi(AppContext* ctx, int percent, const std::wstring& text)
     if (!ctx) {
         return;
     }
+    const int clampedPercent = std::clamp(percent, 0, 100);
     if (ctx->youtubeUploadProgress) {
-        SendMessageW(ctx->youtubeUploadProgress, PBM_SETPOS, static_cast<WPARAM>(std::clamp(percent, 0, 100)), 0);
+        if (ctx->youtubeUploadPercent != clampedPercent) {
+            ctx->youtubeUploadPercent = clampedPercent;
+            SendMessageW(ctx->youtubeUploadProgress, PBM_SETPOS, static_cast<WPARAM>(clampedPercent), 0);
+        }
     }
     if (ctx->youtubeUploadStatus) {
-        UpdateTransparentStaticText(ctx->youtubeUploadStatus, text.c_str());
+        if (ctx->youtubeUploadStatusText != text) {
+            ctx->youtubeUploadStatusText = text;
+            UpdateTransparentStaticText(ctx->youtubeUploadStatus, text.c_str());
+        }
     }
 }
 
@@ -2767,6 +2774,24 @@ void SortYouTubeMediaItems(AppContext* ctx)
         ctx->youtubeSortAscending);
 }
 
+bool YouTubeMediaItemsEqual(
+    const std::vector<YouTubeMediaFile>& left,
+    const std::vector<YouTubeMediaFile>& right)
+{
+    if (left.size() != right.size()) {
+        return false;
+    }
+    for (size_t index = 0; index < left.size(); ++index) {
+        if (left[index].path.lexically_normal() != right[index].path.lexically_normal()
+            || left[index].type != right[index].type
+            || left[index].modified != right[index].modified
+            || left[index].size != right[index].size) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void RepopulateYouTubeMediaList(AppContext* ctx)
 {
     if (!ctx || !ctx->youtubeMediaList) {
@@ -2787,12 +2812,16 @@ void UpdateYouTubeMediaSelection(AppContext* ctx)
     const int selectedIndex = GetSelectedYouTubeMediaIndex(ctx);
     if (selectedIndex >= 0 && static_cast<size_t>(selectedIndex) < ctx->youtubeMediaItems.size()) {
         if (ctx->youtubeTitleEdit) {
-            SetWindowTextW(
-                ctx->youtubeTitleEdit,
-                DefaultYouTubeTitle(ctx->youtubeMediaItems[static_cast<size_t>(selectedIndex)].path).c_str());
+            const std::wstring title = DefaultYouTubeTitle(
+                ctx->youtubeMediaItems[static_cast<size_t>(selectedIndex)].path);
+            if (GetWindowTextString(ctx->youtubeTitleEdit) != title) {
+                SetWindowTextW(ctx->youtubeTitleEdit, title.c_str());
+            }
         }
     } else if (ctx->youtubeTitleEdit) {
-        SetWindowTextW(ctx->youtubeTitleEdit, L"");
+        if (!GetWindowTextString(ctx->youtubeTitleEdit).empty()) {
+            SetWindowTextW(ctx->youtubeTitleEdit, L"");
+        }
     }
     RefreshYouTubeUiState(ctx);
 }
@@ -2805,17 +2834,25 @@ void RefreshYouTubeMediaList(AppContext* ctx)
 
     const auto recordingsFolder = ResolveRecordingsFolderPath(ctx);
     if (recordingsFolder.empty() || !DirectoryExists(recordingsFolder.wstring())) {
-        ctx->youtubeMediaItems.clear();
-        RepopulateYouTubeMediaList(ctx);
-        UpdateYouTubeMediaSelection(ctx);
+        if (!ctx->youtubeMediaItems.empty() || ctx->youtubeMediaSelectedIndex != -1) {
+            ctx->youtubeMediaItems.clear();
+            RepopulateYouTubeMediaList(ctx);
+            UpdateYouTubeMediaSelection(ctx);
+        }
         UpdateTransparentStaticText(ctx->youtubeLabel, L"Recordings folder is unavailable.");
         return;
     }
 
+    const auto previousItems = ctx->youtubeMediaItems;
     ctx->youtubeMediaItems = EnumerateYouTubeMediaFiles(recordingsFolder);
     SortYouTubeMediaItems(ctx);
-    RepopulateYouTubeMediaList(ctx);
-    UpdateYouTubeMediaSelection(ctx);
+    const bool mediaListChanged = !YouTubeMediaItemsEqual(previousItems, ctx->youtubeMediaItems);
+    if (mediaListChanged) {
+        RepopulateYouTubeMediaList(ctx);
+        UpdateYouTubeMediaSelection(ctx);
+    } else {
+        RefreshYouTubeUiState(ctx);
+    }
 
     size_t recordingCount = 0;
     size_t clipCount = 0;
@@ -2844,6 +2881,23 @@ void RefreshYouTubeUiState(AppContext* ctx)
     if (!ctx) {
         return;
     }
+    const auto setTextIfChanged = [](HWND control, const std::wstring& text) {
+        if (control && GetWindowTextString(control) != text) {
+            SetWindowTextW(control, text.c_str());
+        }
+    };
+    const auto setVisibleIfChanged = [](HWND control, bool visible) {
+        if (control && (IsWindowVisible(control) != FALSE) != visible) {
+            ShowWindow(control, visible ? SW_SHOW : SW_HIDE);
+        }
+    };
+    const auto setEnabledIfChanged = [](HWND control, BOOL enabled) {
+        if (control && IsWindowEnabled(control) != enabled) {
+            EnableWindow(control, enabled);
+        }
+    };
+    const bool wasOauthConfigured = ctx->youtubeOAuthConfigured;
+    const bool wasLinked = ctx->youtubeLinked;
     const bool oauthConfigured = !GetYouTubeAuthServerUrl().empty();
     const bool linked = !ctx->settings.youtubeRefreshToken.empty();
     ctx->youtubeOAuthConfigured = oauthConfigured;
@@ -2855,34 +2909,35 @@ void RefreshYouTubeUiState(AppContext* ctx)
     const bool canUpload = oauthConfigured && linked && !ctx->youtubeBusy.load() && selectedIndex >= 0 && static_cast<size_t>(selectedIndex) < ctx->youtubeMediaItems.size();
 
     if (ctx->youtubeLinkStatus) {
-        if (!oauthConfigured) {
-            SetWindowTextW(ctx->youtubeLinkStatus, L"OAuth not configured");
-        } else {
-            SetWindowTextW(ctx->youtubeLinkStatus, linked ? L"Linked" : L"Not linked");
+        const std::wstring statusText = !oauthConfigured
+            ? L"OAuth not configured"
+            : (linked ? L"Linked" : L"Not linked");
+        setTextIfChanged(ctx->youtubeLinkStatus, statusText);
+        setVisibleIfChanged(ctx->youtubeLinkStatus, false);
+        if (wasOauthConfigured != oauthConfigured || wasLinked != linked) {
+            InvalidateRect(ctx->youtubeLinkStatus, nullptr, FALSE);
         }
-        ShowWindow(ctx->youtubeLinkStatus, SW_HIDE);
-        InvalidateRect(ctx->youtubeLinkStatus, nullptr, TRUE);
     }
     if (ctx->youtubeLinkButton) {
-        ShowWindow(ctx->youtubeLinkButton, (!linked && oauthConfigured) ? SW_SHOW : SW_HIDE);
-        EnableWindow(ctx->youtubeLinkButton, ctx->youtubeBusy.load() ? FALSE : TRUE);
+        setVisibleIfChanged(ctx->youtubeLinkButton, !linked && oauthConfigured);
+        setEnabledIfChanged(ctx->youtubeLinkButton, ctx->youtubeBusy.load() ? FALSE : TRUE);
     }
     const bool showUnlinkConfirm = linked && ctx->youtubeUnlinkConfirmPending;
     if (ctx->youtubeUnlinkButton) {
-        SetWindowTextW(ctx->youtubeUnlinkButton, L"Unlink Account");
-        ShowWindow(ctx->youtubeUnlinkButton, (linked && !showUnlinkConfirm) ? SW_SHOW : SW_HIDE);
-        EnableWindow(ctx->youtubeUnlinkButton, ctx->youtubeBusy.load() ? FALSE : TRUE);
+        setTextIfChanged(ctx->youtubeUnlinkButton, L"Unlink Account");
+        setVisibleIfChanged(ctx->youtubeUnlinkButton, linked && !showUnlinkConfirm);
+        setEnabledIfChanged(ctx->youtubeUnlinkButton, ctx->youtubeBusy.load() ? FALSE : TRUE);
     }
     if (ctx->youtubeUnlinkConfirmLabel) {
-        ShowWindow(ctx->youtubeUnlinkConfirmLabel, showUnlinkConfirm ? SW_SHOW : SW_HIDE);
+        setVisibleIfChanged(ctx->youtubeUnlinkConfirmLabel, showUnlinkConfirm);
     }
     if (ctx->youtubeUnlinkYesButton) {
-        ShowWindow(ctx->youtubeUnlinkYesButton, showUnlinkConfirm ? SW_SHOW : SW_HIDE);
-        EnableWindow(ctx->youtubeUnlinkYesButton, ctx->youtubeBusy.load() ? FALSE : TRUE);
+        setVisibleIfChanged(ctx->youtubeUnlinkYesButton, showUnlinkConfirm);
+        setEnabledIfChanged(ctx->youtubeUnlinkYesButton, ctx->youtubeBusy.load() ? FALSE : TRUE);
     }
     if (ctx->youtubeUnlinkNoButton) {
-        ShowWindow(ctx->youtubeUnlinkNoButton, showUnlinkConfirm ? SW_SHOW : SW_HIDE);
-        EnableWindow(ctx->youtubeUnlinkNoButton, ctx->youtubeBusy.load() ? FALSE : TRUE);
+        setVisibleIfChanged(ctx->youtubeUnlinkNoButton, showUnlinkConfirm);
+        setEnabledIfChanged(ctx->youtubeUnlinkNoButton, ctx->youtubeBusy.load() ? FALSE : TRUE);
     }
     if (ctx->youtubeAccountLabel) {
         // Transparent STATIC: use UpdateTransparentStaticText so repeated refreshes
@@ -2890,27 +2945,30 @@ void RefreshYouTubeUiState(AppContext* ctx)
         UpdateTransparentStaticText(ctx->youtubeAccountLabel, L"YouTube Account:");
         if (!linked) {
             if (ctx->youtubeAccountLink) {
-                SetWindowTextW(ctx->youtubeAccountLink, L"Not linked");
-                EnableWindow(ctx->youtubeAccountLink, FALSE);
-                ShowWindow(ctx->youtubeAccountLink, SW_SHOW);
+                setTextIfChanged(ctx->youtubeAccountLink, L"Not linked");
+                setEnabledIfChanged(ctx->youtubeAccountLink, FALSE);
+                setVisibleIfChanged(ctx->youtubeAccountLink, true);
             }
         } else if (!ctx->settings.youtubeChannelId.empty()) {
             if (ctx->youtubeAccountLink) {
-                std::wstring text = ToWide(ctx->settings.youtubeChannelTitle.empty() ? ctx->settings.youtubeChannelId : ctx->settings.youtubeChannelTitle);
-                SetWindowTextW(ctx->youtubeAccountLink, text.c_str());
-                EnableWindow(ctx->youtubeAccountLink, TRUE);
-                ShowWindow(ctx->youtubeAccountLink, SW_SHOW);
+                const std::wstring text = ToWide(
+                    ctx->settings.youtubeChannelTitle.empty()
+                        ? ctx->settings.youtubeChannelId
+                        : ctx->settings.youtubeChannelTitle);
+                setTextIfChanged(ctx->youtubeAccountLink, text);
+                setEnabledIfChanged(ctx->youtubeAccountLink, TRUE);
+                setVisibleIfChanged(ctx->youtubeAccountLink, true);
             }
         } else {
             if (ctx->youtubeAccountLink) {
-                SetWindowTextW(ctx->youtubeAccountLink, ctx->youtubeBusy.load() ? L"Resolving..." : L"Linked");
-                EnableWindow(ctx->youtubeAccountLink, FALSE);
-                ShowWindow(ctx->youtubeAccountLink, SW_SHOW);
+                setTextIfChanged(ctx->youtubeAccountLink, ctx->youtubeBusy.load() ? L"Resolving..." : L"Linked");
+                setEnabledIfChanged(ctx->youtubeAccountLink, FALSE);
+                setVisibleIfChanged(ctx->youtubeAccountLink, true);
             }
         }
     }
     if (ctx->youtubeUploadButton) {
-        EnableWindow(ctx->youtubeUploadButton, canUpload ? TRUE : FALSE);
+        setEnabledIfChanged(ctx->youtubeUploadButton, canUpload ? TRUE : FALSE);
     }
 }
 
@@ -5849,7 +5907,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                     InvalidateRect(ctx->recordingsInfoText, nullptr, FALSE);
                 }
             }
-            if (ctx->youtubeMediaList) {
+            if (ctx->activeTab == AppContext::MainTab::YouTube && ctx->youtubeMediaList) {
                 InvalidateRect(ctx->youtubeMediaList, nullptr, FALSE);
             }
         }
