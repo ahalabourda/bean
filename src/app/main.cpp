@@ -3229,9 +3229,22 @@ void RefreshLiveStatus(AppContext* ctx)
     }
 
     const auto now = std::chrono::steady_clock::now();
+    const bool wasMonitoring = ctx->isMonitoring;
     const bool wasRecording = ctx->isRecording;
+    const bool warcraftRecorderWasDetected = ctx->warcraftRecorderDetected;
+    bool warcraftRecorderStatusRefreshed = false;
+    const auto warcraftRecorderPollInterval = ctx->warcraftRecorderDetected
+        ? kWowWindowPollInterval
+        : kWarcraftRecorderPollInterval;
+    if (!ctx->warcraftRecorderLastCheckedAt.has_value()
+        || (now - *ctx->warcraftRecorderLastCheckedAt) >= warcraftRecorderPollInterval) {
+        ctx->warcraftRecorderDetected = bean::core::IsWarcraftRecorderRunning();
+        ctx->warcraftRecorderLastCheckedAt = now;
+        warcraftRecorderStatusRefreshed = true;
+    }
     bool monitoring = ctx->orchestrator->IsMonitoring();
     if (ctx->alwaysOnMonitoring
+        && !ctx->warcraftRecorderDetected
         && !monitoring
         && (!ctx->monitoringLastStartAttemptAt.has_value()
             || (now - *ctx->monitoringLastStartAttemptAt) >= kMonitoringRetryInterval)) {
@@ -3253,7 +3266,6 @@ void RefreshLiveStatus(AppContext* ctx)
         ctx->recordingStartedAt.reset();
         ctx->activeRecordingSessionId = 0;
     }
-    ctx->isMonitoring = monitoring;
     ctx->isRecording = recording;
     if (!monitoring) {
         ctx->autoRecordFailed = false;
@@ -3298,13 +3310,13 @@ void RefreshLiveStatus(AppContext* ctx)
             monitoring = ctx->orchestrator->IsMonitoring();
         }
     }
+    ctx->isMonitoring = monitoring;
+    const bool monitoringStateChanged = (wasMonitoring != ctx->isMonitoring);
     const bool obsWasDetected = ctx->obsInstallDetected;
-    bool obsStatusRefreshed = false;
     if (!ctx->obsInstallLastCheckedAt.has_value()
         || (now - *ctx->obsInstallLastCheckedAt) >= kObsInstallPollInterval) {
         ctx->obsInstallDetected = bean::core::IsUsableObsInstallPresent();
         ctx->obsInstallLastCheckedAt = now;
-        obsStatusRefreshed = true;
     }
     const bool ffmpegWasDetected = ctx->ffmpegDetected;
     // ffmpegStatusRefreshed stays false here: the probe is asynchronous, and the
@@ -3318,34 +3330,21 @@ void RefreshLiveStatus(AppContext* ctx)
         ctx->ffmpegCheckRequested = false;
         BeginFfmpegProbe(ctx);
     }
-    const bool warcraftRecorderWasDetected = ctx->warcraftRecorderDetected;
-    bool warcraftRecorderStatusRefreshed = false;
-    const auto warcraftRecorderPollInterval = ctx->warcraftRecorderDetected
-        ? kWowWindowPollInterval
-        : kWarcraftRecorderPollInterval;
-    if (!ctx->warcraftRecorderLastCheckedAt.has_value()
-        || (now - *ctx->warcraftRecorderLastCheckedAt) >= warcraftRecorderPollInterval) {
-        ctx->warcraftRecorderDetected = bean::core::IsWarcraftRecorderRunning();
-        ctx->warcraftRecorderLastCheckedAt = now;
-        warcraftRecorderStatusRefreshed = true;
-    }
     const bool advancedCombatLoggingWasEnabled = ctx->advancedCombatLoggingEnabled;
-    bool advancedCombatLoggingStatusRefreshed = false;
     if (!ctx->advancedCombatLoggingLastCheckedAt.has_value()
         || (now - *ctx->advancedCombatLoggingLastCheckedAt) >= kWowWindowPollInterval) {
         ctx->advancedCombatLoggingEnabled = DetectAdvancedCombatLoggingForUi(ctx);
         ctx->advancedCombatLoggingLastCheckedAt = now;
-        advancedCombatLoggingStatusRefreshed = true;
     }
 
-    if (ctx->monitorIcon) {
-        InvalidateRect(ctx->monitorIcon, nullptr, TRUE);
+    if (ctx->monitorIcon && monitoringStateChanged) {
+        InvalidateRect(ctx->monitorIcon, nullptr, FALSE);
     }
-    if (ctx->recordIcon) {
-        InvalidateRect(ctx->recordIcon, nullptr, TRUE);
+    if (ctx->recordIcon && recordingStateChanged) {
+        InvalidateRect(ctx->recordIcon, nullptr, FALSE);
     }
-    if (ctx->wowWindowIcon && (wowStatusRefreshed || wowWasDetected != ctx->wowWindowDetected)) {
-        InvalidateRect(ctx->wowWindowIcon, nullptr, TRUE);
+    if (ctx->wowWindowIcon && wowWasDetected != ctx->wowWindowDetected) {
+        InvalidateRect(ctx->wowWindowIcon, nullptr, FALSE);
     }
     if (ctx->wowWindowText) {
         std::wstring wowStatusText;
@@ -3373,15 +3372,15 @@ void RefreshLiveStatus(AppContext* ctx)
         || wowWasHeight != ctx->detectedWowClientHeight) {
         RefreshRecordingResolutionOptions(ctx);
     }
-    if (ctx->obsInstallIcon && (obsStatusRefreshed || obsWasDetected != ctx->obsInstallDetected)) {
-        InvalidateRect(ctx->obsInstallIcon, nullptr, TRUE);
+    if (ctx->obsInstallIcon && obsWasDetected != ctx->obsInstallDetected) {
+        InvalidateRect(ctx->obsInstallIcon, nullptr, FALSE);
     }
     if (ctx->obsInstallText) {
         const wchar_t* obsStatusText = ctx->obsInstallDetected ? L"OBS install detected" : L"OBS install not detected";
         UpdateTransparentStaticText(ctx->obsInstallText, obsStatusText);
     }
-    if (ctx->ffmpegIcon && (ffmpegStatusRefreshed || ffmpegWasDetected != ctx->ffmpegDetected)) {
-        InvalidateRect(ctx->ffmpegIcon, nullptr, TRUE);
+    if (ctx->ffmpegIcon && ffmpegWasDetected != ctx->ffmpegDetected) {
+        InvalidateRect(ctx->ffmpegIcon, nullptr, FALSE);
     }
     if (ctx->ffmpegText) {
         const wchar_t* ffmpegStatusText = ctx->ffmpegDetected ? L"FFmpeg available for trim" : L"FFmpeg not found for trim";
@@ -3400,16 +3399,18 @@ void RefreshLiveStatus(AppContext* ctx)
             warcraftRecorderRowVisibilityChanged = true;
         }
     }
-    if (ctx->warcraftRecorderIcon && (warcraftRecorderStatusRefreshed || warcraftRecorderWasDetected != ctx->warcraftRecorderDetected)) {
+    const bool warcraftRecorderStateChanged =
+        warcraftRecorderWasDetected != ctx->warcraftRecorderDetected;
+    if (ctx->warcraftRecorderIcon && warcraftRecorderStateChanged) {
         const bool shouldShow = ctx->warcraftRecorderDetected;
         const bool currentlyVisible = IsWindowVisible(ctx->warcraftRecorderIcon) != FALSE;
         if (shouldShow != currentlyVisible) {
             ShowWindow(ctx->warcraftRecorderIcon, shouldShow ? SW_SHOW : SW_HIDE);
             warcraftRecorderRowVisibilityChanged = true;
         }
-        InvalidateRect(ctx->warcraftRecorderIcon, nullptr, TRUE);
+        InvalidateRect(ctx->warcraftRecorderIcon, nullptr, FALSE);
     }
-    if (ctx->warcraftRecorderText && (warcraftRecorderStatusRefreshed || warcraftRecorderWasDetected != ctx->warcraftRecorderDetected)) {
+    if (ctx->warcraftRecorderText && warcraftRecorderStateChanged) {
         const bool shouldShow = ctx->warcraftRecorderDetected;
         const bool currentlyVisible = IsWindowVisible(ctx->warcraftRecorderText) != FALSE;
         if (shouldShow != currentlyVisible) {
@@ -3427,8 +3428,8 @@ void RefreshLiveStatus(AppContext* ctx)
         }
     }
     if (ctx->advancedLoggingIcon
-        && (advancedCombatLoggingStatusRefreshed || advancedCombatLoggingWasEnabled != ctx->advancedCombatLoggingEnabled)) {
-        InvalidateRect(ctx->advancedLoggingIcon, nullptr, TRUE);
+        && advancedCombatLoggingWasEnabled != ctx->advancedCombatLoggingEnabled) {
+        InvalidateRect(ctx->advancedLoggingIcon, nullptr, FALSE);
     }
     if (ctx->advancedLoggingText) {
         const wchar_t* advancedLoggingText = ctx->advancedCombatLoggingEnabled
@@ -3470,14 +3471,14 @@ void RefreshLiveStatus(AppContext* ctx)
             || ffmpegWasDetected != ctx->ffmpegDetected
             || warcraftRecorderWasDetected != ctx->warcraftRecorderDetected
             || advancedCombatLoggingWasEnabled != ctx->advancedCombatLoggingEnabled)) {
-        InvalidateRect(ctx->statusTabButton, nullptr, TRUE);
+        InvalidateRect(ctx->statusTabButton, nullptr, FALSE);
     }
     if (ctx->warcraftRecorderDetected) {
-        // If detection happened before status controls were ready (startup), log once
-        // as soon as we can write to the status text/log.
+        // Set the guard before appending because the custom text box emits
+        // EN_CHANGE for programmatic EM_REPLACESEL updates.
         if (!ctx->warcraftRecorderWarningLogged && ctx->statusText) {
-            SetStatus(ctx, L"Warning: Warcraft Recorder is running. Close it while using Bean to avoid recording conflicts.");
             ctx->warcraftRecorderWarningLogged = true;
+            SetStatus(ctx, L"Warning: Warcraft Recorder is running. Close it while using Bean to avoid recording conflicts.");
         }
     } else {
         if (warcraftRecorderStatusRefreshed && warcraftRecorderWasDetected) {
@@ -3486,14 +3487,15 @@ void RefreshLiveStatus(AppContext* ctx)
         ctx->warcraftRecorderWarningLogged = false;
     }
     if (ctx->lengthValue) {
-        if (ctx->recordingStartedAt.has_value()) {
-            const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-                std::chrono::steady_clock::now() - *ctx->recordingStartedAt);
-            SetWindowTextW(ctx->lengthValue, FormatElapsed(elapsed).c_str());
-        } else {
-            SetWindowTextW(ctx->lengthValue, L"00:00:00");
+        const std::wstring displayedLength = ctx->recordingStartedAt.has_value()
+            ? FormatElapsed(std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now() - *ctx->recordingStartedAt))
+            : L"00:00:00";
+        if (ctx->displayedRecordingLength != displayedLength) {
+            ctx->displayedRecordingLength = displayedLength;
+            SetWindowTextW(ctx->lengthValue, displayedLength.c_str());
+            InvalidateRect(ctx->lengthValue, nullptr, FALSE);
         }
-        InvalidateRect(ctx->lengthValue, nullptr, TRUE);
     }
     if (recordingStateChanged && ctx->chatPreview) {
         ctx->chatPreviewLastInvalidateAt.reset();
@@ -3523,10 +3525,16 @@ void RefreshStatusCommandButtons(AppContext* ctx)
     HWND recordStop = GetDlgItem(ctx->statusPanel, IDC_RECORD_STOP);
 
     if (recordStart) {
-        EnableWindow(recordStart, ctx->isRecording ? FALSE : TRUE);
+        const BOOL shouldEnable = ctx->isRecording ? FALSE : TRUE;
+        if (IsWindowEnabled(recordStart) != shouldEnable) {
+            EnableWindow(recordStart, shouldEnable);
+        }
     }
     if (recordStop) {
-        EnableWindow(recordStop, ctx->isRecording ? TRUE : FALSE);
+        const BOOL shouldEnable = ctx->isRecording ? TRUE : FALSE;
+        if (IsWindowEnabled(recordStop) != shouldEnable) {
+            EnableWindow(recordStop, shouldEnable);
+        }
     }
 }
 
@@ -5591,9 +5599,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         SetStatus(ctx, L"Ready.");
         PullSettingsFromUi(ctx);
         ctx->orchestrator->ApplySettings(ctx->settings);
-        std::string autoStartError;
-        ctx->orchestrator->StartMonitoring(autoStartError);
         ctx->alwaysOnMonitoring = true;
+        if (!ctx->warcraftRecorderDetected) {
+            std::string autoStartError;
+            ctx->orchestrator->StartMonitoring(autoStartError);
+        } else {
+            SetStatus(
+                ctx,
+                L"Monitoring not started because Warcraft Recorder is running. "
+                L"Close it and Bean will start monitoring automatically.");
+        }
         RefreshLiveStatus(ctx);
         RECT clientRect{};
         GetClientRect(hwnd, &clientRect);
@@ -5729,6 +5744,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 ApplySelectedTheme(ctx);
                 SaveThemeSettings(ctx);
             }
+            return 0;
+        }
+        if (HIWORD(wParam) == EN_CHANGE && LOWORD(wParam) == IDC_STATUS_TEXT) {
+            // The read-only custom status log is updated programmatically.
+            // Do not feed its EN_CHANGE notifications back into the live
+            // status refresh loop.
             return 0;
         }
         if (HIWORD(wParam) == EN_CHANGE && (LOWORD(wParam) == IDC_OUTPUT_EDIT || LOWORD(wParam) == IDC_LOG_EDIT)) {

@@ -759,6 +759,7 @@ struct AppContext {
     std::optional<std::chrono::steady_clock::time_point> warcraftRecorderLastCheckedAt;
     std::optional<std::chrono::steady_clock::time_point> advancedCombatLoggingLastCheckedAt;
     std::optional<std::chrono::steady_clock::time_point> recordingStartedAt;
+    std::wstring displayedRecordingLength = L"00:00:00";
     std::uint64_t activeRecordingSessionId = 0;
     struct RecordingItem {
         struct ParticipantUi {
