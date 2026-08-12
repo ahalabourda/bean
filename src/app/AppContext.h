@@ -45,6 +45,7 @@ inline constexpr UINT WM_BEAN_FFMPEG_PROBE_COMPLETE = WM_APP + 110;
 inline constexpr UINT WM_BEAN_FILE_LIST_SELECTION = WM_APP + 111;
 inline constexpr UINT WM_BEAN_FILE_LIST_COLUMN_CLICK = WM_APP + 112;
 inline constexpr UINT WM_BEAN_FILE_LIST_DOUBLE_CLICK = WM_APP + 113;
+inline constexpr UINT WM_BEAN_FOLDER_AVAILABILITY_COMPLETE = WM_APP + 114;
 inline constexpr wchar_t kStatusLogFilePrefix[] = L"bean-status-log-";
 inline constexpr wchar_t kStatusLogFileExtension[] = L".txt";
 inline constexpr size_t kStatusLogRetentionCount = 5;
@@ -54,9 +55,11 @@ inline constexpr UINT_PTR kLiveStatusTimerId = 1;
 inline constexpr UINT_PTR kClipsExportStatusTimerId = 2;
 inline constexpr UINT_PTR kConfigurationAutoSaveTimerId = 3;
 inline constexpr UINT_PTR kChatBlockerAutoSaveTimerId = 4;
+inline constexpr UINT_PTR kFolderAvailabilityTimerId = 5;
 // Edit controls raise EN_CHANGE per keystroke. Coalesce them so typing a path
 // does not rewrite config.json and reconfigure the orchestrator per character.
 inline constexpr UINT kAutoSaveDebounceMs = 400;
+inline constexpr UINT kFolderAvailabilityDebounceMs = 250;
 inline constexpr int kClipHotkeyId = 1;
 inline constexpr int kManualStartHotkeyId = 2;
 inline constexpr int kManualStopHotkeyId = 3;
@@ -750,6 +753,8 @@ struct AppContext {
     // Probing ffmpeg means launching it, so it runs on a worker thread and
     // reports back with WM_BEAN_FFMPEG_PROBE_COMPLETE.
     std::atomic<bool> ffmpegProbeInFlight{false};
+    std::atomic<bool> folderAvailabilityProbeInFlight{false};
+    std::uint64_t folderAvailabilityRequestId = 0;
     std::optional<std::chrono::steady_clock::time_point> wowWindowLastCheckedAt;
     int detectedWowClientWidth = 0;
     int detectedWowClientHeight = 0;

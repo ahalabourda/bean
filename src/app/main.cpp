@@ -1980,6 +1980,53 @@ struct FfmpegProbeResult {
     std::optional<std::filesystem::path> executablePath;
 };
 
+struct FolderAvailabilityResult {
+    std::uint64_t requestId = 0;
+    bool outputAvailable = false;
+    bool outputFolderWillBeCreatedOnRecordStart = false;
+    bool wowLogAvailable = false;
+};
+
+void ApplyFolderAvailabilityResult(AppContext* ctx, const FolderAvailabilityResult& result);
+
+void RequestFolderAvailabilityRefresh(AppContext* ctx)
+{
+    if (!ctx || !ctx->mainWindow || ctx->shuttingDown.load(std::memory_order_acquire)) {
+        return;
+    }
+    ++ctx->folderAvailabilityRequestId;
+    SetTimer(ctx->mainWindow, kFolderAvailabilityTimerId, kFolderAvailabilityDebounceMs, nullptr);
+}
+
+void BeginFolderAvailabilityProbe(AppContext* ctx)
+{
+    if (!ctx
+        || !ctx->mainWindow
+        || ctx->shuttingDown.load(std::memory_order_acquire)) {
+        return;
+    }
+    if (ctx->folderAvailabilityProbeInFlight.exchange(true)) {
+        return;
+    }
+
+    const std::uint64_t requestId = ctx->folderAvailabilityRequestId;
+    const std::wstring outputPath = GetWindowTextString(ctx->outputEdit);
+    const std::wstring wowInstallPath = GetWindowTextString(ctx->wowLogEdit);
+    if (!LaunchAppWorker(ctx, [ctx, requestId, outputPath, wowInstallPath]() {
+        auto* result = new FolderAvailabilityResult();
+        result->requestId = requestId;
+        result->outputAvailable = DirectoryExists(outputPath);
+        result->outputFolderWillBeCreatedOnRecordStart =
+            !result->outputAvailable && !outputPath.empty();
+        result->wowLogAvailable = DirectoryExists(wowInstallPath);
+        if (!PostOwnedAppMessage(ctx, WM_BEAN_FOLDER_AVAILABILITY_COMPLETE, result)) {
+            ctx->folderAvailabilityProbeInFlight.store(false, std::memory_order_release);
+        }
+    })) {
+        ctx->folderAvailabilityProbeInFlight.store(false, std::memory_order_release);
+    }
+}
+
 // Launches ffmpeg to confirm it actually runs, so this must never happen on the
 // UI thread. The result comes back via WM_BEAN_FFMPEG_PROBE_COMPLETE.
 void BeginFfmpegProbe(AppContext* ctx)
@@ -3367,7 +3414,6 @@ void RefreshLiveStatus(AppContext* ctx)
         UpdateTransparentStaticText(ctx->gameResolutionText, gameResolutionText.c_str());
     }
     if (recordingStateChanged
-        || wowStatusRefreshed
         || wowWasWidth != ctx->detectedWowClientWidth
         || wowWasHeight != ctx->detectedWowClientHeight) {
         RefreshRecordingResolutionOptions(ctx);
@@ -3970,32 +4016,47 @@ bool EnsureOutputDirectoryReady(const std::filesystem::path& outputDirectory, st
     return true;
 }
 
-void RefreshFolderAvailability(AppContext* ctx)
+void ApplyFolderAvailabilityResult(AppContext* ctx, const FolderAvailabilityResult& result)
 {
     if (!ctx) {
         return;
     }
 
-    const auto outputPath = GetWindowTextString(ctx->outputEdit);
-    const auto wowInstallPath = GetWindowTextString(ctx->wowLogEdit);
+    const bool wasOutputAvailable = ctx->outputAvailable;
+    const bool wasWowLogAvailable = ctx->wowLogAvailable;
+    const bool wasOutputFolderWillBeCreated = ctx->outputFolderWillBeCreatedOnRecordStart;
+    const bool wasConfigurationValid =
+        (wasOutputAvailable || wasOutputFolderWillBeCreated) && wasWowLogAvailable;
 
-    ctx->outputAvailable = DirectoryExists(outputPath);
-    ctx->wowLogAvailable = DirectoryExists(wowInstallPath);
-    ctx->outputFolderWillBeCreatedOnRecordStart = !ctx->outputAvailable && !outputPath.empty();
+    ctx->outputAvailable = result.outputAvailable;
+    ctx->wowLogAvailable = result.wowLogAvailable;
+    ctx->outputFolderWillBeCreatedOnRecordStart = result.outputFolderWillBeCreatedOnRecordStart;
+    const bool outputStatusChanged =
+        wasOutputAvailable != ctx->outputAvailable
+        || wasOutputFolderWillBeCreated != ctx->outputFolderWillBeCreatedOnRecordStart;
+    const bool wowLogStatusChanged = wasWowLogAvailable != ctx->wowLogAvailable;
+    const bool configurationValid =
+        (ctx->outputAvailable || ctx->outputFolderWillBeCreatedOnRecordStart)
+        && ctx->wowLogAvailable;
 
     if (ctx->outputStatus) {
         const wchar_t* outputStatusText = ctx->outputAvailable
             ? L"\x2713"
             : (ctx->outputFolderWillBeCreatedOnRecordStart ? L"(!)" : L"X");
-        SetWindowTextW(ctx->outputStatus, outputStatusText);
-        InvalidateRect(ctx->outputStatus, nullptr, TRUE);
+        if (outputStatusChanged || GetWindowTextString(ctx->outputStatus) != outputStatusText) {
+            SetWindowTextW(ctx->outputStatus, outputStatusText);
+            InvalidateRect(ctx->outputStatus, nullptr, FALSE);
+        }
     }
     if (ctx->wowLogStatus) {
-        SetWindowTextW(ctx->wowLogStatus, ctx->wowLogAvailable ? L"\x2713" : L"X");
-        InvalidateRect(ctx->wowLogStatus, nullptr, TRUE);
+        const wchar_t* wowLogStatusText = ctx->wowLogAvailable ? L"\x2713" : L"X";
+        if (wowLogStatusChanged || GetWindowTextString(ctx->wowLogStatus) != wowLogStatusText) {
+            SetWindowTextW(ctx->wowLogStatus, wowLogStatusText);
+            InvalidateRect(ctx->wowLogStatus, nullptr, FALSE);
+        }
     }
-    if (ctx->configurationTabButton) {
-        InvalidateRect(ctx->configurationTabButton, nullptr, TRUE);
+    if (ctx->configurationTabButton && wasConfigurationValid != configurationValid) {
+        InvalidateRect(ctx->configurationTabButton, nullptr, FALSE);
     }
     if (ctx->activeTab == AppContext::MainTab::Recordings) {
         RefreshRecordingsList(ctx);
@@ -4273,7 +4334,7 @@ void PushSettingsToUi(AppContext* ctx)
     if (ctx->youtubePrivacyCombo) {
         SendMessageW(ctx->youtubePrivacyCombo, CB_SETCURSEL, 0, 0);
     }
-    RefreshFolderAvailability(ctx);
+    RequestFolderAvailabilityRefresh(ctx);
     RefreshYouTubeUiState(ctx);
 }
 
@@ -4313,7 +4374,7 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         const auto folder = PickFolder(hwnd);
         if (!folder.empty()) {
             SetWindowTextW(ctx->outputEdit, folder.c_str());
-            RefreshFolderAvailability(ctx);
+            RequestFolderAvailabilityRefresh(ctx);
         }
         break;
     }
@@ -4321,7 +4382,7 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         const auto folder = PickFolder(hwnd);
         if (!folder.empty()) {
             SetWindowTextW(ctx->wowLogEdit, folder.c_str());
-            RefreshFolderAvailability(ctx);
+            RequestFolderAvailabilityRefresh(ctx);
         }
         break;
     }
@@ -4779,7 +4840,7 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
             SetStatus(ctx, std::wstring(L"Recording start failed: ") + ToWide(prepareError));
             break;
         }
-        RefreshFolderAvailability(ctx);
+        RequestFolderAvailabilityRefresh(ctx);
         ctx->orchestrator->ApplySettings(ctx->settings);
         std::string error;
         ctx->orchestrator->StartManualRecording(error);
@@ -5753,7 +5814,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             return 0;
         }
         if (HIWORD(wParam) == EN_CHANGE && (LOWORD(wParam) == IDC_OUTPUT_EDIT || LOWORD(wParam) == IDC_LOG_EDIT)) {
-            RefreshFolderAvailability(ctx);
+            RequestFolderAvailabilityRefresh(ctx);
             if (ctx) {
                 AutoSaveConfigurationSettings(ctx);
             }
@@ -6088,6 +6149,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             }
             return 0;
         }
+        if (wParam == kFolderAvailabilityTimerId) {
+            KillTimer(hwnd, kFolderAvailabilityTimerId);
+            BeginFolderAvailabilityProbe(ctx);
+            return 0;
+        }
         if (wParam == kConfigurationAutoSaveTimerId) {
             KillTimer(hwnd, kConfigurationAutoSaveTimerId);
             CommitConfigurationSettings(ctx);
@@ -6255,6 +6321,21 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         delete payload;
         return 0;
     }
+    case WM_BEAN_FOLDER_AVAILABILITY_COMPLETE: {
+        auto* result = reinterpret_cast<FolderAvailabilityResult*>(lParam);
+        if (ctx && result) {
+            ctx->folderAvailabilityProbeInFlight.store(false, std::memory_order_release);
+            const bool shouldProbeAgain = result->requestId != ctx->folderAvailabilityRequestId;
+            if (result->requestId == ctx->folderAvailabilityRequestId) {
+                ApplyFolderAvailabilityResult(ctx, *result);
+            }
+            if (shouldProbeAgain) {
+                BeginFolderAvailabilityProbe(ctx);
+            }
+        }
+        delete result;
+        return 0;
+    }
     case WM_BEAN_FFMPEG_PROBE_COMPLETE: {
         auto* result = reinterpret_cast<FfmpegProbeResult*>(lParam);
         if (ctx && result) {
@@ -6297,6 +6378,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             return 0;
         }
         DismissCustomComboPopup();
+        KillTimer(hwnd, kFolderAvailabilityTimerId);
         if (ctx) {
             ctx->alwaysOnMonitoring = false;
             if (ctx->orchestrator) {
@@ -6322,6 +6404,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             ctx->clipsExportInProgress.store(false);
             ctx->youtubeBusy.store(false);
             ctx->ffmpegProbeInFlight.store(false);
+            ctx->folderAvailabilityProbeInFlight.store(false);
         }
         CloseClipMedia(ctx);
         ShutdownTaskbarOverlay(ctx);

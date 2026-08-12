@@ -2995,7 +2995,9 @@ void ShowConfigurationTooltip(AppContext* ctx, HWND anchor, const wchar_t* text)
         x = anchorRect.left - width - 10;
     }
     x = (std::max)(6, x);
-    const int y = anchorRect.top - 2;
+    const int y = anchor == ctx->outputStatus
+        ? anchorRect.bottom + 6
+        : anchorRect.top - 2;
     SetWindowPos(
         ctx->configurationTooltip,
         HWND_TOP,
@@ -4774,7 +4776,10 @@ void ConfigureConfigurationTooltips(AppContext* ctx)
     }
     ctx->configurationTooltip = CreateWindowExW(
         0, L"STATIC", nullptr, WS_CHILD | SS_OWNERDRAW, CW_USEDEFAULT, CW_USEDEFAULT, 260, 44,
-        ctx->mainWindow, reinterpret_cast<HMENU>(IDC_CONFIGURATION_TOOLTIP), nullptr, nullptr);
+        ctx->mainWindow,
+        reinterpret_cast<HMENU>(IDC_CONFIGURATION_TOOLTIP),
+        nullptr,
+        nullptr);
     if (!ctx->configurationTooltip) {
         return;
     }
