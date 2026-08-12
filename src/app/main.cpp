@@ -5769,11 +5769,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             DismissCustomComboPopup();
         }
         if (ctx) {
-            if (ctx->recordingsList) {
-                InvalidateRect(ctx->recordingsList, nullptr, FALSE);
-            }
-            if (ctx->recordingsInfoText) {
-                InvalidateRect(ctx->recordingsInfoText, nullptr, FALSE);
+            if (ctx->activeTab == AppContext::MainTab::Recordings) {
+                if (ctx->recordingsList) {
+                    InvalidateRect(ctx->recordingsList, nullptr, FALSE);
+                }
+                if (ctx->recordingsInfoText) {
+                    InvalidateRect(ctx->recordingsInfoText, nullptr, FALSE);
+                }
             }
             if (ctx->youtubeMediaList) {
                 InvalidateRect(ctx->youtubeMediaList, nullptr, FALSE);

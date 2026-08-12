@@ -3581,9 +3581,11 @@ LRESULT CALLBACK BeanFileListSubclassProc(HWND hwnd, UINT message, WPARAM wParam
             const int row = (y - kBeanFileListHeaderHeight) / kBeanFileListRowHeight;
             const int index = state->scrollOffset + row;
             if (row >= 0 && index >= 0 && static_cast<size_t>(index) < itemCount) {
-                BeanFileListSelection(*state) = index;
-                NotifyBeanFileList(hwnd, WM_BEAN_FILE_LIST_SELECTION, index);
-                InvalidateRect(hwnd, nullptr, FALSE);
+                if (BeanFileListSelection(*state) != index) {
+                    BeanFileListSelection(*state) = index;
+                    NotifyBeanFileList(hwnd, WM_BEAN_FILE_LIST_SELECTION, index);
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                }
             }
             return 0;
         }
@@ -3649,10 +3651,13 @@ LRESULT CALLBACK BeanFileListSubclassProc(HWND hwnd, UINT message, WPARAM wParam
         else if (wParam == VK_HOME) next = 0;
         else if (wParam == VK_END) next = itemCount - 1;
         else break;
-        selected = (std::clamp)(next, 0, itemCount - 1);
-        EnsureBeanFileListSelectionVisible(hwnd, *state);
-        NotifyBeanFileList(hwnd, WM_BEAN_FILE_LIST_SELECTION, selected);
-        InvalidateRect(hwnd, nullptr, FALSE);
+        next = (std::clamp)(next, 0, itemCount - 1);
+        if (selected != next) {
+            selected = next;
+            EnsureBeanFileListSelectionVisible(hwnd, *state);
+            NotifyBeanFileList(hwnd, WM_BEAN_FILE_LIST_SELECTION, selected);
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
         return 0;
     }
     case WM_LBUTTONDBLCLK: {
