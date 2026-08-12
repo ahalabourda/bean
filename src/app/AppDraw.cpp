@@ -3219,7 +3219,7 @@ std::vector<int> BeanFileListColumnWidths(HWND hwnd, BeanFileListKind kind)
         const int dateWidth = (std::max)(94, contentWidth - dungeonWidth - keyWidth - lengthWidth);
         widths = {dungeonWidth, keyWidth, lengthWidth, dateWidth};
     } else {
-        const int typeWidth = (std::max)(86, contentWidth * 12 / 100);
+        const int typeWidth = (std::max)(76, contentWidth * 10 / 100);
         const int dateWidth = (std::max)(130, contentWidth * 23 / 100);
         const int nameWidth = (std::max)(220, contentWidth - typeWidth - dateWidth);
         widths = {typeWidth, nameWidth, dateWidth};
@@ -3270,8 +3270,13 @@ std::vector<std::wstring> BeanFileListRow(const BeanFileListState& state, size_t
         return {item.dungeonName, item.keystoneText, item.durationText, item.dateText};
     }
     const auto& item = state.ctx->youtubeMediaItems[index];
+    const std::wstring typeText = item.type == YouTubeMediaType::Clip
+        ? L"Clip"
+        : (item.triggerReason == "manual" || item.triggerReason.empty()
+            ? L"Manual"
+            : L"M+");
     return {
-        item.type == YouTubeMediaType::Clip ? L"Clip" : L"Recording",
+        typeText,
         item.path.filename().wstring(),
         FormatLocalDate(FileTimeToSystemClock(item.modified))};
 }

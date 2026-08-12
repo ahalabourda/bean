@@ -24,6 +24,7 @@ struct YouTubeMediaFile {
     YouTubeMediaType type = YouTubeMediaType::Recording;
     std::filesystem::file_time_type modified{};
     uintmax_t size = 0;
+    std::string triggerReason;
 };
 
 // .mkv / .mp4 files in a folder, newest write-time first. Shared by the

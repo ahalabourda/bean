@@ -2784,6 +2784,7 @@ bool YouTubeMediaItemsEqual(
     for (size_t index = 0; index < left.size(); ++index) {
         if (left[index].path.lexically_normal() != right[index].path.lexically_normal()
             || left[index].type != right[index].type
+            || left[index].triggerReason != right[index].triggerReason
             || left[index].modified != right[index].modified
             || left[index].size != right[index].size) {
             return false;
@@ -2845,6 +2846,22 @@ void RefreshYouTubeMediaList(AppContext* ctx)
 
     const auto previousItems = ctx->youtubeMediaItems;
     ctx->youtubeMediaItems = EnumerateYouTubeMediaFiles(recordingsFolder);
+    if (ctx->runRepository) {
+        std::string dbError;
+        std::unordered_map<std::string, std::string> triggerReasonsByPath;
+        for (auto& run : ctx->runRepository->ListRuns(dbError)) {
+            triggerReasonsByPath[run.videoPath.string()] = std::move(run.triggerReason);
+        }
+        for (auto& item : ctx->youtubeMediaItems) {
+            if (item.type != YouTubeMediaType::Recording) {
+                continue;
+            }
+            const auto triggerIt = triggerReasonsByPath.find(item.path.string());
+            if (triggerIt != triggerReasonsByPath.end()) {
+                item.triggerReason = triggerIt->second;
+            }
+        }
+    }
     SortYouTubeMediaItems(ctx);
     const bool mediaListChanged = !YouTubeMediaItemsEqual(previousItems, ctx->youtubeMediaItems);
     if (mediaListChanged) {
