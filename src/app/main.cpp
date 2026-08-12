@@ -3423,30 +3423,36 @@ void ApplyAboutUpdateAvailabilityResult(AppContext* ctx, const UpdateAvailabilit
     if (!updateButton || !updateText) {
         return;
     }
+    std::wstring updateTextValue;
+    const wchar_t* updateButtonText = L"Check for updates";
+    bool reportStatus = false;
     switch (payload.availability) {
     case bean::app::UpdateAvailability::UpdateAvailable:
-        UpdateTransparentStaticText(updateText, payload.statusMessage.c_str());
-        SetWindowTextW(updateButton, L"Update now");
-        EnableWindow(updateButton, TRUE);
-        SetStatus(ctx, payload.statusMessage);
+        updateTextValue = payload.statusMessage;
+        updateButtonText = L"Update now";
+        reportStatus = true;
         break;
     case bean::app::UpdateAvailability::UpToDate:
-        UpdateTransparentStaticText(updateText, L"Up to date.");
-        SetWindowTextW(updateButton, L"Check for updates");
-        EnableWindow(updateButton, TRUE);
+        updateTextValue = L"Up to date.";
         break;
     case bean::app::UpdateAvailability::NotConfigured:
-        UpdateTransparentStaticText(updateText, L"Failed to check for updates");
-        SetWindowTextW(updateButton, L"Check for updates");
-        EnableWindow(updateButton, TRUE);
-        SetStatus(ctx, payload.statusMessage);
+        updateTextValue = L"Failed to check for updates";
+        reportStatus = true;
         break;
     case bean::app::UpdateAvailability::Failed:
-        UpdateTransparentStaticText(updateText, L"Failed to check for updates");
-        SetWindowTextW(updateButton, L"Check for updates");
-        EnableWindow(updateButton, TRUE);
-        SetStatus(ctx, payload.statusMessage);
+        updateTextValue = L"Failed to check for updates";
+        reportStatus = true;
         break;
+    }
+    UpdateTransparentStaticText(updateText, updateTextValue.c_str());
+    if (GetWindowTextString(updateButton) != updateButtonText) {
+        SetWindowTextW(updateButton, updateButtonText);
+    }
+    if (!IsWindowEnabled(updateButton)) {
+        EnableWindow(updateButton, TRUE);
+    }
+    if (reportStatus) {
+        SetStatus(ctx, payload.statusMessage);
     }
 }
 
