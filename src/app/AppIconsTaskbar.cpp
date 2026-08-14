@@ -3,7 +3,6 @@
 #include "app/AppUtilities.h"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <vector>
 
@@ -45,25 +44,15 @@ bool IconSetLoaded(const AppIconSet& iconSet)
     return iconSet.smallIcon && iconSet.largeIcon;
 }
 
-HICON LoadBestIdleIconForSize(int iconSize, const std::array<const wchar_t*, 5>& candidates)
-{
-    for (const wchar_t* fileName : candidates) {
-        HICON icon = TryLoadIconFile(IconPathFromExe(fileName), iconSize);
-        if (icon) {
-            return icon;
-        }
-    }
-    return nullptr;
-}
-
 AppIconSet LoadIdleIconSetFromAvailableFiles()
 {
     AppIconSet iconSet;
     const int smallSize = GetSystemMetrics(SM_CXSMICON);
     const int largeSize = GetSystemMetrics(SM_CXICON);
 
-    iconSet.smallIcon = LoadBestIdleIconForSize(smallSize, {kIconFile16, kIconFile32, kIconFile48, kIconFile256});
-    iconSet.largeIcon = LoadBestIdleIconForSize(largeSize, {kIconFile48, kIconFile32, kIconFile256, kIconFile16});
+    const auto iconPath = IconPathFromExe(kIconFileName);
+    iconSet.smallIcon = TryLoadIconFile(iconPath, smallSize);
+    iconSet.largeIcon = TryLoadIconFile(iconPath, largeSize);
     if (!IconSetLoaded(iconSet)) {
         DestroyIconSet(iconSet);
     }

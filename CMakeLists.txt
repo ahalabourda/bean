@@ -66,19 +66,7 @@ if(BEAN_ENABLE_LIBOBS)
     target_compile_definitions(bean_app PRIVATE BEAN_ENABLE_LIBOBS=1)
 endif()
 
-set(BEAN_EMBEDDED_ICON "${CMAKE_SOURCE_DIR}/assets/icons/bean_idle.ico")
-if(NOT EXISTS "${BEAN_EMBEDDED_ICON}")
-    foreach(candidate
-        "${CMAKE_SOURCE_DIR}/assets/icons/bean-256.ico"
-        "${CMAKE_SOURCE_DIR}/assets/icons/bean-48.ico"
-        "${CMAKE_SOURCE_DIR}/assets/icons/bean-32.ico"
-        "${CMAKE_SOURCE_DIR}/assets/icons/bean-16.ico")
-        if(EXISTS "${candidate}")
-            set(BEAN_EMBEDDED_ICON "${candidate}")
-            break()
-        endif()
-    endforeach()
-endif()
+set(BEAN_EMBEDDED_ICON "${CMAKE_SOURCE_DIR}/assets/icons/bean-logo.ico")
 
 if(EXISTS "${BEAN_EMBEDDED_ICON}")
     configure_file(
@@ -89,10 +77,11 @@ if(EXISTS "${BEAN_EMBEDDED_ICON}")
     target_sources(bean_app PRIVATE "${BEAN_GENERATED_DIR}/bean_app_icon.rc")
     target_compile_definitions(bean_app PRIVATE BEAN_HAS_EMBEDDED_ICON=1)
 else()
-    message(STATUS "No app icon found in assets/icons (expected bean_idle.ico or bean-icon-{16,32,48,256}.ico); executable icon resource will be skipped.")
+    message(STATUS "No app icon found at assets/icons/bean-logo.ico; executable icon resource will be skipped.")
 endif()
 
 add_custom_command(TARGET bean_app POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:bean_app>/assets/icons"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:bean_app>/assets/icons"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:bean_app>/assets/spec-icons"
     COMMAND ${CMAKE_COMMAND} -E copy_directory

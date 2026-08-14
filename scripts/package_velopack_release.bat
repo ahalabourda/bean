@@ -33,7 +33,7 @@ if errorlevel 1 (
   goto :fail
 )
 
-set "ICON_PATH=assets\icons\bean-256.ico"
+set "ICON_PATH=assets\icons\bean-logo.ico"
 set "VPK_ICON_ARG="
 if exist "%ICON_PATH%" set "VPK_ICON_ARG=--icon ""%ICON_PATH%"""
 
