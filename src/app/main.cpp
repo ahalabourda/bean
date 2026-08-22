@@ -3411,6 +3411,18 @@ void RefreshRecordingsList(AppContext* ctx)
     ApplyRecordingFilters(ctx);
 }
 
+void RefreshVisibleRecordingFileLists(AppContext* ctx)
+{
+    if (!ctx) {
+        return;
+    }
+    if (ctx->activeTab == AppContext::MainTab::Recordings) {
+        RefreshRecordingsList(ctx);
+    } else if (ctx->activeTab == AppContext::MainTab::YouTube) {
+        RefreshYouTubeMediaList(ctx);
+    }
+}
+
 void RefreshLiveStatus(AppContext* ctx);
 
 void SetActiveTab(AppContext* ctx, AppContext::MainTab tab)
@@ -3612,6 +3624,7 @@ void RefreshLiveStatus(AppContext* ctx)
     }
     const bool recording = (ctx->orchestrator->GetState() == bean::core::OrchestratorState::Recording);
     const auto recordingSessionId = ctx->orchestrator->GetRecordingSessionId();
+    const auto previousRecordingSessionId = ctx->activeRecordingSessionId;
 
     if (recording && (!ctx->isRecording || ctx->activeRecordingSessionId != recordingSessionId)) {
         ctx->recordingStartedAt = std::chrono::steady_clock::now();
@@ -3625,6 +3638,17 @@ void RefreshLiveStatus(AppContext* ctx)
         ctx->autoRecordFailed = false;
     }
     const bool recordingStateChanged = (wasRecording != ctx->isRecording);
+    // Tab switch already rebuilds these lists. If Recordings or YouTube is
+    // already open, a just-finished file would otherwise stay invisible until
+    // the user hits Refresh. Mythic restarts also finish a file without a
+    // recording->idle transition, so treat a session-id change the same way.
+    const bool finishedRecordingShouldAppear =
+        (wasRecording && !recording)
+        || (wasRecording && recording && previousRecordingSessionId != 0
+            && previousRecordingSessionId != recordingSessionId);
+    if (finishedRecordingShouldAppear) {
+        RefreshVisibleRecordingFileLists(ctx);
+    }
     const bool wowWasDetected = ctx->wowWindowDetected;
     const auto wowWasEdition = ctx->detectedWowEdition;
     const int wowWasWidth = ctx->detectedWowClientWidth;
