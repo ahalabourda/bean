@@ -51,6 +51,8 @@ private:
     void UpdateParticipantFromCombatEvent(const std::vector<std::string_view>& fields);
 
     bool isInRun_ = false;
+    std::optional<int> activeChallengeMapId_;
+    std::optional<int> activeInstanceId_;
     std::unordered_map<std::string, MythicParticipant> participantsByGuid_;
     bool participantCollectionComplete_ = false;
 };

@@ -20,11 +20,11 @@ void TestStartAndSuccess()
 {
     bean::log::MythicRunDetector detector;
 
-    auto e1 = detector.ProcessLine("6/20/2026 00:00:00.000-7  CHALLENGE_MODE_START,\"Theater of Pain\",382,200,12,[117,152,10]");
+    auto e1 = detector.ProcessLine("6/20/2026 00:00:00.000-7  CHALLENGE_MODE_START,\"Skyreach\",1209,161,12,[117,152,10]");
     Expect(e1.has_value(), "Expected start event.");
     Expect(e1 && e1->type == bean::log::MythicEventType::RunStarted, "Expected RunStarted type.");
 
-    auto e2 = detector.ProcessLine("6/20/2026 00:32:10.000-7  CHALLENGE_MODE_END,200,1,12,1925000.000000,55.000000,1980.000000");
+    auto e2 = detector.ProcessLine("6/20/2026 00:32:10.000-7  CHALLENGE_MODE_END,1209,1,12,1500000.000000,55.000000,1980.000000");
     Expect(e2.has_value(), "Expected success event.");
     Expect(e2 && e2->type == bean::log::MythicEventType::RunEndedSuccess, "Expected RunEndedSuccess type.");
 }
@@ -36,7 +36,7 @@ void TestStartAndEndEventSuccess()
     auto start = detector.ProcessLine("6/19/2026 21:00:00.000-7  CHALLENGE_MODE_START,402,10");
     Expect(start && start->type == bean::log::MythicEventType::RunStarted, "Run should start for END-event test.");
 
-    auto ended = detector.ProcessLine("6/19/2026 21:30:00.000-7  CHALLENGE_MODE_END,402,1,10,1800000.000000,32.000000,1830.000000");
+    auto ended = detector.ProcessLine("6/19/2026 21:30:00.000-7  CHALLENGE_MODE_END,402,1,10,1700000.000000,32.000000,1830.000000");
     Expect(ended.has_value(), "CHALLENGE_MODE_END should end the run.");
     Expect(ended && ended->type == bean::log::MythicEventType::RunEndedSuccess, "CHALLENGE_MODE_END should map to RunEndedSuccess.");
 }
@@ -50,7 +50,45 @@ void TestEndEventOvertimeMapsToFailure()
 
     auto ended = detector.ProcessLine("6/19/2026 21:30:00.000-7  CHALLENGE_MODE_END,402,1,10,1935000.000000,-105.000000,1830.000000");
     Expect(ended.has_value(), "Overtime CHALLENGE_MODE_END should end the run.");
-    Expect(ended && ended->type == bean::log::MythicEventType::RunEndedFailure, "Negative on-time delta should map CHALLENGE_MODE_END to RunEndedFailure.");
+    Expect(ended && ended->type == bean::log::MythicEventType::RunEndedFailure, "Total time over the dungeon timer should map CHALLENGE_MODE_END to RunEndedFailure.");
+}
+
+void TestRetailNalorakkOvertimeIsFailure()
+{
+    bean::log::MythicRunDetector detector;
+
+    auto start = detector.ProcessLine(
+        "8/22/2026 12:32:39.783-7  CHALLENGE_MODE_START,\"Den of Nalorakk\",2825,586,12,[10,9,147]");
+    Expect(start && start->type == bean::log::MythicEventType::RunStarted, "Nalorakk overtime test should start a run.");
+    Expect(start && start->challengeMapId.has_value() && *start->challengeMapId == 586,
+        "Nalorakk start should parse challenge map id 586.");
+    Expect(start && start->mapId.has_value() && *start->mapId == 2825,
+        "Nalorakk start should parse instance id 2825.");
+
+    // Live 12.1 overtime completion: success=1 and extra floats are positive, but
+    // totalTimeMs 2096035 is past the 32:00 (1920000ms) timer.
+    auto ended = detector.ProcessLine(
+        "8/22/2026 13:04:58.849-7  CHALLENGE_MODE_END,2825,1,12,2096035,316.561829,1392.128906");
+    Expect(ended.has_value(), "Nalorakk overtime END should finish the run.");
+    Expect(ended && ended->type == bean::log::MythicEventType::RunEndedFailure,
+        "Completed overtime should be failure even when the extra END floats are positive.");
+    Expect(ended && ended->challengeMapId.has_value() && *ended->challengeMapId == 586,
+        "END should keep the START challenge map id rather than the instance id.");
+}
+
+void TestRetailTimedTempleIsSuccess()
+{
+    bean::log::MythicRunDetector detector;
+
+    auto start = detector.ProcessLine(
+        "8/18/2026 12:43:23.771-7  CHALLENGE_MODE_START,\"Temple of Sethraliss\",1877,250,10,[162,10,9]");
+    Expect(start && start->type == bean::log::MythicEventType::RunStarted, "Timed temple test should start a run.");
+
+    auto ended = detector.ProcessLine(
+        "8/18/2026 13:07:33.807-7  CHALLENGE_MODE_END,1877,1,10,1460880,328.967194,328.967194");
+    Expect(ended.has_value(), "Timed temple END should finish the run.");
+    Expect(ended && ended->type == bean::log::MythicEventType::RunEndedSuccess,
+        "Total time under the dungeon timer should map to RunEndedSuccess.");
 }
 
 void TestEndEventAllZeroPayloadMapsToFailure()
@@ -272,6 +310,8 @@ int main()
     TestResetEndsActiveRun();
     TestCombatantInfoWithoutPlayerGuidIgnored();
     TestEndEventOvertimeMapsToFailure();
+    TestRetailNalorakkOvertimeIsFailure();
+    TestRetailTimedTempleIsSuccess();
     TestEndEventAllZeroPayloadMapsToFailure();
     TestRetailChallengeStartParsesMapAndLevel();
     TestStartCapturesQuotedDungeonName();

@@ -541,7 +541,7 @@ void TestRecordingOrchestratorPublicMethods()
     Expect(recordingStarted, "CHALLENGE_MODE_START should transition orchestrator to Recording.");
     Expect(orchestrator.GetRecordingSessionId() >= 1, "Recording session id should increment after recording starts.");
 
-    AppendLine(logFile, "6/19/2026 21:30:00.000-7  CHALLENGE_MODE_END,402,1,10,1800000.000000,32.000000,1830.000000");
+    AppendLine(logFile, "6/19/2026 21:30:00.000-7  CHALLENGE_MODE_END,402,1,10,1700000.000000,32.000000,1830.000000");
     const bool returnedToArmed = WaitUntil([&]() {
         orchestrator.Tick();
         return orchestrator.GetState() == bean::core::OrchestratorState::Armed;

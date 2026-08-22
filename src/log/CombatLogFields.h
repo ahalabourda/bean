@@ -23,12 +23,16 @@ enum : std::size_t {
 namespace ChallengeModeEndFields {
 enum : std::size_t {
     Event = 0,
-    ChallengeMapId = 1,
+    // Instance/map id (the same value as CHALLENGE_MODE_START field 2).
+    // This is not the challenge map id used by WowData / C_ChallengeMode.
+    MapId = 1,
     Success = 2,
     KeystoneLevel = 3,
     TotalTimeMs = 4,
-    OnTimeDeltaSeconds = 5,
-    TimerLimitSeconds = 6,
+    // Present on 12.1+ lines, but they are not remaining-time / timer-limit.
+    // Timed vs overtime is decided from TotalTimeMs vs WowData timers.
+    ExtraFloatA = 5,
+    ExtraFloatB = 6,
     MinCount = 7
 };
 }

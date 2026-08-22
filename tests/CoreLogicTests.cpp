@@ -103,6 +103,8 @@ void TestDungeonNameTable()
     Expect(bean::core::DungeonNameForChallengeMap(402) == "Algeth'ar Academy", "Map 402 should resolve.");
     Expect(bean::core::DungeonNameForChallengeMap(161) == "Skyreach", "Map 161 should resolve.");
     Expect(bean::core::DungeonNameForChallengeMap(560) == "Maisara Caverns", "Map 560 should resolve.");
+    Expect(bean::core::DungeonNameForChallengeMap(586) == "Den of Nalorakk", "Season 2 challenge map 586 should resolve.");
+    Expect(bean::core::DungeonNameForChallengeMap(2825) == "Den of Nalorakk", "Season 2 instance id 2825 should resolve.");
     Expect(bean::core::DungeonNameForChallengeMap(99999).empty(), "Unknown map id should return empty.");
 }
 
@@ -538,6 +540,18 @@ void TestDungeonNameTableSeasonCoverage()
     Expect(bean::core::DungeonNameForChallengeMap(557) == "Windrunner Spire", "Map 557 should resolve.");
     Expect(bean::core::DungeonNameForChallengeMap(558) == "Magisters' Terrace", "Map 558 should resolve.");
     Expect(bean::core::DungeonNameForChallengeMap(559) == "Nexus-Point Xenas", "Map 559 should resolve.");
+    Expect(bean::core::DungeonNameForChallengeMap(250) == "Temple of Sethraliss", "Season 2 challenge map 250 should resolve.");
+    Expect(bean::core::DungeonNameForChallengeMap(1877) == "Temple of Sethraliss", "Season 2 instance id 1877 should resolve.");
+}
+
+void TestMythicTimerTable()
+{
+    Expect(bean::core::MythicTimerLimitSeconds(586).value_or(-1) == 32 * 60, "Den of Nalorakk timer is 32:00.");
+    Expect(bean::core::MythicTimerLimitSeconds(2825).value_or(-1) == 32 * 60, "Den of Nalorakk instance id should use the same timer.");
+    Expect(bean::core::MythicTimerLimitSeconds(250).value_or(-1) == 33 * 60, "Temple of Sethraliss timer is 33:00.");
+    Expect(bean::core::MythicTimerLimitSeconds(161).value_or(-1) == 28 * 60, "Skyreach timer is 28:00.");
+    Expect(!bean::core::MythicTimerLimitSeconds(99999).has_value(), "Unknown map id should have no timer.");
+    Expect(!bean::core::MythicTimerLimitSeconds(0).has_value(), "Map id 0 should have no timer.");
 }
 
 void TestKeybindIsBound()
@@ -798,6 +812,7 @@ int main()
     TestStringConversions();
     TestDungeonNameTable();
     TestDungeonNameTableSeasonCoverage();
+    TestMythicTimerTable();
     TestEncoderPresetQualityValues();
     TestAudioCaptureScopeLabels();
     TestKeybindIsBound();

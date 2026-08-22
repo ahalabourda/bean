@@ -1,6 +1,8 @@
 #include "log/MythicRunDetector.h"
 #include "log/CombatLogFields.h"
 
+#include "core/WowData.h"
+
 #include <algorithm>
 #include <charconv>
 #include <cctype>
@@ -192,6 +194,10 @@ void PopulateChallengeDetails(const ParsedCombatLogLine& parsed, MythicEvent& ev
         if (!dungeonName.empty()) {
             event.mapName = dungeonName;
         }
+        if (const auto instanceId = ParseInt(parsed.fields[Start::ChallengeModeId]);
+            instanceId.has_value() && *instanceId > 0) {
+            event.mapId = *instanceId;
+        }
         if (const auto challengeMapId = ParseInt(parsed.fields[Start::ChallengeMapId]);
             challengeMapId.has_value() && *challengeMapId > 0) {
             event.challengeMapId = *challengeMapId;
@@ -207,9 +213,9 @@ void PopulateChallengeDetails(const ParsedCombatLogLine& parsed, MythicEvent& ev
         if (parsed.fields.size() < End::MinCount) {
             return;
         }
-        if (const auto mapId = ParseInt(parsed.fields[End::ChallengeMapId]);
+        if (const auto mapId = ParseInt(parsed.fields[End::MapId]);
             mapId.has_value() && *mapId > 0) {
-            event.challengeMapId = *mapId;
+            event.mapId = *mapId;
         }
         if (const auto level = ParseInt(parsed.fields[End::KeystoneLevel]);
             level.has_value() && *level > 0 && *level <= 40) {
@@ -218,26 +224,52 @@ void PopulateChallengeDetails(const ParsedCombatLogLine& parsed, MythicEvent& ev
     }
 }
 
-bool IsChallengeModeEndTimed(const ParsedCombatLogLine& parsed)
+std::optional<int> TimerLimitSecondsForEnd(
+    const ParsedCombatLogLine& parsed,
+    std::optional<int> startChallengeMapId,
+    std::optional<int> startInstanceId)
+{
+    namespace End = ChallengeModeEndFields;
+    const int endMapId = ParseInt(parsed.fields[End::MapId]).value_or(0);
+    if (const auto timer = bean::core::MythicTimerLimitSeconds(endMapId); timer.has_value()) {
+        return timer;
+    }
+    if (startChallengeMapId.has_value()) {
+        if (const auto timer = bean::core::MythicTimerLimitSeconds(*startChallengeMapId); timer.has_value()) {
+            return timer;
+        }
+    }
+    if (startInstanceId.has_value()) {
+        if (const auto timer = bean::core::MythicTimerLimitSeconds(*startInstanceId); timer.has_value()) {
+            return timer;
+        }
+    }
+    return std::nullopt;
+}
+
+bool IsChallengeModeEndTimed(
+    const ParsedCombatLogLine& parsed,
+    std::optional<int> startChallengeMapId,
+    std::optional<int> startInstanceId)
 {
     namespace End = ChallengeModeEndFields;
     if (parsed.eventName != "CHALLENGE_MODE_END" || parsed.fields.size() < End::MinCount) {
         return false;
     }
 
-    const auto mapId = ParseInt(parsed.fields[End::ChallengeMapId]).value_or(0);
+    const auto mapId = ParseInt(parsed.fields[End::MapId]).value_or(0);
     const auto successFlag = ParseInt(parsed.fields[End::Success]).value_or(0);
     const auto keystoneLevel = ParseInt(parsed.fields[End::KeystoneLevel]).value_or(0);
     const auto totalTimeMs = ParseDouble(parsed.fields[End::TotalTimeMs]).value_or(0.0);
-    const auto onTimeDeltaSeconds = ParseDouble(parsed.fields[End::OnTimeDeltaSeconds]).value_or(0.0);
-    const auto timerLimitSeconds = ParseDouble(parsed.fields[End::TimerLimitSeconds]).value_or(0.0);
+    const auto extraA = ParseDouble(parsed.fields[End::ExtraFloatA]).value_or(0.0);
+    const auto extraB = ParseDouble(parsed.fields[End::ExtraFloatB]).value_or(0.0);
 
     const bool allZeroEndPayload = mapId == 0
         && successFlag == 0
         && keystoneLevel == 0
         && totalTimeMs == 0.0
-        && onTimeDeltaSeconds == 0.0
-        && timerLimitSeconds == 0.0;
+        && extraA == 0.0
+        && extraB == 0.0;
     if (allZeroEndPayload) {
         return false;
     }
@@ -245,7 +277,15 @@ bool IsChallengeModeEndTimed(const ParsedCombatLogLine& parsed)
     if (successFlag <= 0) {
         return false;
     }
-    return onTimeDeltaSeconds >= 0.0;
+
+    const auto timerLimitSeconds = TimerLimitSecondsForEnd(parsed, startChallengeMapId, startInstanceId);
+    if (!timerLimitSeconds.has_value()) {
+        // Completing the dungeon is not the same as beating the timer, and the
+        // extra END floats are not remaining-time on 12.1+. Without a known
+        // timer we cannot mark the run as timed.
+        return false;
+    }
+    return totalTimeMs <= static_cast<double>(*timerLimitSeconds) * 1000.0;
 }
 
 } // namespace
@@ -405,17 +445,25 @@ std::optional<MythicEvent> MythicRunDetector::ProcessLine(const std::string& lin
         participantCollectionComplete_ = false;
         MythicEvent event{MythicEventType::RunStarted, line};
         PopulateChallengeDetails(*parsed, event);
+        activeChallengeMapId_ = event.challengeMapId;
+        activeInstanceId_ = event.mapId;
         return event;
     }
 
     if (parsed->eventName == "CHALLENGE_MODE_END" && isInRun_) {
         isInRun_ = false;
         participantCollectionComplete_ = false;
-        const MythicEventType endType = IsChallengeModeEndTimed(*parsed)
+        const MythicEventType endType = IsChallengeModeEndTimed(
+            *parsed, activeChallengeMapId_, activeInstanceId_)
             ? MythicEventType::RunEndedSuccess
             : MythicEventType::RunEndedFailure;
         MythicEvent event{endType, line};
         PopulateChallengeDetails(*parsed, event);
+        if (activeChallengeMapId_.has_value()) {
+            event.challengeMapId = activeChallengeMapId_;
+        }
+        activeChallengeMapId_.reset();
+        activeInstanceId_.reset();
         return event;
     }
 
@@ -424,6 +472,11 @@ std::optional<MythicEvent> MythicRunDetector::ProcessLine(const std::string& lin
         participantCollectionComplete_ = false;
         MythicEvent event{MythicEventType::RunEndedFailure, line};
         PopulateChallengeDetails(*parsed, event);
+        if (activeChallengeMapId_.has_value()) {
+            event.challengeMapId = activeChallengeMapId_;
+        }
+        activeChallengeMapId_.reset();
+        activeInstanceId_.reset();
         return event;
     }
 
