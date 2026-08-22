@@ -6,8 +6,14 @@ extern VisualTheme gTheme;
 
 enum class BeanFileListKind {
     Recordings,
-    YouTube
+    YouTube,
+    Participants
 };
+
+inline constexpr int kBeanFileListRowHeight = 26;
+inline constexpr int kBeanFileListScrollbarWidth = 14;
+inline constexpr int kBeanParticipantVisibleRows = 5;
+inline constexpr int kBeanParticipantListHeight = kBeanFileListRowHeight * kBeanParticipantVisibleRows;
 
 void EnsureThemeResources();
 void RebuildThemeColorResources();
@@ -29,6 +35,7 @@ HWND CreateBeanTextBox(
     const wchar_t* initialText,
     LONG_PTR style,
     AppContext* ctx);
+void SetBeanTextBoxPlaceholder(HWND hwnd, const wchar_t* placeholder);
 bool CopyBeanTextBoxText(HWND hwnd);
 
 bool IsStyledButtonId(int controlId);

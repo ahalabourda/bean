@@ -78,30 +78,6 @@ namespace {
 
 constexpr char kYouTubeAuthServerUrl[] = "https://andrew.gg/bean/youtube-auth/";
 
-COLORREF ListSelectionBackground(const AppContext* ctx)
-{
-    const bool appActive = ctx && ctx->mainWindow && GetForegroundWindow() == ctx->mainWindow;
-    return appActive ? kColorListSelection : kThemeColors.listSelectionInactive;
-}
-
-void FillThemedListItemBackground(HWND list, const NMLVCUSTOMDRAW* customDraw, COLORREF color)
-{
-    if (!list || !customDraw) {
-        return;
-    }
-    RECT itemRect = customDraw->nmcd.rc;
-    ListView_GetItemRect(
-        list,
-        static_cast<int>(customDraw->nmcd.dwItemSpec),
-        &itemRect,
-        LVIR_BOUNDS);
-    HBRUSH brush = CreateSolidBrush(color);
-    if (brush) {
-        FillRect(customDraw->nmcd.hdc, &itemRect, brush);
-        DeleteObject(brush);
-    }
-}
-
 void ApplyDarkTitleBar(HWND hwnd)
 {
     // Win10 20H1+: dark system chrome. Win11+: exact caption/text/border colors.
@@ -3022,7 +2998,7 @@ void BackfillRecordingParticipantsFromKnownGuids(AppContext* ctx)
     };
 
     std::unordered_map<std::string, GuidProfile> profiles;
-    for (const auto& recording : ctx->recordingItems) {
+    for (const auto& recording : ctx->allRecordingItems) {
         for (const auto& participant : recording.participants) {
             if (participant.guid.empty()) {
                 continue;
@@ -3046,7 +3022,7 @@ void BackfillRecordingParticipantsFromKnownGuids(AppContext* ctx)
         }
     }
 
-    for (auto& recording : ctx->recordingItems) {
+    for (auto& recording : ctx->allRecordingItems) {
         for (auto& participant : recording.participants) {
             if (participant.guid.empty()) {
                 continue;
@@ -3075,40 +3051,13 @@ void BackfillRecordingParticipantsFromKnownGuids(AppContext* ctx)
     }
 }
 
-void UpdateRecordingParticipantsPane(AppContext* ctx, int selectedIndex)
+void UpdateRecordingParticipantsPane(AppContext* ctx, int)
 {
     if (!ctx || !ctx->recordingsInfoText) {
         return;
     }
-
-    ListView_DeleteAllItems(ctx->recordingsInfoText);
-    ctx->visibleParticipantRowColors.clear();
-
-    if (selectedIndex < 0 || static_cast<size_t>(selectedIndex) >= ctx->recordingItems.size()) {
-        return;
-    }
-
-    const auto& recording = ctx->recordingItems[static_cast<size_t>(selectedIndex)];
-    int rowIndex = 0;
-    for (const auto& participant : recording.participants) {
-        std::wstring displayText = participant.name;
-        if (displayText.empty() || IsLikelyInvalidParticipantName(displayText)) {
-            displayText = L"(unknown)";
-        }
-        const int iconIndex = ResolveParticipantSpecIconIndex(ctx, participant.className, participant.specName);
-        if (iconIndex == I_IMAGENONE && !participant.specAbbrev.empty()) {
-            displayText += std::wstring(L" [") + participant.specAbbrev + L"]";
-        }
-        LVITEMW item{};
-        item.mask = LVIF_TEXT | LVIF_IMAGE;
-        item.iItem = rowIndex;
-        item.iSubItem = 0;
-        item.iImage = iconIndex;
-        item.pszText = const_cast<wchar_t*>(displayText.c_str());
-        SendMessageW(ctx->recordingsInfoText, LVM_INSERTITEMW, 0, reinterpret_cast<LPARAM>(&item));
-        ctx->visibleParticipantRowColors.push_back(participant.classColor);
-        ++rowIndex;
-    }
+    ctx->participantsSelectedIndex = -1;
+    RefreshBeanFileList(ctx->recordingsInfoText);
 }
 
 void UpdateRecordingInfoPane(AppContext* ctx, int selectedIndex)
@@ -3122,6 +3071,134 @@ void UpdateRecordingInfoPane(AppContext* ctx, int selectedIndex)
     }
 }
 
+bool RecordingFilterCheckboxChecked(HWND control)
+{
+    return control && SendMessageW(control, BM_GETCHECK, 0, 0) == BST_CHECKED;
+}
+
+RecordingFilterCriteria ReadRecordingFilterCriteria(const AppContext* ctx)
+{
+    RecordingFilterCriteria criteria;
+    if (!ctx) {
+        return criteria;
+    }
+    if (ctx->recordingsFilterTypeManualCheck
+        || ctx->recordingsFilterTypeMythicCheck
+        || ctx->recordingsFilterTypeRaidCheck
+        || ctx->recordingsFilterTypePvpCheck) {
+        criteria.includeManual = RecordingFilterCheckboxChecked(ctx->recordingsFilterTypeManualCheck);
+        criteria.includeMythicPlus = RecordingFilterCheckboxChecked(ctx->recordingsFilterTypeMythicCheck);
+        criteria.includeRaid = RecordingFilterCheckboxChecked(ctx->recordingsFilterTypeRaidCheck);
+        criteria.includePvp = RecordingFilterCheckboxChecked(ctx->recordingsFilterTypePvpCheck);
+    }
+    if (ctx->recordingsFilterTimedCombo) {
+        const LRESULT selected = SendMessageW(ctx->recordingsFilterTimedCombo, CB_GETCURSEL, 0, 0);
+        if (selected == 1) {
+            criteria.outcome = RecordingOutcomeFilter::Timed;
+        } else if (selected == 2) {
+            criteria.outcome = RecordingOutcomeFilter::Depleted;
+        }
+    }
+    if (ctx->recordingsFilterKeyEdit) {
+        RecordingKeyLevelFilter keyFilter;
+        if (ParseRecordingKeyLevelFilter(GetWindowTextString(ctx->recordingsFilterKeyEdit), keyFilter)) {
+            criteria.keyLevel = keyFilter;
+        }
+    }
+    if (ctx->recordingsFilterCharsEdit) {
+        criteria.characterNames = ParseRecordingCharacterNameFilter(GetWindowTextString(ctx->recordingsFilterCharsEdit));
+    }
+    return criteria;
+}
+
+RecordingFilterItem ToRecordingFilterItem(const AppContext::RecordingItem& item)
+{
+    RecordingFilterItem filterItem;
+    filterItem.kind = item.kind;
+    filterItem.timed = item.outcome == AppContext::RecordingItem::Outcome::Success;
+    filterItem.depleted = item.outcome == AppContext::RecordingItem::Outcome::Failure;
+    filterItem.keystoneLevel = item.keystoneLevel;
+    for (const auto& participant : item.participants) {
+        if (!participant.name.empty() && !IsLikelyInvalidParticipantName(participant.name)) {
+            filterItem.participantNames.push_back(participant.name);
+        }
+    }
+    return filterItem;
+}
+
+bool RecordingListDisplayEqual(
+    const std::vector<AppContext::RecordingItem>& left,
+    const std::vector<AppContext::RecordingItem>& right);
+
+void UpdateRecordingsFolderSummary(AppContext* ctx, const std::wstring& folder)
+{
+    if (!ctx || !ctx->recordingsLabel) {
+        return;
+    }
+    std::wostringstream summary;
+    summary << L"Folder: " << folder << L" (";
+    if (ctx->recordingItems.size() != ctx->allRecordingItems.size()) {
+        summary << ctx->recordingItems.size() << L" of " << ctx->allRecordingItems.size();
+    } else {
+        summary << ctx->allRecordingItems.size();
+    }
+    summary << L" file";
+    if (ctx->allRecordingItems.size() != 1) {
+        summary << L"s";
+    }
+    summary << L")";
+    UpdateTransparentStaticText(ctx->recordingsLabel, summary.str().c_str());
+}
+
+void ApplyRecordingFilters(AppContext* ctx)
+{
+    if (!ctx) {
+        return;
+    }
+
+    std::filesystem::path selectedPath;
+    if (ctx->recordingsSelectedIndex >= 0
+        && static_cast<size_t>(ctx->recordingsSelectedIndex) < ctx->recordingItems.size()) {
+        selectedPath = ctx->recordingItems[static_cast<size_t>(ctx->recordingsSelectedIndex)].path;
+    }
+
+    const auto criteria = ReadRecordingFilterCriteria(ctx);
+    std::vector<AppContext::RecordingItem> visible;
+    visible.reserve(ctx->allRecordingItems.size());
+    for (const auto& item : ctx->allRecordingItems) {
+        if (RecordingMatchesFilter(ToRecordingFilterItem(item), criteria)) {
+            visible.push_back(item);
+        }
+    }
+
+    int nextSelectedIndex = -1;
+    if (!selectedPath.empty()) {
+        for (size_t index = 0; index < visible.size(); ++index) {
+            if (visible[index].path == selectedPath) {
+                nextSelectedIndex = static_cast<int>(index);
+                break;
+            }
+        }
+    }
+
+    const bool displayChanged = !RecordingListDisplayEqual(ctx->recordingItems, visible)
+        || ctx->recordingsSelectedIndex != nextSelectedIndex;
+    ctx->recordingItems = std::move(visible);
+    ctx->recordingsSelectedIndex = nextSelectedIndex;
+    if (displayChanged && ctx->recordingsList) {
+        RefreshBeanFileList(ctx->recordingsList);
+        UpdateRecordingInfoPane(ctx, ctx->recordingsSelectedIndex);
+    }
+
+    std::wstring folder = GetWindowTextString(ctx->outputEdit);
+    if (folder.empty()) {
+        folder = ToWide(ctx->settings.outputDirectory.string());
+    }
+    if (!folder.empty() && DirectoryExists(folder)) {
+        UpdateRecordingsFolderSummary(ctx, folder);
+    }
+}
+
 void SortRecordingItems(AppContext* ctx)
 {
     if (!ctx) {
@@ -3130,7 +3207,7 @@ void SortRecordingItems(AppContext* ctx)
 
     const auto column = ctx->recordingSortColumn;
     const bool asc = ctx->recordingSortAscending;
-    std::sort(ctx->recordingItems.begin(), ctx->recordingItems.end(), [column, asc](const AppContext::RecordingItem& a, const AppContext::RecordingItem& b) {
+    std::sort(ctx->allRecordingItems.begin(), ctx->allRecordingItems.end(), [column, asc](const AppContext::RecordingItem& a, const AppContext::RecordingItem& b) {
         int cmp = 0;
         switch (column) {
         case AppContext::RecordingSortColumn::Dungeon:
@@ -3196,6 +3273,7 @@ bool RecordingListDisplayEqual(
             || a.durationText != b.durationText
             || a.dateText != b.dateText
             || a.outcome != b.outcome
+            || a.kind != b.kind
             || a.participants.size() != b.participants.size()) {
             return false;
         }
@@ -3215,7 +3293,8 @@ void RefreshRecordingsList(AppContext* ctx)
     }
 
     if (!DirectoryExists(folder)) {
-        if (!ctx->recordingItems.empty()) {
+        if (!ctx->allRecordingItems.empty() || !ctx->recordingItems.empty()) {
+            ctx->allRecordingItems.clear();
             ctx->recordingItems.clear();
             ctx->recordingsSelectedIndex = -1;
             RefreshBeanFileList(ctx->recordingsList);
@@ -3240,8 +3319,8 @@ void RefreshRecordingsList(AppContext* ctx)
     // Reuse metadata for files whose mtime has not changed, so a tab switch
     // does not rebuild participant rows for every historical recording.
     std::unordered_map<std::wstring, const AppContext::RecordingItem*> previousByPath;
-    previousByPath.reserve(ctx->recordingItems.size());
-    for (const auto& item : ctx->recordingItems) {
+    previousByPath.reserve(ctx->allRecordingItems.size());
+    for (const auto& item : ctx->allRecordingItems) {
         previousByPath.emplace(item.path.wstring(), &item);
     }
 
@@ -3311,6 +3390,9 @@ void RefreshRecordingsList(AppContext* ctx)
                     participantUi.classColor = ClassColorForParticipant(participant.className);
                     row.participants.push_back(std::move(participantUi));
                 }
+                row.kind = ClassifyRecordingKind(
+                    run->triggerReason,
+                    run->keystoneLevel.has_value() || run->challengeMapId.has_value());
             }
         }
 
@@ -3323,22 +3405,10 @@ void RefreshRecordingsList(AppContext* ctx)
         nextItems.push_back(std::move(row));
     }
 
-    const auto previousItems = std::move(ctx->recordingItems);
-    ctx->recordingItems = std::move(nextItems);
+    ctx->allRecordingItems = std::move(nextItems);
     BackfillRecordingParticipantsFromKnownGuids(ctx);
     SortRecordingItems(ctx);
-
-    if (!RecordingListDisplayEqual(previousItems, ctx->recordingItems)) {
-        RepopulateRecordingsListControl(ctx);
-    }
-
-    std::wostringstream summary;
-    summary << L"Folder: " << folder << L" (" << ctx->recordingItems.size() << L" file";
-    if (ctx->recordingItems.size() != 1) {
-        summary << L"s";
-    }
-    summary << L")";
-    UpdateTransparentStaticText(ctx->recordingsLabel, summary.str().c_str());
+    ApplyRecordingFilters(ctx);
 }
 
 void RefreshLiveStatus(AppContext* ctx);
@@ -4431,9 +4501,7 @@ void ApplySelectedTheme(AppContext* ctx)
         ApplyDarkTitleBar(ctx->mainWindow);
     }
     if (ctx->recordingsInfoText) {
-        ListView_SetBkColor(ctx->recordingsInfoText, kColorListRow);
-        ListView_SetTextBkColor(ctx->recordingsInfoText, kColorListRow);
-        ListView_SetTextColor(ctx->recordingsInfoText, kColorTextPrimary);
+        InvalidateRect(ctx->recordingsInfoText, nullptr, FALSE);
     }
     if (ctx->youtubeUploadProgress) {
         SendMessageW(ctx->youtubeUploadProgress, PBM_SETBARCOLOR, 0, static_cast<LPARAM>(kColorListSelection));
@@ -5660,19 +5728,97 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             ctx,
             BeanFileListKind::Recordings);
         ctx->recordingsInfoLabel = CreateWindowW(L"STATIC", L"Characters", WS_VISIBLE | WS_CHILD, 532, 90, 228, rowHeight, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_RECORDINGS_INFO_LABEL), nullptr, nullptr);
-        ctx->recordingsInfoText = CreateWindowW(WC_LISTVIEWW, L"", WS_VISIBLE | WS_CHILD | WS_BORDER | LVS_REPORT | LVS_SINGLESEL | LVS_NOCOLUMNHEADER, 532, 114, 228, 196, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_RECORDINGS_INFO_TEXT), nullptr, nullptr);
-        SetWindowTheme(ctx->recordingsInfoText, L"", L"");
-        ListView_SetExtendedListViewStyle(ctx->recordingsInfoText, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+        ctx->recordingsInfoText = CreateBeanFileList(
+            ctx->recordingsPanel,
+            IDC_RECORDINGS_INFO_TEXT,
+            ctx,
+            BeanFileListKind::Participants);
         EnsureParticipantSpecIconList(ctx);
-        ListView_SetBkColor(ctx->recordingsInfoText, kColorListRow);
-        ListView_SetTextBkColor(ctx->recordingsInfoText, kColorListRow);
-        ListView_SetTextColor(ctx->recordingsInfoText, kColorTextPrimary);
-        LVCOLUMNW partyColumn{};
-        partyColumn.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM | LVCF_FMT;
-        partyColumn.cx = 220;
-        partyColumn.fmt = LVCFMT_LEFT;
-        partyColumn.pszText = const_cast<wchar_t*>(L"");
-        SendMessageW(ctx->recordingsInfoText, LVM_INSERTCOLUMNW, 0, reinterpret_cast<LPARAM>(&partyColumn));
+
+        CreateWindowW(L"STATIC", L"Type", WS_VISIBLE | WS_CHILD, 532, 344, 228, rowHeight, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_RECORDINGS_FILTER_TYPE_LABEL), nullptr, nullptr);
+        ctx->recordingsFilterTypeManualCheck = CreateWindowW(
+            L"BUTTON",
+            L"Manual",
+            WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX | WS_TABSTOP,
+            532,
+            368,
+            108,
+            rowHeight,
+            ctx->recordingsPanel,
+            reinterpret_cast<HMENU>(IDC_RECORDINGS_FILTER_TYPE_MANUAL),
+            nullptr,
+            nullptr);
+        ctx->recordingsFilterTypeMythicCheck = CreateWindowW(
+            L"BUTTON",
+            L"M+",
+            WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX | WS_TABSTOP,
+            646,
+            368,
+            108,
+            rowHeight,
+            ctx->recordingsPanel,
+            reinterpret_cast<HMENU>(IDC_RECORDINGS_FILTER_TYPE_MYTHIC),
+            nullptr,
+            nullptr);
+        ctx->recordingsFilterTypeRaidCheck = CreateWindowW(
+            L"BUTTON",
+            L"Raid",
+            WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX | WS_TABSTOP,
+            532,
+            394,
+            108,
+            rowHeight,
+            ctx->recordingsPanel,
+            reinterpret_cast<HMENU>(IDC_RECORDINGS_FILTER_TYPE_RAID),
+            nullptr,
+            nullptr);
+        ctx->recordingsFilterTypePvpCheck = CreateWindowW(
+            L"BUTTON",
+            L"PvP",
+            WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX | WS_TABSTOP,
+            646,
+            394,
+            108,
+            rowHeight,
+            ctx->recordingsPanel,
+            reinterpret_cast<HMENU>(IDC_RECORDINGS_FILTER_TYPE_PVP),
+            nullptr,
+            nullptr);
+        SendMessageW(ctx->recordingsFilterTypeManualCheck, BM_SETCHECK, BST_CHECKED, 0);
+        SendMessageW(ctx->recordingsFilterTypeMythicCheck, BM_SETCHECK, BST_CHECKED, 0);
+        SendMessageW(ctx->recordingsFilterTypeRaidCheck, BM_SETCHECK, BST_CHECKED, 0);
+        SendMessageW(ctx->recordingsFilterTypePvpCheck, BM_SETCHECK, BST_CHECKED, 0);
+        CreateWindowW(L"STATIC", L"Timed", WS_VISIBLE | WS_CHILD, 532, 428, 228, rowHeight, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_RECORDINGS_FILTER_TIMED_LABEL), nullptr, nullptr);
+        ctx->recordingsFilterTimedCombo = CreateWindowW(
+            L"COMBOBOX",
+            L"",
+            WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_TABSTOP,
+            532,
+            452,
+            228,
+            120,
+            ctx->recordingsPanel,
+            reinterpret_cast<HMENU>(IDC_RECORDINGS_FILTER_TIMED_COMBO),
+            nullptr,
+            nullptr);
+        SendMessageW(ctx->recordingsFilterTimedCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Any"));
+        SendMessageW(ctx->recordingsFilterTimedCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Timed"));
+        SendMessageW(ctx->recordingsFilterTimedCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Depleted"));
+        SendMessageW(ctx->recordingsFilterTimedCombo, CB_SETCURSEL, 0, 0);
+        CreateWindowW(L"STATIC", L"Key level", WS_VISIBLE | WS_CHILD, 532, 486, 228, rowHeight, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_RECORDINGS_FILTER_KEY_LABEL), nullptr, nullptr);
+        ctx->recordingsFilterKeyEdit = CreateBeanTextBox(
+            ctx->recordingsPanel,
+            IDC_RECORDINGS_FILTER_KEY_EDIT,
+            L"",
+            WS_VISIBLE | WS_CHILD | ES_AUTOHSCROLL | WS_TABSTOP,
+            ctx);
+        CreateWindowW(L"STATIC", L"Names", WS_VISIBLE | WS_CHILD, 532, 534, 228, rowHeight, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_RECORDINGS_FILTER_CHARS_LABEL), nullptr, nullptr);
+        ctx->recordingsFilterCharsEdit = CreateBeanTextBox(
+            ctx->recordingsPanel,
+            IDC_RECORDINGS_FILTER_CHARS_EDIT,
+            L"",
+            WS_VISIBLE | WS_CHILD | ES_AUTOHSCROLL | WS_TABSTOP,
+            ctx);
 
         ctx->youtubeLabel = CreateWindowW(L"STATIC", L"Recordings and clips:", WS_VISIBLE | WS_CHILD, 20, 58, 740, rowHeight, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_LABEL), nullptr, nullptr);
         CreateWindowW(L"BUTTON", L"Refresh", WS_VISIBLE | WS_CHILD | WS_TABSTOP, 664, 57, 96, rowHeight + 4, ctx->youtubePanel, reinterpret_cast<HMENU>(IDC_YOUTUBE_REFRESH), nullptr, nullptr);
@@ -5858,6 +6004,19 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ConfigureModernControls(ctx);
         ApplyUiFonts(hwnd);
         ApplyRecordingsFonts(ctx);
+        if (gTheme.mutedHintFont) {
+            const std::array<int, 4> filterHintLabels = {
+                IDC_RECORDINGS_FILTER_TYPE_LABEL,
+                IDC_RECORDINGS_FILTER_TIMED_LABEL,
+                IDC_RECORDINGS_FILTER_KEY_LABEL,
+                IDC_RECORDINGS_FILTER_CHARS_LABEL};
+            for (const int id : filterHintLabels) {
+                HWND label = GetDlgItem(ctx->recordingsPanel, id);
+                if (label) {
+                    SendMessageW(label, WM_SETFONT, reinterpret_cast<WPARAM>(gTheme.mutedHintFont), TRUE);
+                }
+            }
+        }
         HWND autoSaveHint = GetDlgItem(ctx->recorderPanel, IDC_CONFIGURATION_AUTOSAVE_HINT);
         if (autoSaveHint && gTheme.mutedHintFont) {
             SendMessageW(autoSaveHint, WM_SETFONT, reinterpret_cast<WPARAM>(gTheme.mutedHintFont), TRUE);
@@ -5954,7 +6113,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                     ctx->recordingSortAscending = true;
                 }
                 SortRecordingItems(ctx);
-                RepopulateRecordingsListControl(ctx);
+                ApplyRecordingFilters(ctx);
             }
         } else if (ctx && reinterpret_cast<HWND>(wParam) == ctx->youtubeMediaList) {
             const int column = static_cast<int>(lParam);
@@ -6075,6 +6234,33 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             }
             return 0;
         }
+        if (HIWORD(wParam) == EN_CHANGE
+            && (LOWORD(wParam) == IDC_RECORDINGS_FILTER_KEY_EDIT
+                || LOWORD(wParam) == IDC_RECORDINGS_FILTER_CHARS_EDIT)) {
+            if (ctx) {
+                ApplyRecordingFilters(ctx);
+            }
+            return 0;
+        }
+        if (HIWORD(wParam) == CBN_SELCHANGE && LOWORD(wParam) == IDC_RECORDINGS_FILTER_TIMED_COMBO) {
+            if (ctx) {
+                ApplyRecordingFilters(ctx);
+            }
+            return 0;
+        }
+        if (LOWORD(wParam) == IDC_RECORDINGS_FILTER_TIMED_COMBO) {
+            return 0;
+        }
+        if (HIWORD(wParam) == BN_CLICKED
+            && (LOWORD(wParam) == IDC_RECORDINGS_FILTER_TYPE_MANUAL
+                || LOWORD(wParam) == IDC_RECORDINGS_FILTER_TYPE_MYTHIC
+                || LOWORD(wParam) == IDC_RECORDINGS_FILTER_TYPE_RAID
+                || LOWORD(wParam) == IDC_RECORDINGS_FILTER_TYPE_PVP)) {
+            if (ctx) {
+                ApplyRecordingFilters(ctx);
+            }
+            return 0;
+        }
         if (HIWORD(wParam) == CBN_SELCHANGE
             && (LOWORD(wParam) == IDC_ENCODER_COMBO
                 || LOWORD(wParam) == IDC_PRESET_COMBO
@@ -6148,39 +6334,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
     case WM_HSCROLL: {
         if (!ctx) {
             break;
-        }
-        break;
-    }
-    case WM_NOTIFY: {
-        if (!ctx) {
-            break;
-        }
-        auto* hdr = reinterpret_cast<LPNMHDR>(lParam);
-        if (!ctx->recordingsList && !ctx->youtubeMediaList) {
-            break;
-        }
-        if (hdr->idFrom == IDC_RECORDINGS_INFO_TEXT && hdr->code == NM_CUSTOMDRAW) {
-            auto* customDraw = reinterpret_cast<NMLVCUSTOMDRAW*>(lParam);
-            if (customDraw->nmcd.dwDrawStage == CDDS_PREPAINT) {
-                return CDRF_NOTIFYITEMDRAW | CDRF_NOTIFYPOSTPAINT;
-            }
-            if (customDraw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
-                const size_t itemIndex = customDraw->nmcd.dwItemSpec;
-                COLORREF participantColor = kColorTextPrimary;
-                if (itemIndex < ctx->visibleParticipantRowColors.size()) {
-                    participantColor = ctx->visibleParticipantRowColors[itemIndex];
-                }
-                const COLORREF rowBackground = (customDraw->nmcd.uItemState & CDIS_SELECTED)
-                    ? ListSelectionBackground(ctx)
-                    : (((itemIndex % 2) == 0) ? kColorListRow : kColorListRowAlt);
-                FillThemedListItemBackground(ctx->recordingsInfoText, customDraw, rowBackground);
-                customDraw->clrText = participantColor;
-                customDraw->clrTextBk = rowBackground;
-                return CDRF_NEWFONT;
-            }
-            if (customDraw->nmcd.dwDrawStage == CDDS_POSTPAINT) {
-                return CDRF_DODEFAULT;
-            }
         }
         break;
     }
@@ -6272,7 +6425,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         SetTextColor(dc, kColorTextPrimary);
         if (control != ctx->outputStatus && control != ctx->wowLogStatus) {
             const int id = GetDlgCtrlID(control);
-            if (id == IDC_RECORDINGS_LABEL || id == IDC_YOUTUBE_LABEL || id == IDC_YOUTUBE_UPLOAD_STATUS || id == IDC_ABOUT_BUILD_TEXT || id == IDC_ABOUT_FLAVOR_TEXT || id == IDC_YOUTUBE_UNLINK_CONFIRM_LABEL || id == IDC_CONFIGURATION_AUTOSAVE_HINT || id == IDC_KEYBINDS_AUTOSAVE_HINT) {
+            if (id == IDC_RECORDINGS_LABEL || id == IDC_YOUTUBE_LABEL || id == IDC_YOUTUBE_UPLOAD_STATUS || id == IDC_ABOUT_BUILD_TEXT || id == IDC_ABOUT_FLAVOR_TEXT || id == IDC_YOUTUBE_UNLINK_CONFIRM_LABEL || id == IDC_CONFIGURATION_AUTOSAVE_HINT || id == IDC_KEYBINDS_AUTOSAVE_HINT
+                || id == IDC_RECORDINGS_FILTER_TYPE_LABEL
+                || id == IDC_RECORDINGS_FILTER_TIMED_LABEL
+                || id == IDC_RECORDINGS_FILTER_KEY_LABEL
+                || id == IDC_RECORDINGS_FILTER_CHARS_LABEL) {
                 SetTextColor(dc, kColorTextMuted);
             }
         }
@@ -6301,7 +6458,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             || id == IDC_MICROPHONE_NOISE_SUPPRESSION_CHECK
             || id == IDC_CHAT_BLOCKER_ENABLED_CHECK
             || id == IDC_CHAT_BLOCKER_IMAGE_BLANK_RADIO
-            || id == IDC_CHAT_BLOCKER_IMAGE_CUSTOM_RADIO;
+            || id == IDC_CHAT_BLOCKER_IMAGE_CUSTOM_RADIO
+            || id == IDC_RECORDINGS_FILTER_TYPE_MANUAL
+            || id == IDC_RECORDINGS_FILTER_TYPE_MYTHIC
+            || id == IDC_RECORDINGS_FILTER_TYPE_RAID
+            || id == IDC_RECORDINGS_FILTER_TYPE_PVP;
         if (isCheckOrRadioControl) {
             SetBkMode(dc, OPAQUE);
             SetBkColor(dc, kColorPanelBottom);

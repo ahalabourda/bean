@@ -245,6 +245,7 @@ struct BeanTextBoxState {
     bool numberOnly = false;
     bool multiline = false;
     bool readOnly = false;
+    std::wstring placeholder;
     bool selecting = false;
     bool caretVisible = true;
     int scrollX = 0;
@@ -638,6 +639,9 @@ void DrawBeanTextBox(HWND hwnd, HDC dc)
     const int textX = contentLeft - state->scrollX;
     if (!state->text.empty()) {
         TextOutW(dc, textX, textTop, state->text.c_str(), static_cast<int>(state->text.size()));
+    } else if (!state->placeholder.empty()) {
+        SetTextColor(dc, kColorTextMuted);
+        TextOutW(dc, textX, textTop, state->placeholder.c_str(), static_cast<int>(state->placeholder.size()));
     }
     if (GetFocus() == hwnd && state->caretVisible) {
         const int caretX = contentLeft
@@ -1555,6 +1559,7 @@ bool IsStyledComboIdInternal(int controlId)
     case IDC_CUSTOMIZE_THEME_COMBO:
     case IDC_YOUTUBE_PRIVACY_COMBO:
     case IDC_CLIPS_SOURCE_COMBO:
+    case IDC_RECORDINGS_FILTER_TIMED_COMBO:
         return true;
     default:
         return false;
@@ -1586,6 +1591,7 @@ int CustomComboPopupRowLimit(HWND combo, int itemCount)
         rowLimit = 6;
         break;
     case IDC_YOUTUBE_PRIVACY_COMBO:
+    case IDC_RECORDINGS_FILTER_TIMED_COMBO:
         rowLimit = 3;
         break;
     case IDC_CUSTOMIZE_THEME_COMBO:
@@ -1791,7 +1797,13 @@ void DrawCustomComboPopup(HWND popup, HDC dc)
     }
 
     SetBkMode(dc, TRANSPARENT);
-    HGDIOBJ oldFont = gTheme.uiFont ? SelectObject(dc, gTheme.uiFont) : nullptr;
+    HFONT font = state->combo
+        ? reinterpret_cast<HFONT>(SendMessageW(state->combo, WM_GETFONT, 0, 0))
+        : nullptr;
+    if (!font) {
+        font = gTheme.uiFont;
+    }
+    HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
     for (int row = 0; row < metrics.visibleRows; ++row) {
         const int itemIndex = state->scrollOffset + row;
         if (itemIndex >= metrics.itemCount) {
@@ -3070,6 +3082,16 @@ HWND CreateBeanTextBox(
     return textBox;
 }
 
+void SetBeanTextBoxPlaceholder(HWND hwnd, const wchar_t* placeholder)
+{
+    BeanTextBoxState* state = GetBeanTextBoxState(hwnd);
+    if (!state) {
+        return;
+    }
+    state->placeholder = placeholder ? placeholder : L"";
+    BeanTextBoxInvalidate(hwnd);
+}
+
 bool CopyBeanTextBoxText(HWND hwnd)
 {
     const BeanTextBoxState* state = GetBeanTextBoxState(hwnd);
@@ -3175,8 +3197,6 @@ struct BeanFileListState {
 
 std::unordered_map<HWND, BeanFileListState> gBeanFileLists;
 constexpr int kBeanFileListHeaderHeight = 28;
-constexpr int kBeanFileListRowHeight = 26;
-constexpr int kBeanFileListScrollbarWidth = 14;
 
 BeanFileListState* GetBeanFileListState(HWND hwnd)
 {
@@ -3184,15 +3204,40 @@ BeanFileListState* GetBeanFileListState(HWND hwnd)
     return it == gBeanFileLists.end() ? nullptr : &it->second;
 }
 
+int BeanFileListHeaderHeightFor(const BeanFileListState& state)
+{
+    return state.kind == BeanFileListKind::Participants ? 0 : kBeanFileListHeaderHeight;
+}
+
 int& BeanFileListSelection(BeanFileListState& state)
 {
+    if (state.kind == BeanFileListKind::Participants) {
+        return state.ctx->participantsSelectedIndex;
+    }
     return state.kind == BeanFileListKind::Recordings
         ? state.ctx->recordingsSelectedIndex
         : state.ctx->youtubeMediaSelectedIndex;
 }
 
+const std::vector<AppContext::RecordingItem::ParticipantUi>* BeanFileListParticipants(
+    const BeanFileListState& state)
+{
+    if (state.kind != BeanFileListKind::Participants || !state.ctx) {
+        return nullptr;
+    }
+    const int selected = state.ctx->recordingsSelectedIndex;
+    if (selected < 0 || static_cast<size_t>(selected) >= state.ctx->recordingItems.size()) {
+        return nullptr;
+    }
+    return &state.ctx->recordingItems[static_cast<size_t>(selected)].participants;
+}
+
 size_t BeanFileListItemCount(const BeanFileListState& state)
 {
+    if (state.kind == BeanFileListKind::Participants) {
+        const auto* participants = BeanFileListParticipants(state);
+        return participants ? participants->size() : 0;
+    }
     return state.kind == BeanFileListKind::Recordings
         ? state.ctx->recordingItems.size()
         : state.ctx->youtubeMediaItems.size();
@@ -3206,13 +3251,40 @@ COLORREF BeanFileListSelectionBackground(const BeanFileListState& state)
     return appActive ? kColorListSelection : kThemeColors.listSelectionInactive;
 }
 
-std::vector<int> BeanFileListColumnWidths(HWND hwnd, BeanFileListKind kind)
+int BeanFileListScrollRows(const BeanFileListState& state, int clientHeight)
+{
+    const int contentHeight = (std::max)(0, clientHeight - BeanFileListHeaderHeightFor(state));
+    return (std::max)(1, contentHeight / kBeanFileListRowHeight);
+}
+
+int BeanFileListVisibleRows(const BeanFileListState& state, int clientHeight)
+{
+    const int contentHeight = (std::max)(0, clientHeight - BeanFileListHeaderHeightFor(state));
+    return (std::max)(1, (contentHeight + kBeanFileListRowHeight - 1) / kBeanFileListRowHeight);
+}
+
+bool BeanFileListNeedsScrollbar(const BeanFileListState& state, int clientHeight)
+{
+    return static_cast<int>(BeanFileListItemCount(state)) > BeanFileListScrollRows(state, clientHeight);
+}
+
+int BeanFileListScrollbarGutter(const BeanFileListState& state, int clientHeight)
+{
+    if (state.kind == BeanFileListKind::Participants && !BeanFileListNeedsScrollbar(state, clientHeight)) {
+        return 0;
+    }
+    return kBeanFileListScrollbarWidth;
+}
+
+std::vector<int> BeanFileListColumnWidths(HWND hwnd, const BeanFileListState& state)
 {
     RECT rc{};
     GetClientRect(hwnd, &rc);
-    const int contentWidth = (std::max)(100, static_cast<int>(rc.right) - kBeanFileListScrollbarWidth);
+    const int contentWidth = (std::max)(100, static_cast<int>(rc.right) - BeanFileListScrollbarGutter(state, rc.bottom));
     std::vector<int> widths;
-    if (kind == BeanFileListKind::Recordings) {
+    if (state.kind == BeanFileListKind::Participants) {
+        widths = {contentWidth};
+    } else if (state.kind == BeanFileListKind::Recordings) {
         const int dungeonWidth = (std::max)(120, contentWidth * 40 / 100);
         const int keyWidth = (std::max)(56, contentWidth * 11 / 100);
         const int lengthWidth = (std::max)(88, contentWidth * 17 / 100);
@@ -3241,21 +3313,12 @@ std::vector<int> BeanFileListColumnWidths(HWND hwnd, BeanFileListKind kind)
 
 std::vector<std::wstring> BeanFileListHeaders(BeanFileListKind kind)
 {
+    if (kind == BeanFileListKind::Participants) {
+        return {};
+    }
     return kind == BeanFileListKind::Recordings
         ? std::vector<std::wstring>{L"Dungeon", L"Level", L"Duration", L"Date"}
         : std::vector<std::wstring>{L"Type", L"Name", L"Date"};
-}
-
-int BeanFileListVisibleRows(int clientHeight)
-{
-    const int contentHeight = (std::max)(0, clientHeight - kBeanFileListHeaderHeight);
-    return (std::max)(1, (contentHeight + kBeanFileListRowHeight - 1) / kBeanFileListRowHeight);
-}
-
-int BeanFileListScrollRows(int clientHeight)
-{
-    const int contentHeight = (std::max)(0, clientHeight - kBeanFileListHeaderHeight);
-    return (std::max)(1, contentHeight / kBeanFileListRowHeight);
 }
 
 bool BeanFileListColumnCentered(BeanFileListKind kind, size_t column)
@@ -3314,20 +3377,25 @@ void DrawBeanFileList(HWND hwnd, HDC dc)
         DeleteObject(backgroundBrush);
     }
 
-    const auto widths = BeanFileListColumnWidths(hwnd, state->kind);
+    const auto widths = BeanFileListColumnWidths(hwnd, *state);
     const auto headers = BeanFileListHeaders(state->kind);
-    const int contentWidth = clientRect.right - kBeanFileListScrollbarWidth;
-    HBRUSH headerBrush = CreateSolidBrush(kColorInputBg);
-    if (headerBrush) {
-        RECT headerRect{0, 0, contentWidth, kBeanFileListHeaderHeight};
-        FillRect(dc, &headerRect, headerBrush);
-        DeleteObject(headerBrush);
+    const int clientHeight = static_cast<int>(clientRect.bottom);
+    const int scrollbarGutter = BeanFileListScrollbarGutter(*state, clientHeight);
+    const int contentWidth = clientRect.right - scrollbarGutter;
+    const int headerHeight = BeanFileListHeaderHeightFor(*state);
+    if (headerHeight > 0) {
+        HBRUSH headerBrush = CreateSolidBrush(kColorInputBg);
+        if (headerBrush) {
+            RECT headerRect{0, 0, contentWidth, headerHeight};
+            FillRect(dc, &headerRect, headerBrush);
+            DeleteObject(headerBrush);
+        }
     }
 
     const HFONT font = gTheme.recordingsFont ? gTheme.recordingsFont : gTheme.uiFont;
     int columnLeft = 0;
     for (size_t column = 0; column < headers.size(); ++column) {
-        RECT cell{columnLeft, 0, columnLeft + widths[column], kBeanFileListHeaderHeight};
+        RECT cell{columnLeft, 0, columnLeft + widths[column], headerHeight};
         DrawBeanFileListText(
             dc,
             cell,
@@ -3345,19 +3413,19 @@ void DrawBeanFileList(HWND hwnd, HDC dc)
     }
 
     const size_t itemCount = BeanFileListItemCount(*state);
-    const int clientHeight = static_cast<int>(clientRect.bottom);
-    const int visibleRows = BeanFileListVisibleRows(clientHeight);
+    const int visibleRows = BeanFileListVisibleRows(*state, clientHeight);
     const int maxOffset = (std::max)(
         0,
-        static_cast<int>(itemCount) - BeanFileListScrollRows(clientHeight));
+        static_cast<int>(itemCount) - BeanFileListScrollRows(*state, clientHeight));
     state->scrollOffset = (std::clamp)(state->scrollOffset, 0, maxOffset);
     const int selectedIndex = BeanFileListSelection(*state);
+    const auto* participants = BeanFileListParticipants(*state);
     for (int row = 0; row < visibleRows; ++row) {
         const size_t itemIndex = static_cast<size_t>(state->scrollOffset + row);
         if (itemIndex >= itemCount) {
             break;
         }
-        const int top = kBeanFileListHeaderHeight + row * kBeanFileListRowHeight;
+        const int top = headerHeight + row * kBeanFileListRowHeight;
         const bool selected = static_cast<int>(itemIndex) == selectedIndex;
         const COLORREF rowColor = selected
             ? BeanFileListSelectionBackground(*state)
@@ -3369,30 +3437,68 @@ void DrawBeanFileList(HWND hwnd, HDC dc)
             DeleteObject(rowBrush);
         }
 
-        const auto cells = BeanFileListRow(*state, itemIndex);
-        columnLeft = 0;
-        for (size_t column = 0; column < cells.size(); ++column) {
-            RECT cell{columnLeft, top, columnLeft + widths[column], top + kBeanFileListRowHeight};
-            COLORREF textColor = kColorTextPrimary;
-            if (state->kind == BeanFileListKind::Recordings
-                && column == 1
-                && !selected
-                && itemIndex < state->ctx->recordingItems.size()) {
-                const auto outcome = state->ctx->recordingItems[itemIndex].outcome;
-                if (outcome == AppContext::RecordingItem::Outcome::Success) {
-                    textColor = kColorSuccess;
-                } else if (outcome == AppContext::RecordingItem::Outcome::Failure) {
-                    textColor = kColorFailure;
-                }
+        if (state->kind == BeanFileListKind::Participants && participants && itemIndex < participants->size()) {
+            const auto& participant = (*participants)[itemIndex];
+            std::wstring displayText = participant.name;
+            if (displayText.empty() || IsLikelyInvalidParticipantName(displayText)) {
+                displayText = L"(unknown)";
             }
+            const int iconIndex = ResolveParticipantSpecIconIndex(
+                state->ctx,
+                participant.className,
+                participant.specName);
+            if (iconIndex == I_IMAGENONE && !participant.specAbbrev.empty()) {
+                displayText += std::wstring(L" [") + participant.specAbbrev + L"]";
+            }
+            const int iconLeft = 6;
+            const int iconTop = top + (kBeanFileListRowHeight - kSpecIconCanvasSizePx) / 2;
+            if (iconIndex != I_IMAGENONE && state->ctx->participantSpecIcons) {
+                ImageList_Draw(
+                    state->ctx->participantSpecIcons,
+                    iconIndex,
+                    dc,
+                    iconLeft,
+                    iconTop,
+                    ILD_TRANSPARENT);
+            }
+            RECT textRect{
+                iconLeft + kSpecIconCanvasSizePx + 2,
+                top,
+                contentWidth,
+                top + kBeanFileListRowHeight};
             DrawBeanFileListText(
                 dc,
-                cell,
-                cells[column],
-                BeanFileListColumnCentered(state->kind, column),
-                textColor,
+                textRect,
+                displayText,
+                false,
+                participant.classColor,
                 font);
-            columnLeft += widths[column];
+        } else {
+            const auto cells = BeanFileListRow(*state, itemIndex);
+            columnLeft = 0;
+            for (size_t column = 0; column < cells.size(); ++column) {
+                RECT cell{columnLeft, top, columnLeft + widths[column], top + kBeanFileListRowHeight};
+                COLORREF textColor = kColorTextPrimary;
+                if (state->kind == BeanFileListKind::Recordings
+                    && column == 1
+                    && !selected
+                    && itemIndex < state->ctx->recordingItems.size()) {
+                    const auto outcome = state->ctx->recordingItems[itemIndex].outcome;
+                    if (outcome == AppContext::RecordingItem::Outcome::Success) {
+                        textColor = kColorSuccess;
+                    } else if (outcome == AppContext::RecordingItem::Outcome::Failure) {
+                        textColor = kColorFailure;
+                    }
+                }
+                DrawBeanFileListText(
+                    dc,
+                    cell,
+                    cells[column],
+                    BeanFileListColumnCentered(state->kind, column),
+                    textColor,
+                    font);
+                columnLeft += widths[column];
+            }
         }
         HBRUSH gridBrush = CreateSolidBrush(kColorListGrid);
         if (gridBrush) {
@@ -3402,28 +3508,30 @@ void DrawBeanFileList(HWND hwnd, HDC dc)
         }
     }
 
-    HBRUSH scrollbarTrack = CreateSolidBrush(kThemeColors.scrollbarTrack);
-    if (scrollbarTrack) {
-        RECT track{contentWidth, 0, clientRect.right, clientRect.bottom};
-        FillRect(dc, &track, scrollbarTrack);
-        DeleteObject(scrollbarTrack);
-    }
-    if (maxOffset > 0) {
-        const int trackHeight = clientHeight;
-        const int scrollRows = BeanFileListScrollRows(clientHeight);
-        const int thumbHeight = (std::max)(
-            24,
-            (std::min)(trackHeight, trackHeight * scrollRows / (std::max)(1, static_cast<int>(itemCount))));
-        const int travel = (std::max)(1, trackHeight - thumbHeight);
-        const int thumbTop = travel * state->scrollOffset / maxOffset;
-        const COLORREF thumbColor = state->draggingScrollbar
-            ? kThemeColors.scrollbarThumbHover
-            : kThemeColors.scrollbarThumb;
-        HBRUSH thumbBrush = CreateSolidBrush(thumbColor);
-        if (thumbBrush) {
-            RECT thumb{contentWidth + 2, thumbTop + 2, clientRect.right - 2, thumbTop + thumbHeight - 2};
-            FillRect(dc, &thumb, thumbBrush);
-            DeleteObject(thumbBrush);
+    if (scrollbarGutter > 0) {
+        HBRUSH scrollbarTrack = CreateSolidBrush(kThemeColors.scrollbarTrack);
+        if (scrollbarTrack) {
+            RECT track{contentWidth, 0, clientRect.right, clientRect.bottom};
+            FillRect(dc, &track, scrollbarTrack);
+            DeleteObject(scrollbarTrack);
+        }
+        if (maxOffset > 0) {
+            const int trackHeight = clientHeight;
+            const int scrollRows = BeanFileListScrollRows(*state, clientHeight);
+            const int thumbHeight = (std::max)(
+                24,
+                (std::min)(trackHeight, trackHeight * scrollRows / (std::max)(1, static_cast<int>(itemCount))));
+            const int travel = (std::max)(1, trackHeight - thumbHeight);
+            const int thumbTop = travel * state->scrollOffset / maxOffset;
+            const COLORREF thumbColor = state->draggingScrollbar
+                ? kThemeColors.scrollbarThumbHover
+                : kThemeColors.scrollbarThumb;
+            HBRUSH thumbBrush = CreateSolidBrush(thumbColor);
+            if (thumbBrush) {
+                RECT thumb{contentWidth + 2, thumbTop + 2, clientRect.right - 2, thumbTop + thumbHeight - 2};
+                FillRect(dc, &thumb, thumbBrush);
+                DeleteObject(thumbBrush);
+            }
         }
     }
     HBRUSH borderBrush = CreateSolidBrush(kColorInputBorder);
@@ -3454,7 +3562,7 @@ void EnsureBeanFileListSelectionVisible(HWND hwnd, BeanFileListState& state)
     RECT clientRect{};
     GetClientRect(hwnd, &clientRect);
     const int clientHeight = static_cast<int>(clientRect.bottom);
-    const int visibleRows = BeanFileListScrollRows(clientHeight);
+    const int visibleRows = BeanFileListScrollRows(state, clientHeight);
     const int selected = BeanFileListSelection(state);
     if (selected >= 0) {
         if (selected < state.scrollOffset) {
@@ -3549,7 +3657,7 @@ LRESULT CALLBACK BeanFileListSubclassProc(HWND hwnd, UINT message, WPARAM wParam
         const int maxOffset = (std::max)(
             0,
             static_cast<int>(BeanFileListItemCount(*state))
-                - BeanFileListScrollRows(static_cast<int>(clientRect.bottom)));
+                - BeanFileListScrollRows(*state, static_cast<int>(clientRect.bottom)));
         state->scrollOffset = (std::clamp)(state->scrollOffset, 0, maxOffset);
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
@@ -3561,9 +3669,9 @@ LRESULT CALLBACK BeanFileListSubclassProc(HWND hwnd, UINT message, WPARAM wParam
         const int clientHeight = static_cast<int>(rc.bottom);
         const int x = static_cast<int>(static_cast<short>(LOWORD(lParam)));
         const int y = static_cast<int>(static_cast<short>(HIWORD(lParam)));
-        const int contentWidth = rc.right - kBeanFileListScrollbarWidth;
+        const int contentWidth = rc.right - BeanFileListScrollbarGutter(*state, clientHeight);
         const size_t itemCount = BeanFileListItemCount(*state);
-        const int visibleRows = BeanFileListScrollRows(clientHeight);
+        const int visibleRows = BeanFileListScrollRows(*state, clientHeight);
         const int maxOffset = (std::max)(0, static_cast<int>(itemCount) - visibleRows);
         if (x >= contentWidth && maxOffset > 0) {
             const int trackHeight = clientHeight;
@@ -3582,8 +3690,9 @@ LRESULT CALLBACK BeanFileListSubclassProc(HWND hwnd, UINT message, WPARAM wParam
             }
             return 0;
         }
-        if (y >= kBeanFileListHeaderHeight && x < contentWidth) {
-            const int row = (y - kBeanFileListHeaderHeight) / kBeanFileListRowHeight;
+        const int headerHeight = BeanFileListHeaderHeightFor(*state);
+        if (y >= headerHeight && x < contentWidth) {
+            const int row = (y - headerHeight) / kBeanFileListRowHeight;
             const int index = state->scrollOffset + row;
             if (row >= 0 && index >= 0 && static_cast<size_t>(index) < itemCount) {
                 if (BeanFileListSelection(*state) != index) {
@@ -3594,8 +3703,8 @@ LRESULT CALLBACK BeanFileListSubclassProc(HWND hwnd, UINT message, WPARAM wParam
             }
             return 0;
         }
-        if (y < kBeanFileListHeaderHeight && x < contentWidth) {
-            const auto widths = BeanFileListColumnWidths(hwnd, state->kind);
+        if (y < headerHeight && x < contentWidth) {
+            const auto widths = BeanFileListColumnWidths(hwnd, *state);
             int left = 0;
             for (size_t column = 0; column < widths.size(); ++column) {
                 if (x >= left && x < left + widths[column]) {
@@ -3613,7 +3722,7 @@ LRESULT CALLBACK BeanFileListSubclassProc(HWND hwnd, UINT message, WPARAM wParam
             GetClientRect(hwnd, &rc);
             const int clientHeight = static_cast<int>(rc.bottom);
             const int itemCount = static_cast<int>(BeanFileListItemCount(*state));
-            const int visibleRows = BeanFileListScrollRows(clientHeight);
+            const int visibleRows = BeanFileListScrollRows(*state, clientHeight);
             const int maxOffset = (std::max)(0, itemCount - visibleRows);
             const int thumbHeight = (std::max)(
                 24,
@@ -3648,7 +3757,7 @@ LRESULT CALLBACK BeanFileListSubclassProc(HWND hwnd, UINT message, WPARAM wParam
         int next = selected < 0 ? 0 : selected;
         RECT rc{};
         GetClientRect(hwnd, &rc);
-        const int visibleRows = BeanFileListScrollRows(static_cast<int>(rc.bottom));
+        const int visibleRows = BeanFileListScrollRows(*state, static_cast<int>(rc.bottom));
         if (wParam == VK_UP) next -= 1;
         else if (wParam == VK_DOWN) next += 1;
         else if (wParam == VK_PRIOR) next -= visibleRows;
@@ -3667,8 +3776,8 @@ LRESULT CALLBACK BeanFileListSubclassProc(HWND hwnd, UINT message, WPARAM wParam
     }
     case WM_LBUTTONDBLCLK: {
         const int y = static_cast<int>(static_cast<short>(HIWORD(lParam)));
-        if (y >= kBeanFileListHeaderHeight) {
-            const int row = (y - kBeanFileListHeaderHeight) / kBeanFileListRowHeight;
+        if (y >= BeanFileListHeaderHeightFor(*state)) {
+            const int row = (y - BeanFileListHeaderHeightFor(*state)) / kBeanFileListRowHeight;
             const int index = state->scrollOffset + row;
             if (index >= 0 && static_cast<size_t>(index) < BeanFileListItemCount(*state)) {
                 NotifyBeanFileList(hwnd, WM_BEAN_FILE_LIST_DOUBLE_CLICK, index);
@@ -4082,14 +4191,10 @@ void DestroyParticipantSpecIcons(AppContext* ctx)
 
 void EnsureParticipantSpecIconList(AppContext* ctx)
 {
-    if (!ctx || !ctx->recordingsInfoText || ctx->participantSpecIcons) {
+    if (!ctx || ctx->participantSpecIcons) {
         return;
     }
     ctx->participantSpecIcons = ImageList_Create(kSpecIconCanvasSizePx, kSpecIconCanvasSizePx, ILC_COLOR32 | ILC_MASK, 8, 8);
-    if (!ctx->participantSpecIcons) {
-        return;
-    }
-    ListView_SetImageList(ctx->recordingsInfoText, ctx->participantSpecIcons, LVSIL_SMALL);
 }
 
 int ResolveParticipantSpecIconIndex(
@@ -4296,7 +4401,7 @@ void ConfigureModernControls(AppContext* ctx)
         return;
     }
 
-    const std::array<std::pair<HWND, int>, 8> toggleControls = {{
+    const std::array<std::pair<HWND, int>, 12> toggleControls = {{
         {ctx->recorderPanel, IDC_AUDIO_SCOPE_CHECK},
         {ctx->recorderPanel, IDC_AUDIO_SCOPE_WOW_DISCORD_RADIO},
         {ctx->recorderPanel, IDC_AUDIO_SCOPE_ALL_RADIO},
@@ -4305,6 +4410,10 @@ void ConfigureModernControls(AppContext* ctx)
         {ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_ENABLED_CHECK},
         {ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_BLANK_RADIO},
         {ctx->chatPrivacyPanel, IDC_CHAT_BLOCKER_IMAGE_CUSTOM_RADIO},
+        {ctx->recordingsPanel, IDC_RECORDINGS_FILTER_TYPE_MANUAL},
+        {ctx->recordingsPanel, IDC_RECORDINGS_FILTER_TYPE_MYTHIC},
+        {ctx->recordingsPanel, IDC_RECORDINGS_FILTER_TYPE_RAID},
+        {ctx->recordingsPanel, IDC_RECORDINGS_FILTER_TYPE_PVP},
     }};
     for (const auto& [parent, controlId] : toggleControls) {
         if (parent) {
@@ -4315,7 +4424,7 @@ void ConfigureModernControls(AppContext* ctx)
         }
     }
 
-    const std::array<std::pair<HWND, int>, 10> comboControls = {{
+    const std::array<std::pair<HWND, int>, 11> comboControls = {{
         {ctx->recorderPanel, IDC_ENCODER_COMBO},
         {ctx->recorderPanel, IDC_PRESET_COMBO},
         {ctx->recorderPanel, IDC_CONTAINER_COMBO},
@@ -4326,6 +4435,7 @@ void ConfigureModernControls(AppContext* ctx)
         {ctx->keybindsPanel, IDC_CUSTOMIZE_THEME_COMBO},
         {ctx->youtubePanel, IDC_YOUTUBE_PRIVACY_COMBO},
         {ctx->clipsPanel, IDC_CLIPS_SOURCE_COMBO},
+        {ctx->recordingsPanel, IDC_RECORDINGS_FILTER_TIMED_COMBO},
     }};
     for (const auto& [parent, controlId] : comboControls) {
         if (!parent) {
@@ -4396,7 +4506,11 @@ void DrawStyledComboItem(const DRAWITEMSTRUCT* drawInfo)
     textRect.right -= isEditItem ? 32 : 10;
     SetBkMode(drawInfo->hDC, TRANSPARENT);
     SetTextColor(drawInfo->hDC, textColor);
-    HGDIOBJ oldFont = gTheme.uiFont ? SelectObject(drawInfo->hDC, gTheme.uiFont) : nullptr;
+    HFONT font = reinterpret_cast<HFONT>(SendMessageW(drawInfo->hwndItem, WM_GETFONT, 0, 0));
+    if (!font) {
+        font = gTheme.uiFont;
+    }
+    HGDIOBJ oldFont = font ? SelectObject(drawInfo->hDC, font) : nullptr;
     DrawTextW(drawInfo->hDC, text.c_str(), -1, &textRect,
         DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     if (oldFont) {

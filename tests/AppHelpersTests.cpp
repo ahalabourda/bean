@@ -164,6 +164,104 @@ void TestSortYouTubeMediaFiles()
     Expect(files.front().type == YouTubeMediaType::Clip, "Descending type sort should place clips first.");
 }
 
+void TestClassifyRecordingKind()
+{
+    Expect(ClassifyRecordingKind("manual", false) == RecordingKind::Manual, "Manual trigger is Manual.");
+    Expect(ClassifyRecordingKind("mythic-start", false) == RecordingKind::MythicPlus, "Mythic trigger is M+.");
+    Expect(ClassifyRecordingKind("raid-start", false) == RecordingKind::Raid, "Raid trigger is Raid.");
+    Expect(ClassifyRecordingKind("pvp", false) == RecordingKind::Pvp, "PvP trigger is PvP.");
+    Expect(ClassifyRecordingKind("arena", false) == RecordingKind::Pvp, "Arena trigger is PvP.");
+    Expect(ClassifyRecordingKind("", true) == RecordingKind::MythicPlus, "Keystone metadata without trigger is M+.");
+    Expect(ClassifyRecordingKind("", false) == RecordingKind::Manual, "No trigger and no mythic metadata is Manual.");
+    Expect(ClassifyRecordingKind("MYTHIC-START", false) == RecordingKind::MythicPlus, "Trigger match is case-insensitive.");
+}
+
+void TestParseRecordingKeyLevelFilter()
+{
+    RecordingKeyLevelFilter filter;
+    Expect(ParseRecordingKeyLevelFilter(L"", filter) && !filter.active, "Empty key filter is inactive.");
+    Expect(ParseRecordingKeyLevelFilter(L"  ", filter) && !filter.active, "Whitespace key filter is inactive.");
+    Expect(ParseRecordingKeyLevelFilter(L"17", filter) && filter.active && filter.minLevel == 17 && filter.maxLevel == 17,
+        "Single key level should match itself.");
+    Expect(ParseRecordingKeyLevelFilter(L"+12", filter) && filter.active && filter.minLevel == 12 && filter.maxLevel == 12,
+        "Leading plus should be accepted.");
+    Expect(ParseRecordingKeyLevelFilter(L"12-16", filter) && filter.active && filter.minLevel == 12 && filter.maxLevel == 16,
+        "Inclusive range should parse.");
+    Expect(ParseRecordingKeyLevelFilter(L" 12 - 16 ", filter) && filter.active && filter.minLevel == 12 && filter.maxLevel == 16,
+        "Range whitespace should be ignored.");
+    Expect(ParseRecordingKeyLevelFilter(L"16-12", filter) && filter.active && filter.minLevel == 12 && filter.maxLevel == 16,
+        "Reversed range should swap.");
+    Expect(!ParseRecordingKeyLevelFilter(L"12-", filter), "Trailing hyphen should fail.");
+    Expect(!ParseRecordingKeyLevelFilter(L"abc", filter), "Non-numeric key filter should fail.");
+    Expect(!ParseRecordingKeyLevelFilter(L"12-16-18", filter), "Three-part range should fail.");
+}
+
+void TestParseRecordingCharacterNameFilter()
+{
+    Expect(ParseRecordingCharacterNameFilter(L"").empty(), "Empty character filter has no names.");
+    const auto one = ParseRecordingCharacterNameFilter(L" Ibblez ");
+    Expect(one.size() == 1 && one.front() == L"Ibblez", "Single name should trim.");
+    const auto two = ParseRecordingCharacterNameFilter(L"Ibblez, Taek");
+    Expect(two.size() == 2 && two[0] == L"Ibblez" && two[1] == L"Taek", "Comma-separated names should split.");
+    const auto skipped = ParseRecordingCharacterNameFilter(L"Ibblez,, ,Taek,");
+    Expect(skipped.size() == 2, "Empty tokens should be skipped.");
+}
+
+void TestRecordingMatchesFilter()
+{
+    RecordingFilterItem mythicTimed;
+    mythicTimed.kind = RecordingKind::MythicPlus;
+    mythicTimed.timed = true;
+    mythicTimed.keystoneLevel = 14;
+    mythicTimed.participantNames = {L"Ibblez", L"Taek"};
+
+    RecordingFilterItem mythicDepleted = mythicTimed;
+    mythicDepleted.timed = false;
+    mythicDepleted.depleted = true;
+    mythicDepleted.keystoneLevel = 11;
+
+    RecordingFilterItem manual;
+    manual.kind = RecordingKind::Manual;
+    manual.participantNames = {L"Ibblez"};
+
+    RecordingFilterCriteria criteria;
+    Expect(RecordingMatchesFilter(mythicTimed, criteria), "Default criteria should show M+ timed runs.");
+    Expect(RecordingMatchesFilter(manual, criteria), "Default criteria should show manuals.");
+    Expect(!RecordingFilterIsRestricting(criteria), "Default criteria is not restricting.");
+
+    criteria.includeManual = false;
+    Expect(!RecordingMatchesFilter(manual, criteria), "Unchecked Manual should hide manuals.");
+    Expect(RecordingMatchesFilter(mythicTimed, criteria), "Unchecked Manual should still show M+.");
+    Expect(RecordingFilterIsRestricting(criteria), "Hiding a type is restricting.");
+
+    criteria = {};
+    criteria.includeMythicPlus = false;
+    Expect(!RecordingMatchesFilter(mythicTimed, criteria), "Unchecked M+ should hide mythic runs.");
+
+    criteria = {};
+    criteria.outcome = RecordingOutcomeFilter::Timed;
+    Expect(RecordingMatchesFilter(mythicTimed, criteria), "Timed filter should keep timed runs.");
+    Expect(!RecordingMatchesFilter(mythicDepleted, criteria), "Timed filter should hide depleted runs.");
+    Expect(!RecordingMatchesFilter(manual, criteria), "Timed filter should hide manuals without an outcome.");
+
+    criteria.outcome = RecordingOutcomeFilter::Depleted;
+    Expect(RecordingMatchesFilter(mythicDepleted, criteria), "Depleted filter should keep depleted runs.");
+    Expect(!RecordingMatchesFilter(mythicTimed, criteria), "Depleted filter should hide timed runs.");
+
+    criteria = {};
+    Expect(ParseRecordingKeyLevelFilter(L"12-16", criteria.keyLevel), "Test range should parse.");
+    Expect(RecordingMatchesFilter(mythicTimed, criteria), "Range 12-16 should keep +14.");
+    Expect(!RecordingMatchesFilter(mythicDepleted, criteria), "Range 12-16 should hide +11.");
+    Expect(!RecordingMatchesFilter(manual, criteria), "Key filter should hide recordings without a level.");
+
+    criteria = {};
+    criteria.characterNames = ParseRecordingCharacterNameFilter(L"ibb, taek");
+    Expect(RecordingMatchesFilter(mythicTimed, criteria), "Comma names should AND-match case-insensitively.");
+    Expect(!RecordingMatchesFilter(manual, criteria), "Missing party member should fail the AND match.");
+    criteria.characterNames = ParseRecordingCharacterNameFilter(L"voke");
+    Expect(!RecordingMatchesFilter(mythicTimed, criteria), "Unrelated name should hide the recording.");
+}
+
 } // namespace
 
 int main()
@@ -177,6 +275,10 @@ int main()
     TestEnumerateRecordingMediaFiles();
     TestEnumerateYouTubeMediaFiles();
     TestSortYouTubeMediaFiles();
+    TestClassifyRecordingKind();
+    TestParseRecordingKeyLevelFilter();
+    TestParseRecordingCharacterNameFilter();
+    TestRecordingMatchesFilter();
 
     if (gFailures == 0) {
         std::cout << "All app helper tests passed.\n";

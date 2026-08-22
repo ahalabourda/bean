@@ -542,6 +542,18 @@ enum ControlId {
     IDC_RECORDINGS_OPEN_DB_FOLDER,
     IDC_RECORDINGS_INFO_LABEL,
     IDC_RECORDINGS_INFO_TEXT,
+    IDC_RECORDINGS_FILTER_LABEL,
+    IDC_RECORDINGS_FILTER_TYPE_LABEL,
+    IDC_RECORDINGS_FILTER_TYPE_MANUAL,
+    IDC_RECORDINGS_FILTER_TYPE_MYTHIC,
+    IDC_RECORDINGS_FILTER_TYPE_RAID,
+    IDC_RECORDINGS_FILTER_TYPE_PVP,
+    IDC_RECORDINGS_FILTER_TIMED_LABEL,
+    IDC_RECORDINGS_FILTER_TIMED_COMBO,
+    IDC_RECORDINGS_FILTER_KEY_LABEL,
+    IDC_RECORDINGS_FILTER_KEY_EDIT,
+    IDC_RECORDINGS_FILTER_CHARS_LABEL,
+    IDC_RECORDINGS_FILTER_CHARS_EDIT,
     IDC_YOUTUBE_LABEL,
     IDC_YOUTUBE_MEDIA_LIST,
     IDC_YOUTUBE_REFRESH,
@@ -691,6 +703,13 @@ struct AppContext {
     HWND recordingsInfoLabel = nullptr;
     HWND recordingsLabel = nullptr;
     HWND recordingsInfoText = nullptr;
+    HWND recordingsFilterTypeManualCheck = nullptr;
+    HWND recordingsFilterTypeMythicCheck = nullptr;
+    HWND recordingsFilterTypeRaidCheck = nullptr;
+    HWND recordingsFilterTypePvpCheck = nullptr;
+    HWND recordingsFilterTimedCombo = nullptr;
+    HWND recordingsFilterKeyEdit = nullptr;
+    HWND recordingsFilterCharsEdit = nullptr;
     HWND youtubeLabel = nullptr;
     HWND youtubeMediaList = nullptr;
     HWND youtubeUploadProgress = nullptr;
@@ -786,16 +805,18 @@ struct AppContext {
         std::wstring keystoneText = L"-";
         std::wstring durationText = L"--:--:--";
         std::wstring dateText;
+        RecordingKind kind = RecordingKind::Manual;
         int keystoneLevel = -1;
         Outcome outcome = Outcome::Unknown;
         std::chrono::seconds duration = std::chrono::seconds::zero();
         std::filesystem::file_time_type modified{};
         std::vector<ParticipantUi> participants;
     };
+    std::vector<RecordingItem> allRecordingItems;
     std::vector<RecordingItem> recordingItems;
     std::vector<YouTubeMediaFile> youtubeMediaItems;
-    std::vector<COLORREF> visibleParticipantRowColors;
     int recordingsSelectedIndex = -1;
+    int participantsSelectedIndex = -1;
     int youtubeMediaSelectedIndex = -1;
     HIMAGELIST participantSpecIcons = nullptr;
     std::unordered_map<std::string, int> participantSpecIconIndexByKey;

@@ -1,7 +1,6 @@
 #include "app/AppLayout.h"
+#include "app/AppDraw.h"
 #include "app/AppPrerequisites.h"
-
-#include <commctrl.h>
 
 #include <algorithm>
 
@@ -209,9 +208,16 @@ void LayoutRecordingsPanel(AppContext* ctx, int panelWidth, int panelHeight)
     const int listHeight = (std::max)(180, panelHeight - listTop - 20);
 
     constexpr int participantsGap = 12;
-    const int participantsWidth = (std::max)(170, (std::min)(240, panelWidth / 4));
+    const int participantsWidth = (std::max)(190, (std::min)(250, panelWidth / 4));
     const int listWidth = (std::max)(240, right - LayoutMetrics::kPanelInset - participantsWidth - participantsGap);
     const int participantsLeft = LayoutMetrics::kPanelInset + listWidth + participantsGap;
+    constexpr int typeCheckGap = 6;
+    const int typeCheckWidth = (std::max)(84, (participantsWidth - typeCheckGap) / 2);
+
+    const int charactersListHeight = kBeanParticipantListHeight;
+    const int charactersListTop = listTop + LayoutMetrics::kRowHeight;
+    constexpr int sectionGap = 10;
+    int filterY = charactersListTop + charactersListHeight + sectionGap;
 
     MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_LABEL, LayoutMetrics::kPanelInset, LayoutMetrics::kPanelInset, right - LayoutMetrics::kPanelInset, LayoutMetrics::kRowHeight);
     MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_REFRESH, LayoutMetrics::kPanelInset, 52, 100, LayoutMetrics::kButtonHeight);
@@ -219,11 +225,27 @@ void LayoutRecordingsPanel(AppContext* ctx, int panelWidth, int panelHeight)
     MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_OPEN_DB_FOLDER, LayoutMetrics::kPanelInset + 240, 52, 130, LayoutMetrics::kButtonHeight);
     MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_LIST, LayoutMetrics::kPanelInset, listTop, listWidth, listHeight);
     MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_INFO_LABEL, participantsLeft, listTop, participantsWidth, LayoutMetrics::kRowHeight);
-    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_INFO_TEXT, participantsLeft, listTop + LayoutMetrics::kRowHeight, participantsWidth, (std::max)(100, listHeight - LayoutMetrics::kRowHeight));
-    if (ctx->recordingsInfoText) {
-        ListView_SetColumnWidth(ctx->recordingsInfoText, 0, (std::max)(80, participantsWidth - 8));
-    }
+    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_INFO_TEXT, participantsLeft, charactersListTop, participantsWidth, charactersListHeight);
 
+    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_FILTER_TYPE_LABEL, participantsLeft, filterY, participantsWidth, 20);
+    filterY += 22;
+    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_FILTER_TYPE_MANUAL, participantsLeft, filterY, typeCheckWidth, 24);
+    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_FILTER_TYPE_MYTHIC, participantsLeft + typeCheckWidth + typeCheckGap, filterY, typeCheckWidth, 24);
+    filterY += 24;
+    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_FILTER_TYPE_RAID, participantsLeft, filterY, typeCheckWidth, 24);
+    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_FILTER_TYPE_PVP, participantsLeft + typeCheckWidth + typeCheckGap, filterY, typeCheckWidth, 24);
+    filterY += 28;
+    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_FILTER_TIMED_LABEL, participantsLeft, filterY, participantsWidth, 20);
+    filterY += 22;
+    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_FILTER_TIMED_COMBO, participantsLeft, filterY, participantsWidth, LayoutMetrics::kRowHeight);
+    filterY += 28;
+    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_FILTER_KEY_LABEL, participantsLeft, filterY, participantsWidth, 20);
+    filterY += 22;
+    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_FILTER_KEY_EDIT, participantsLeft, filterY, participantsWidth, LayoutMetrics::kRowHeight);
+    filterY += 28;
+    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_FILTER_CHARS_LABEL, participantsLeft, filterY, participantsWidth, 20);
+    filterY += 22;
+    MoveControl(ctx->recordingsPanel, IDC_RECORDINGS_FILTER_CHARS_EDIT, participantsLeft, filterY, participantsWidth, LayoutMetrics::kRowHeight);
 }
 
 void LayoutYouTubePanel(AppContext* ctx, int panelWidth, int panelHeight)

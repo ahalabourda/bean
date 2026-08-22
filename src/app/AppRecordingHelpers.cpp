@@ -9,6 +9,7 @@
 #include <cwctype>
 #include <iomanip>
 #include <sstream>
+#include <string>
 #include <vector>
 
 namespace {
@@ -387,4 +388,211 @@ COLORREF ClassColorForParticipant(const std::optional<std::string>& className)
         return RGB(198, 155, 109);
     }
     return kColorTextPrimary;
+}
+
+namespace {
+
+std::wstring TrimWide(const std::wstring& input)
+{
+    size_t start = 0;
+    while (start < input.size() && iswspace(input[start])) {
+        ++start;
+    }
+    size_t end = input.size();
+    while (end > start && iswspace(input[end - 1])) {
+        --end;
+    }
+    return input.substr(start, end - start);
+}
+
+bool WideContainsInsensitive(const std::wstring& haystack, const std::wstring& needle)
+{
+    if (needle.empty()) {
+        return true;
+    }
+    if (needle.size() > haystack.size()) {
+        return false;
+    }
+    const auto equalsIgnoreCase = [](wchar_t left, wchar_t right) {
+        return std::towlower(left) == std::towlower(right);
+    };
+    const auto found = std::search(
+        haystack.begin(),
+        haystack.end(),
+        needle.begin(),
+        needle.end(),
+        equalsIgnoreCase);
+    return found != haystack.end();
+}
+
+bool ParseKeyLevelNumber(const std::wstring& input, size_t& index, int& value)
+{
+    if (index < input.size() && input[index] == L'+') {
+        ++index;
+    }
+    if (index >= input.size() || !iswdigit(input[index])) {
+        return false;
+    }
+    long long accumulated = 0;
+    while (index < input.size() && iswdigit(input[index])) {
+        accumulated = accumulated * 10 + (input[index] - L'0');
+        if (accumulated > 999) {
+            return false;
+        }
+        ++index;
+    }
+    value = static_cast<int>(accumulated);
+    return true;
+}
+
+} // namespace
+
+RecordingKind ClassifyRecordingKind(const std::string& triggerReason, bool hasMythicMetadata)
+{
+    if (!triggerReason.empty()) {
+        if (_stricmp(triggerReason.c_str(), "mythic-start") == 0) {
+            return RecordingKind::MythicPlus;
+        }
+        if (_stricmp(triggerReason.c_str(), "raid") == 0
+            || _stricmp(triggerReason.c_str(), "raid-start") == 0) {
+            return RecordingKind::Raid;
+        }
+        if (_stricmp(triggerReason.c_str(), "pvp") == 0
+            || _stricmp(triggerReason.c_str(), "pvp-start") == 0
+            || _stricmp(triggerReason.c_str(), "arena") == 0
+            || _stricmp(triggerReason.c_str(), "battleground") == 0) {
+            return RecordingKind::Pvp;
+        }
+        if (_stricmp(triggerReason.c_str(), "manual") == 0) {
+            return RecordingKind::Manual;
+        }
+    }
+    return hasMythicMetadata ? RecordingKind::MythicPlus : RecordingKind::Manual;
+}
+
+bool ParseRecordingKeyLevelFilter(const std::wstring& input, RecordingKeyLevelFilter& outFilter)
+{
+    outFilter = {};
+    std::wstring compact;
+    compact.reserve(input.size());
+    for (const wchar_t character : input) {
+        if (!iswspace(character)) {
+            compact.push_back(character);
+        }
+    }
+    if (compact.empty()) {
+        return true;
+    }
+
+    size_t index = 0;
+    int first = 0;
+    if (!ParseKeyLevelNumber(compact, index, first)) {
+        return false;
+    }
+    if (index == compact.size()) {
+        outFilter.active = true;
+        outFilter.minLevel = first;
+        outFilter.maxLevel = first;
+        return true;
+    }
+    if (compact[index] != L'-') {
+        return false;
+    }
+    ++index;
+    int second = 0;
+    if (!ParseKeyLevelNumber(compact, index, second) || index != compact.size()) {
+        return false;
+    }
+    outFilter.active = true;
+    outFilter.minLevel = (std::min)(first, second);
+    outFilter.maxLevel = (std::max)(first, second);
+    return true;
+}
+
+std::vector<std::wstring> ParseRecordingCharacterNameFilter(const std::wstring& input)
+{
+    std::vector<std::wstring> names;
+    size_t start = 0;
+    while (start <= input.size()) {
+        const size_t comma = input.find(L',', start);
+        const size_t end = comma == std::wstring::npos ? input.size() : comma;
+        const std::wstring name = TrimWide(input.substr(start, end - start));
+        if (!name.empty()) {
+            names.push_back(name);
+        }
+        if (comma == std::wstring::npos) {
+            break;
+        }
+        start = comma + 1;
+    }
+    return names;
+}
+
+bool RecordingFilterIsRestricting(const RecordingFilterCriteria& criteria)
+{
+    return !criteria.includeManual
+        || !criteria.includeMythicPlus
+        || !criteria.includeRaid
+        || !criteria.includePvp
+        || criteria.outcome != RecordingOutcomeFilter::Any
+        || criteria.keyLevel.active
+        || !criteria.characterNames.empty();
+}
+
+bool RecordingMatchesFilter(const RecordingFilterItem& item, const RecordingFilterCriteria& criteria)
+{
+    bool typeAllowed = false;
+    switch (item.kind) {
+    case RecordingKind::Manual:
+        typeAllowed = criteria.includeManual;
+        break;
+    case RecordingKind::MythicPlus:
+        typeAllowed = criteria.includeMythicPlus;
+        break;
+    case RecordingKind::Raid:
+        typeAllowed = criteria.includeRaid;
+        break;
+    case RecordingKind::Pvp:
+        typeAllowed = criteria.includePvp;
+        break;
+    }
+    if (!typeAllowed) {
+        return false;
+    }
+
+    switch (criteria.outcome) {
+    case RecordingOutcomeFilter::Timed:
+        if (!item.timed) {
+            return false;
+        }
+        break;
+    case RecordingOutcomeFilter::Depleted:
+        if (!item.depleted) {
+            return false;
+        }
+        break;
+    case RecordingOutcomeFilter::Any:
+        break;
+    }
+
+    if (criteria.keyLevel.active) {
+        if (item.keystoneLevel < criteria.keyLevel.minLevel
+            || item.keystoneLevel > criteria.keyLevel.maxLevel) {
+            return false;
+        }
+    }
+
+    for (const auto& needle : criteria.characterNames) {
+        bool matchedName = false;
+        for (const auto& name : item.participantNames) {
+            if (WideContainsInsensitive(name, needle)) {
+                matchedName = true;
+                break;
+            }
+        }
+        if (!matchedName) {
+            return false;
+        }
+    }
+    return true;
 }
