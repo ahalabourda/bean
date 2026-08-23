@@ -7,11 +7,12 @@
 #include "app/AppStatusLog.h"
 #include "app/AppUtilities.h"
 #include "app/BeanUpdater.h"
+#include "bean_version.h"
 #include "core/GameEnvironment.h"
 #include "core/RecordingSizeEstimate.h"
 #include "core/WowData.h"
-#include "obs/IRecorderEngine.h"
 #include "integrations/YouTubeUploader.h"
+#include "obs/IRecorderEngine.h"
 #if defined(BEAN_ENABLE_LIBOBS) && BEAN_ENABLE_LIBOBS
 #include "obs/LibObsRecorderEngine.h"
 #else
@@ -19,22 +20,21 @@
 #endif
 #include "util/Json.h"
 #include "util/Strings.h"
-#include "bean_version.h"
 
 #include <windows.h>
 #include <commctrl.h>
 #include <commdlg.h>
 #include <dwmapi.h>
+#include <functiondiscoverykeys_devpkey.h>
+#include <gdiplus.h>
 #include <mfmediaengine.h>
-#include <tlhelp32.h>
 #include <mmdeviceapi.h>
+#include <propidl.h>
+#include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
-#include <shellapi.h>
+#include <tlhelp32.h>
 #include <uxtheme.h>
-#include <functiondiscoverykeys_devpkey.h>
-#include <propidl.h>
-#include <gdiplus.h>
 
 #include <algorithm>
 #include <array>

@@ -1,11 +1,11 @@
-#include "log/MythicRunDetector.h"
 #include "log/CombatLogFields.h"
+#include "log/MythicRunDetector.h"
 
 #include "core/WowData.h"
 
 #include <algorithm>
-#include <charconv>
 #include <cctype>
+#include <charconv>
 #include <cstdlib>
 #include <optional>
 #include <string_view>

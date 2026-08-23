@@ -12,13 +12,13 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <cwctype>
 #include <cstdlib>
 #include <cstring>
+#include <cwctype>
 #include <memory>
 #include <sstream>
-#include <utility>
 #include <unordered_map>
+#include <utility>
 
 #pragma comment(lib, "Gdiplus.lib")
 

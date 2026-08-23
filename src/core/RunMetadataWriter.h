@@ -1,7 +1,7 @@
 #pragma once
 
-#include "core/RunRepository.h"
 #include "core/RecordingTypes.h"
+#include "core/RunRepository.h"
 #include "log/MythicRunDetector.h"
 
 #include <chrono>

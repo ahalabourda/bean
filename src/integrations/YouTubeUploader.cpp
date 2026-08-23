@@ -4,10 +4,10 @@
 #include "util/Strings.h"
 
 #include <windows.h>
-#include <shellapi.h>
-#include <winhttp.h>
 #include <bcrypt.h>
+#include <shellapi.h>
 #include <wincrypt.h>
+#include <winhttp.h>
 
 #include <algorithm>
 #include <array>

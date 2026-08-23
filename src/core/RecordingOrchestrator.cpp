@@ -1,6 +1,6 @@
+#include "core/ClipExportService.h"
 #include "core/RecordingOrchestrator.h"
 #include "core/RecordingPath.h"
-#include "core/ClipExportService.h"
 #include "core/RunMetadataWriter.h"
 
 #include "core/WowData.h"
@@ -8,10 +8,10 @@
 #include <windows.h>
 
 #include <algorithm>
-#include <chrono>
 #include <cctype>
-#include <iomanip>
+#include <chrono>
 #include <fstream>
+#include <iomanip>
 #include <iterator>
 #include <sstream>
 

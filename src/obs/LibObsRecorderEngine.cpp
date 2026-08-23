@@ -1,5 +1,5 @@
-#include "obs/LibObsRecorderEngine.h"
 #include "core/RecordingPath.h"
+#include "obs/LibObsRecorderEngine.h"
 
 #include "util/Strings.h"
 
@@ -7,8 +7,8 @@
 #include <gdiplus.h>
 
 #include <algorithm>
-#include <cstdarg>
 #include <chrono>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cwctype>

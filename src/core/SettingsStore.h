@@ -3,8 +3,8 @@
 #include "core/GameEnvironment.h"
 #include "obs/IRecorderEngine.h"
 
-#include <filesystem>
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <unordered_map>
 #include <utility>

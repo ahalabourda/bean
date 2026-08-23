@@ -1,8 +1,8 @@
 #pragma once
 
-#include "app/ClipPreviewEngine.h"
 #include "app/AppRecordingHelpers.h"
 #include "app/AppWorkerRegistry.h"
+#include "app/ClipPreviewEngine.h"
 #include "core/RecordingOrchestrator.h"
 #include "core/RunRepository.h"
 #include "core/SettingsStore.h"
@@ -10,8 +10,8 @@
 #include <windows.h>
 #include <shobjidl.h>
 
-#include <atomic>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <deque>

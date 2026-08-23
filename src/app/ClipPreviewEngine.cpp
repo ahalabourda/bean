@@ -1,10 +1,10 @@
-#include "app/ClipPreviewEngine.h"
 #include "app/AppContext.h"
+#include "app/ClipPreviewEngine.h"
 
+#include <audioclient.h>
 #include <mfapi.h>
 #include <mferror.h>
 #include <mfmediaengine.h>
-#include <audioclient.h>
 #include <shlwapi.h>
 
 #include <algorithm>

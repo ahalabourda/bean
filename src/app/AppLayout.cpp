@@ -1,5 +1,5 @@
-#include "app/AppLayout.h"
 #include "app/AppDraw.h"
+#include "app/AppLayout.h"
 #include "app/AppPrerequisites.h"
 
 #include <algorithm>
