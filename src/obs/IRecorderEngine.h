@@ -44,6 +44,7 @@ struct RecordingConfig {
 };
 
 int ResolveConstantQualityValueForPreset(const std::string& encoderPreset);
+int ResolveEstimatedVideoBitrateKbps(const RecordingConfig& config);
 
 class IRecorderEngine {
 public:

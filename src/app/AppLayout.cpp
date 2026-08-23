@@ -135,7 +135,13 @@ void LayoutStatusPanel(AppContext* ctx, int panelWidth, int panelHeight)
     y += 36;
 
     constexpr int wowTextX = LayoutMetrics::kPanelInset + 126;
-    const int wowTextWidth = (std::max)(250, panelWidth - wowTextX - 20);
+    constexpr int diskColumnWidth = 360;
+    const int diskColumnX = (std::max)(
+        LayoutMetrics::kPanelInset + 360,
+        panelWidth - LayoutMetrics::kPanelInset - diskColumnWidth);
+    const int diskHelpX = panelWidth - LayoutMetrics::kPanelInset - LayoutMetrics::kHelpIconSize;
+    const int wowTextWidth = (std::max)(120, diskColumnX - wowTextX - 16);
+    const int diskRowY = y;
     for (const auto& row : kPrerequisiteRows) {
         if (row.visibleOnlyWhenUnhealthy && PrerequisiteRowIsHealthy(ctx, row)) {
             continue;
@@ -146,11 +152,12 @@ void LayoutStatusPanel(AppContext* ctx, int panelWidth, int panelHeight)
         const int textX = row.iconId == IDC_WARCRAFT_RECORDER_ICON ? (wowTextX + 26)
             : (row.iconId == IDC_ADVANCED_LOGGING_ICON ? (wowTextX + 60) : wowTextX);
         int textWidth = row.iconId == IDC_WARCRAFT_RECORDER_ICON
-            ? (std::max)(220, wowTextWidth - 26)
+            ? (std::max)(120, wowTextWidth - 26)
             : wowTextWidth;
         if (row.iconId == IDC_ADVANCED_LOGGING_ICON) {
             textWidth = 90;
         }
+        textWidth = (std::min)(textWidth, (std::max)(80, diskColumnX - textX - 12));
         MoveControl(ctx->statusPanel, row.labelId, LayoutMetrics::kPanelInset, y, labelWidth, LayoutMetrics::kRowHeight);
         MoveControl(ctx->statusPanel, row.iconId, iconX, y + 3, 20, LayoutMetrics::kRowHeight);
         MoveControl(ctx->statusPanel, row.textId, textX, y, textWidth, LayoutMetrics::kRowHeight);
@@ -165,6 +172,21 @@ void LayoutStatusPanel(AppContext* ctx, int panelWidth, int panelHeight)
         }
         y += LayoutMetrics::kRowSpacing;
     }
+
+    constexpr int diskLabelWidth = 100;
+    const int diskIconX = diskColumnX + diskLabelWidth + 2;
+    const int diskTextX = diskIconX + 22;
+    const int diskTextWidth = (std::max)(80, diskHelpX - LayoutMetrics::kHelpIconGap - diskTextX);
+    MoveControl(ctx->statusPanel, IDC_DISK_SPACE_LABEL, diskColumnX, diskRowY, diskLabelWidth, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->statusPanel, IDC_DISK_SPACE_ICON, diskIconX, diskRowY + 3, 20, LayoutMetrics::kRowHeight);
+    MoveControl(ctx->statusPanel, IDC_DISK_SPACE_TEXT, diskTextX, diskRowY, diskTextWidth, LayoutMetrics::kRowHeight);
+    MoveControl(
+        ctx->statusPanel,
+        IDC_DISK_SPACE_HELP,
+        diskHelpX,
+        diskRowY + 4,
+        LayoutMetrics::kHelpIconSize,
+        LayoutMetrics::kHelpIconSize);
 
     MoveControl(ctx->statusPanel, IDC_STATUS_LABEL, LayoutMetrics::kPanelInset, y, 60, LayoutMetrics::kRowHeight);
     constexpr int statusX = LayoutMetrics::kPanelInset + 72;

@@ -231,7 +231,10 @@ TaskbarOverlayState ResolveTaskbarOverlayState(const AppContext* ctx)
         return TaskbarOverlayState::Warning;
     }
     const bool prerequisitesHealthy = ctx->wowWindowDetected && ctx->obsInstallDetected && ctx->ffmpegDetected;
-    return prerequisitesHealthy ? TaskbarOverlayState::MonitoringReady : TaskbarOverlayState::Warning;
+    if (!prerequisitesHealthy || ctx->diskSpaceLow) {
+        return TaskbarOverlayState::Warning;
+    }
+    return TaskbarOverlayState::MonitoringReady;
 }
 
 } // namespace
@@ -293,7 +296,7 @@ void ApplyTaskbarOverlayState(AppContext* ctx, bool forceUpdate)
         overlayDescription = L"Recording";
     } else if (nextState == TaskbarOverlayState::Warning) {
         overlayIcon = ctx->taskbarOverlayIcons.warningIcon;
-        overlayDescription = L"Monitoring warning";
+        overlayDescription = ctx->diskSpaceLow ? L"Low disk space" : L"Monitoring warning";
     }
 
     ctx->taskbarList->SetOverlayIcon(ctx->mainWindow, overlayIcon, overlayDescription);

@@ -2,6 +2,7 @@
 #include "core/GameEnvironment.h"
 #include "core/RecordingOrchestrator.h"
 #include "core/RecordingPath.h"
+#include "core/RecordingSizeEstimate.h"
 #include "core/RunMetadataWriter.h"
 #include "core/RunRepository.h"
 #include "core/SettingsStore.h"
@@ -13,11 +14,13 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -693,6 +696,66 @@ void TestRunRepositoryMissingPathReturnsEmpty()
     Expect(error.empty(), "Missing run lookup should not be an error.");
 }
 
+void TestRecordingSizeEstimateScalesWithQualityAndResolution()
+{
+    bean::obs::RecordingConfig high1080;
+    high1080.encoderPreset = "high";
+    high1080.width = 1920;
+    high1080.height = 1080;
+    high1080.fps = 60;
+
+    bean::obs::RecordingConfig medium1080 = high1080;
+    medium1080.encoderPreset = "medium";
+
+    bean::obs::RecordingConfig high1440 = high1080;
+    high1440.width = 2560;
+    high1440.height = 1440;
+
+    bean::obs::RecordingConfig high1080Fps120 = high1080;
+    high1080Fps120.fps = 120;
+
+    const auto highBytes = bean::core::EstimateTypicalRecordingBytes(high1080);
+    const auto mediumBytes = bean::core::EstimateTypicalRecordingBytes(medium1080);
+    const auto high1440Bytes = bean::core::EstimateTypicalRecordingBytes(high1440);
+    const auto high120Bytes = bean::core::EstimateTypicalRecordingBytes(high1080Fps120);
+
+    Expect(highBytes > mediumBytes, "Higher quality should estimate a larger recording.");
+    Expect(high1440Bytes > highBytes, "Higher resolution should estimate a larger recording.");
+    Expect(high120Bytes > highBytes, "Higher FPS should estimate a larger recording.");
+
+    // 1080p60 high = 20000 kbps video + 160 kbps audio, 35 minutes.
+    constexpr std::uint64_t expectedHigh1080Bytes = 20160ull * 125ull * 35ull * 60ull;
+    Expect(highBytes == expectedHigh1080Bytes, "1080p60 high should match the bitrate formula.");
+
+    const auto threshold = bean::core::LowDiskSpaceWarningThresholdBytes(high1080);
+    Expect(threshold == highBytes * 3, "Warning threshold should be 3x a typical recording.");
+    Expect(
+        bean::core::EvaluateDiskSpaceStatus(threshold, threshold) == bean::core::DiskSpaceStatus::Ok,
+        "Exactly 3x remaining space should still be OK.");
+    Expect(
+        bean::core::EvaluateDiskSpaceStatus(threshold - 1, threshold)
+            == bean::core::DiskSpaceStatus::Warning,
+        "One byte under 3x remaining space should warn.");
+    Expect(
+        bean::core::EvaluateDiskSpaceStatus(std::nullopt, threshold)
+            == bean::core::DiskSpaceStatus::Unknown,
+        "A failed disk query should be unknown.");
+}
+
+void TestQueryAvailableDiskBytesResolvesExistingAndMissingPaths()
+{
+    const auto dir = MakeTempDir("disk-space");
+    const auto available = bean::core::QueryAvailableDiskBytes(dir);
+    Expect(available.has_value() && *available > 0, "Temp directory volume should report free space.");
+    const auto missingChild = bean::core::QueryAvailableDiskBytes(dir / "does-not-exist");
+    Expect(
+        missingChild.has_value() && *missingChild > 0,
+        "Missing subfolder should still resolve the parent volume.");
+    Expect(
+        !bean::core::QueryAvailableDiskBytes({}).has_value(),
+        "Empty path should not report free space.");
+}
+
 void TestRecordingPathDefaultsUnknownContainerToMkv()
 {
     const auto path = bean::core::BuildRecordingPath("C:/out", "stem", "webm");
@@ -834,6 +897,8 @@ int main()
     TestOrchestratorRejectsDoubleManualStart();
     TestOrchestratorPersistsMythicFailureMetadata();
     TestRecordingPathCaseInsensitiveContainer();
+    TestRecordingSizeEstimateScalesWithQualityAndResolution();
+    TestQueryAvailableDiskBytesResolvesExistingAndMissingPaths();
     TestRecordingPathDefaultsUnknownContainerToMkv();
     TestEnumerateDriveRootsNonEmpty();
 

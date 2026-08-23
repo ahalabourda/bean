@@ -2963,6 +2963,21 @@ const wchar_t* GetHelpTooltipTextForControl(const AppContext* ctx, HWND control)
     if (control == ctx->advancedLoggingHelpIcon) {
         return L"If changed in-game, Bean can only detect the change after /reload, relog, or closing WoW.";
     }
+    if (control == ctx->diskSpaceHelpIcon) {
+        static thread_local std::wstring diskSpaceTooltip;
+        std::wostringstream tooltip;
+        tooltip
+            << L"Bean estimates how much disk a typical 35-minute recording uses at your current quality and resolution, "
+            << L"then warns when the recordings drive has less than three times that amount free.";
+        if (ctx->diskSpaceEstimatedRecordingBytes > 0) {
+            tooltip
+                << L"\n\nCurrent estimate: " << FormatBytes(ctx->diskSpaceEstimatedRecordingBytes)
+                << L" per recording.\nWarning below: "
+                << FormatBytes(ctx->diskSpaceWarningThresholdBytes) << L" free.";
+        }
+        diskSpaceTooltip = tooltip.str();
+        return diskSpaceTooltip.c_str();
+    }
     return nullptr;
 }
 
@@ -3904,6 +3919,91 @@ void DrawCheckOrXGlyph(HDC dc, const RECT& bounds, bool valid)
     }
 }
 
+void DrawWarningGlyph(HDC dc, const RECT& bounds)
+{
+    if (!dc) {
+        return;
+    }
+    EnsureThemeResources();
+
+    const int width = bounds.right - bounds.left;
+    const int height = bounds.bottom - bounds.top;
+    const Gdiplus::REAL iconSize = static_cast<Gdiplus::REAL>((std::min)(width, height));
+    const Gdiplus::REAL circleDiameter = iconSize - 1.5f;
+    if (circleDiameter <= 0.0f) {
+        return;
+    }
+    const Gdiplus::REAL centerX = static_cast<Gdiplus::REAL>(bounds.left) + static_cast<Gdiplus::REAL>(width) / 2.0f;
+    const Gdiplus::REAL centerY = static_cast<Gdiplus::REAL>(bounds.top) + static_cast<Gdiplus::REAL>(height) / 2.0f;
+    const Gdiplus::REAL circleLeft = centerX - circleDiameter / 2.0f;
+    const Gdiplus::REAL circleTop = centerY - circleDiameter / 2.0f;
+
+    if (EnsureAlertGdiplus()) {
+        Gdiplus::Graphics graphics(dc);
+        graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+        graphics.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
+        if (graphics.GetLastStatus() == Gdiplus::Ok) {
+            const Gdiplus::Color warningColor(
+                255,
+                GetRValue(kColorWarning),
+                GetGValue(kColorWarning),
+                GetBValue(kColorWarning));
+            const Gdiplus::Color glyphColor(
+                255,
+                GetRValue(kColorWindowTop),
+                GetGValue(kColorWindowTop),
+                GetBValue(kColorWindowTop));
+            Gdiplus::SolidBrush warningBrush(warningColor);
+            const Gdiplus::RectF circleRect(circleLeft, circleTop, circleDiameter, circleDiameter);
+            graphics.FillEllipse(&warningBrush, circleRect);
+
+            const Gdiplus::REAL scale = circleDiameter / 13.5f;
+            Gdiplus::Pen glyphPen(glyphColor, (std::max)(1.4f, 1.8f * scale));
+            glyphPen.SetStartCap(Gdiplus::LineCapRound);
+            glyphPen.SetEndCap(Gdiplus::LineCapRound);
+            graphics.DrawLine(
+                &glyphPen,
+                centerX,
+                centerY - 4.2f * scale,
+                centerX,
+                centerY + 1.4f * scale);
+            Gdiplus::SolidBrush glyphBrush(glyphColor);
+            const Gdiplus::REAL dotDiameter = (std::max)(1.4f, 1.7f * scale);
+            graphics.FillEllipse(
+                &glyphBrush,
+                centerX - dotDiameter / 2.0f,
+                centerY + 3.6f * scale - dotDiameter / 2.0f,
+                dotDiameter,
+                dotDiameter);
+            return;
+        }
+    }
+
+    HPEN pen = CreatePen(PS_SOLID, 2, kColorWarning);
+    HBRUSH brush = CreateSolidBrush(kColorWarning);
+    HGDIOBJ oldPen = pen ? SelectObject(dc, pen) : nullptr;
+    HGDIOBJ oldBrush = brush ? SelectObject(dc, brush) : nullptr;
+    Ellipse(
+        dc,
+        bounds.left,
+        bounds.top,
+        bounds.right,
+        bounds.bottom);
+    if (oldBrush) {
+        SelectObject(dc, oldBrush);
+    }
+    if (oldPen) {
+        SelectObject(dc, oldPen);
+    }
+    if (brush) {
+        DeleteObject(brush);
+    }
+    if (pen) {
+        DeleteObject(pen);
+    }
+}
+
 void DrawStatusDot(HDC dc, const RECT& bounds, COLORREF color)
 {
     if (!dc) {
@@ -4319,7 +4419,8 @@ bool IsStatusLightId(int controlId)
         || controlId == IDC_OBS_INSTALL_ICON
         || controlId == IDC_FFMPEG_ICON
         || controlId == IDC_WARCRAFT_RECORDER_ICON
-        || controlId == IDC_ADVANCED_LOGGING_ICON;
+        || controlId == IDC_ADVANCED_LOGGING_ICON
+        || controlId == IDC_DISK_SPACE_ICON;
 }
 
 bool IsOwnerDrawStaticId(int controlId)
@@ -4332,6 +4433,7 @@ bool IsOwnerDrawStaticId(int controlId)
         || controlId == IDC_PRESET_HELP
         || controlId == IDC_POST_RUN_DELAY_HELP
         || controlId == IDC_ADVANCED_LOGGING_HELP
+        || controlId == IDC_DISK_SPACE_HELP
         || controlId == IDC_CHAT_PREVIEW
         || controlId == IDC_CLIPS_TIMELINE
         || controlId == IDC_CLIPS_VOLUME_SLIDER;
@@ -4611,7 +4713,11 @@ void DrawStyledButton(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
                 const int yInset = (std::max)(0, (height - targetSize) / 2);
                 iconRect.top += yInset;
                 iconRect.bottom = iconRect.top + targetSize;
-                DrawCheckOrXGlyph(drawInfo->hDC, iconRect, isValid);
+                if (isStatusTab && isValid && ctx->diskSpaceLow) {
+                    DrawWarningGlyph(drawInfo->hDC, iconRect);
+                } else {
+                    DrawCheckOrXGlyph(drawInfo->hDC, iconRect, isValid);
+                }
             }
             if (showAboutUpdateIndicator) {
                 RECT iconRect = rc;
@@ -4641,16 +4747,23 @@ void DrawStatusLight(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
         || drawInfo->CtlID == IDC_OBS_INSTALL_ICON
         || drawInfo->CtlID == IDC_FFMPEG_ICON
         || drawInfo->CtlID == IDC_WARCRAFT_RECORDER_ICON
-        || drawInfo->CtlID == IDC_ADVANCED_LOGGING_ICON;
+        || drawInfo->CtlID == IDC_ADVANCED_LOGGING_ICON
+        || drawInfo->CtlID == IDC_DISK_SPACE_ICON;
     if (isPrerequisiteIcon) {
         if (gTheme.inputBrush) {
             FillRect(drawInfo->hDC, &rc, gTheme.inputBrush);
         }
         bool isValid = false;
-        for (const auto& row : kPrerequisiteRows) {
-            if (row.iconId == drawInfo->CtlID) {
-                isValid = PrerequisiteRowIsHealthy(ctx, row);
-                break;
+        bool isWarning = false;
+        if (drawInfo->CtlID == IDC_DISK_SPACE_ICON) {
+            isValid = !ctx->diskSpaceQueryFailed && !ctx->diskSpaceLow;
+            isWarning = ctx->diskSpaceLow;
+        } else {
+            for (const auto& row : kPrerequisiteRows) {
+                if (row.iconId == drawInfo->CtlID) {
+                    isValid = PrerequisiteRowIsHealthy(ctx, row);
+                    break;
+                }
             }
         }
         const int centerX = (rc.left + rc.right) / 2;
@@ -4662,7 +4775,11 @@ void DrawStatusLight(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx)
         glyphBounds.top = centerY - half;
         glyphBounds.right = centerX + half;
         glyphBounds.bottom = centerY + half;
-        DrawCheckOrXGlyph(drawInfo->hDC, glyphBounds, isValid);
+        if (isWarning) {
+            DrawWarningGlyph(drawInfo->hDC, glyphBounds);
+        } else {
+            DrawCheckOrXGlyph(drawInfo->hDC, glyphBounds, isValid);
+        }
         return;
     }
 
@@ -4850,6 +4967,7 @@ LRESULT CALLBACK HoverTooltipSubclassProc(HWND hwnd, UINT message, WPARAM wParam
         hwnd == ctx->presetHelpIcon
         || hwnd == ctx->postRunDelayHelpIcon
         || hwnd == ctx->advancedLoggingHelpIcon
+        || hwnd == ctx->diskSpaceHelpIcon
         || hwnd == ctx->outputStatus;
     if (!isTooltipCapableControl) {
         return DefSubclassProc(hwnd, message, wParam, lParam);
@@ -4857,7 +4975,10 @@ LRESULT CALLBACK HoverTooltipSubclassProc(HWND hwnd, UINT message, WPARAM wParam
 
     switch (message) {
     case WM_MOUSEMOVE: {
-        const bool isHelpIcon = hwnd == ctx->presetHelpIcon || hwnd == ctx->postRunDelayHelpIcon || hwnd == ctx->advancedLoggingHelpIcon;
+        const bool isHelpIcon = hwnd == ctx->presetHelpIcon
+            || hwnd == ctx->postRunDelayHelpIcon
+            || hwnd == ctx->advancedLoggingHelpIcon
+            || hwnd == ctx->diskSpaceHelpIcon;
         if (isHelpIcon && gHoveredHelpIcon != hwnd) {
             gHoveredHelpIcon = hwnd;
         }
@@ -4882,7 +5003,10 @@ LRESULT CALLBACK HoverTooltipSubclassProc(HWND hwnd, UINT message, WPARAM wParam
         HideConfigurationTooltip(ctx);
         break;
     case WM_NCDESTROY:
-        if (hwnd == ctx->presetHelpIcon || hwnd == ctx->postRunDelayHelpIcon || hwnd == ctx->advancedLoggingHelpIcon) {
+        if (hwnd == ctx->presetHelpIcon
+            || hwnd == ctx->postRunDelayHelpIcon
+            || hwnd == ctx->advancedLoggingHelpIcon
+            || hwnd == ctx->diskSpaceHelpIcon) {
             gHoveredHelpIcon = nullptr;
         }
         RemoveWindowSubclass(hwnd, HoverTooltipSubclassProc, subclassId);

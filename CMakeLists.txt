@@ -23,6 +23,7 @@ add_library(bean_core
     src/core/GameEnvironment.cpp
     src/core/RecordingOrchestrator.cpp
     src/core/RecordingPath.cpp
+    src/core/RecordingSizeEstimate.cpp
     src/core/RunMetadataWriter.cpp
     src/core/RunRepository.cpp
     src/core/SettingsStore.cpp

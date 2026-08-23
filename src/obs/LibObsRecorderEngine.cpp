@@ -811,6 +811,11 @@ int ResolveConstantQualityValueForPreset(const std::string& encoderPreset)
     return ResolveConstantQualityValue(config);
 }
 
+int ResolveEstimatedVideoBitrateKbps(const RecordingConfig& config)
+{
+    return ResolveFallbackBitrateKbps(config);
+}
+
 struct LibObsRecorderEngine::ObsApi {
     bool (*obs_startup)(const char*, const char*, void*) = nullptr;
     void (*obs_shutdown)() = nullptr;

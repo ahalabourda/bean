@@ -13,6 +13,7 @@
 #include <atomic>
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -43,6 +44,7 @@ inline constexpr UINT WM_BEAN_FILE_LIST_SELECTION = WM_APP + 111;
 inline constexpr UINT WM_BEAN_FILE_LIST_COLUMN_CLICK = WM_APP + 112;
 inline constexpr UINT WM_BEAN_FILE_LIST_DOUBLE_CLICK = WM_APP + 113;
 inline constexpr UINT WM_BEAN_FOLDER_AVAILABILITY_COMPLETE = WM_APP + 114;
+inline constexpr UINT WM_BEAN_DISK_SPACE_COMPLETE = WM_APP + 115;
 inline constexpr wchar_t kStatusLogFilePrefix[] = L"bean-status-log-";
 inline constexpr wchar_t kStatusLogFileExtension[] = L".txt";
 inline constexpr size_t kStatusLogRetentionCount = 5;
@@ -607,7 +609,11 @@ enum ControlId {
     IDC_CLIPS_EXPORT,
     IDC_CLIPS_EXPORT_PRECISE,
     IDC_CLIPS_OPEN_FOLDER,
-    IDC_CLIPS_FFMPEG_WARNING
+    IDC_CLIPS_FFMPEG_WARNING,
+    IDC_DISK_SPACE_LABEL,
+    IDC_DISK_SPACE_ICON,
+    IDC_DISK_SPACE_TEXT,
+    IDC_DISK_SPACE_HELP
 };
 
 struct AppContext {
@@ -658,6 +664,9 @@ struct AppContext {
     HWND warcraftRecorderText = nullptr;
     HWND advancedLoggingIcon = nullptr;
     HWND advancedLoggingText = nullptr;
+    HWND diskSpaceIcon = nullptr;
+    HWND diskSpaceText = nullptr;
+    HWND diskSpaceHelpIcon = nullptr;
     HWND lengthValue = nullptr;
     HWND statusText = nullptr;
     HWND statusTabButton = nullptr;
@@ -752,6 +761,14 @@ struct AppContext {
     bean::core::WowEdition detectedWowEdition = bean::core::WowEdition::Unknown;
     bool obsInstallDetected = false;
     bool ffmpegDetected = false;
+    bool diskSpaceLow = false;
+    bool diskSpaceQueryFailed = false;
+    std::uint64_t diskSpaceAvailableBytes = 0;
+    std::uint64_t diskSpaceEstimatedRecordingBytes = 0;
+    std::uint64_t diskSpaceWarningThresholdBytes = 0;
+    bool diskSpaceWarningLogged = false;
+    std::atomic<bool> diskSpaceProbeInFlight{false};
+    std::uint64_t diskSpaceRequestId = 0;
     bool warcraftRecorderDetected = false;
     bool warcraftRecorderWarningLogged = false;
     bool advancedCombatLoggingEnabled = false;

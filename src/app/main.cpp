@@ -8,6 +8,7 @@
 #include "app/AppUtilities.h"
 #include "app/BeanUpdater.h"
 #include "core/GameEnvironment.h"
+#include "core/RecordingSizeEstimate.h"
 #include "core/WowData.h"
 #include "obs/IRecorderEngine.h"
 #include "integrations/YouTubeUploader.h"
@@ -2118,7 +2119,17 @@ struct FolderAvailabilityResult {
     bool wowLogAvailable = false;
 };
 
+struct DiskSpaceProbeResult {
+    std::uint64_t requestId = 0;
+    bean::core::DiskSpaceStatus status = bean::core::DiskSpaceStatus::Unknown;
+    std::uint64_t availableBytes = 0;
+    std::uint64_t estimatedRecordingBytes = 0;
+    std::uint64_t warningThresholdBytes = 0;
+};
+
 void ApplyFolderAvailabilityResult(AppContext* ctx, const FolderAvailabilityResult& result);
+void ApplyDiskSpaceProbeResult(AppContext* ctx, const DiskSpaceProbeResult& result);
+void BeginDiskSpaceProbe(AppContext* ctx);
 
 void RequestFolderAvailabilityRefresh(AppContext* ctx)
 {
@@ -2155,6 +2166,95 @@ void BeginFolderAvailabilityProbe(AppContext* ctx)
         }
     })) {
         ctx->folderAvailabilityProbeInFlight.store(false, std::memory_order_release);
+    }
+}
+
+void BeginDiskSpaceProbe(AppContext* ctx)
+{
+    if (!ctx
+        || !ctx->mainWindow
+        || ctx->shuttingDown.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    const std::uint64_t requestId = ++ctx->diskSpaceRequestId;
+    const auto outputPath = ResolveRecordingsFolderPath(ctx);
+    const auto recordingConfig = bean::core::ToRecordingConfig(ctx->settings);
+    if (ctx->diskSpaceProbeInFlight.exchange(true)) {
+        return;
+    }
+
+    if (!LaunchAppWorker(ctx, [ctx, requestId, outputPath, recordingConfig]() {
+        auto* result = new DiskSpaceProbeResult();
+        result->requestId = requestId;
+        result->estimatedRecordingBytes = bean::core::EstimateTypicalRecordingBytes(recordingConfig);
+        result->warningThresholdBytes =
+            bean::core::LowDiskSpaceWarningThresholdBytes(recordingConfig);
+        const auto available = bean::core::QueryAvailableDiskBytes(outputPath);
+        result->status = bean::core::EvaluateDiskSpaceStatus(
+            available,
+            result->warningThresholdBytes);
+        if (available.has_value()) {
+            result->availableBytes = *available;
+        }
+        if (!PostOwnedAppMessage(ctx, WM_BEAN_DISK_SPACE_COMPLETE, result)) {
+            ctx->diskSpaceProbeInFlight.store(false, std::memory_order_release);
+        }
+    })) {
+        ctx->diskSpaceProbeInFlight.store(false, std::memory_order_release);
+    }
+}
+
+void ApplyDiskSpaceProbeResult(AppContext* ctx, const DiskSpaceProbeResult& result)
+{
+    if (!ctx) {
+        return;
+    }
+
+    const bool wasLow = ctx->diskSpaceLow;
+    ctx->diskSpaceLow = result.status == bean::core::DiskSpaceStatus::Warning;
+    ctx->diskSpaceQueryFailed = result.status == bean::core::DiskSpaceStatus::Unknown;
+    ctx->diskSpaceAvailableBytes = result.availableBytes;
+    ctx->diskSpaceEstimatedRecordingBytes = result.estimatedRecordingBytes;
+    ctx->diskSpaceWarningThresholdBytes = result.warningThresholdBytes;
+
+    std::wstring statusText = L"Checking...";
+    if (ctx->diskSpaceQueryFailed) {
+        statusText = L"Unable to check";
+    } else if (ctx->diskSpaceLow) {
+        statusText = std::wstring(L"Low (") + FormatBytes(result.availableBytes) + L" free)";
+    } else {
+        statusText = FormatBytes(result.availableBytes) + L" free";
+    }
+    if (ctx->diskSpaceText) {
+        UpdateTransparentStaticText(ctx->diskSpaceText, statusText.c_str());
+    }
+    if (ctx->diskSpaceIcon) {
+        InvalidateRect(ctx->diskSpaceIcon, nullptr, FALSE);
+    }
+    if (ctx->statusTabButton && wasLow != ctx->diskSpaceLow) {
+        InvalidateRect(ctx->statusTabButton, nullptr, FALSE);
+    }
+    ApplyTaskbarOverlayState(ctx);
+
+    if (ctx->diskSpaceLow) {
+        if (!ctx->diskSpaceWarningLogged) {
+            ctx->diskSpaceWarningLogged = true;
+            SetStatus(
+                ctx,
+                std::wstring(L"Warning: recordings drive is low on space (")
+                    + FormatBytes(result.availableBytes)
+                    + L" free). A typical 35-minute recording at your current settings is about "
+                    + FormatBytes(result.estimatedRecordingBytes)
+                    + L". Bean warns below "
+                    + FormatBytes(result.warningThresholdBytes)
+                    + L" free (3 recordings).");
+        }
+    } else if (wasLow && ctx->diskSpaceWarningLogged) {
+        ctx->diskSpaceWarningLogged = false;
+        if (!ctx->diskSpaceQueryFailed) {
+            SetStatus(ctx, L"Recordings drive has enough free space again.");
+        }
     }
 }
 
@@ -2578,7 +2678,7 @@ void DiscardQueuedAppMessages(HWND targetWindow)
         &message,
         targetWindow,
         WM_APP + 100,
-        WM_APP + 110,
+        WM_APP + 115,
         PM_REMOVE)) {
         switch (message.message) {
         case WM_BEAN_STATUS:
@@ -2601,6 +2701,12 @@ void DiscardQueuedAppMessages(HWND targetWindow)
             break;
         case WM_BEAN_FFMPEG_PROBE_COMPLETE:
             delete reinterpret_cast<FfmpegProbeResult*>(message.lParam);
+            break;
+        case WM_BEAN_FOLDER_AVAILABILITY_COMPLETE:
+            delete reinterpret_cast<FolderAvailabilityResult*>(message.lParam);
+            break;
+        case WM_BEAN_DISK_SPACE_COMPLETE:
+            delete reinterpret_cast<DiskSpaceProbeResult*>(message.lParam);
             break;
         default:
             break;
@@ -3648,6 +3754,7 @@ void RefreshLiveStatus(AppContext* ctx)
             && previousRecordingSessionId != recordingSessionId);
     if (finishedRecordingShouldAppear) {
         RefreshVisibleRecordingFileLists(ctx);
+        BeginDiskSpaceProbe(ctx);
     }
     const bool wowWasDetected = ctx->wowWindowDetected;
     const auto wowWasEdition = ctx->detectedWowEdition;
@@ -4269,6 +4376,7 @@ void CommitConfigurationSettings(AppContext* ctx)
     }
     ctx->configurationSettingsDirty = false;
     ctx->orchestrator->ApplySettings(ctx->settings);
+    BeginDiskSpaceProbe(ctx);
     if (ctx->orchestrator->IsMonitoring()
         && !ctx->isRecording
         && previousWowInstallDirectory != ctx->settings.wowInstallDirectory) {
@@ -5608,6 +5716,56 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         SetWindowSubclass(ctx->advancedLoggingHelpIcon, HoverTooltipSubclassProc, 1, reinterpret_cast<DWORD_PTR>(ctx));
         y += 36;
 
+        CreateWindowW(
+            L"STATIC",
+            L"Disk Space:",
+            WS_VISIBLE | WS_CHILD,
+            420,
+            118,
+            100,
+            rowHeight,
+            ctx->statusPanel,
+            reinterpret_cast<HMENU>(IDC_DISK_SPACE_LABEL),
+            nullptr,
+            nullptr);
+        ctx->diskSpaceIcon = CreateWindowW(
+            L"STATIC",
+            L"X",
+            WS_VISIBLE | WS_CHILD | SS_OWNERDRAW,
+            522,
+            118,
+            20,
+            rowHeight,
+            ctx->statusPanel,
+            reinterpret_cast<HMENU>(IDC_DISK_SPACE_ICON),
+            nullptr,
+            nullptr);
+        ctx->diskSpaceText = CreateWindowW(
+            L"STATIC",
+            L"Checking...",
+            WS_VISIBLE | WS_CHILD,
+            546,
+            118,
+            220,
+            rowHeight,
+            ctx->statusPanel,
+            reinterpret_cast<HMENU>(IDC_DISK_SPACE_TEXT),
+            nullptr,
+            nullptr);
+        ctx->diskSpaceHelpIcon = CreateWindowW(
+            L"STATIC",
+            L"",
+            WS_VISIBLE | WS_CHILD | SS_OWNERDRAW | SS_NOTIFY,
+            770,
+            122,
+            20,
+            20,
+            ctx->statusPanel,
+            reinterpret_cast<HMENU>(IDC_DISK_SPACE_HELP),
+            nullptr,
+            nullptr);
+        SetWindowSubclass(ctx->diskSpaceHelpIcon, HoverTooltipSubclassProc, 1, reinterpret_cast<DWORD_PTR>(ctx));
+
         ctx->chatBlockerEnabledCheck = CreateWindowW(
             L"BUTTON",
             L"Enable Chat Blocker",
@@ -6094,6 +6252,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         RECT clientRect{};
         GetClientRect(hwnd, &clientRect);
         LayoutMainUi(ctx, clientRect.right - clientRect.left, clientRect.bottom - clientRect.top);
+        BeginDiskSpaceProbe(ctx);
         ctx->chatBlockerAutoSaveArmed = true;
         ctx->configurationAutoSaveArmed = true;
         SetTimer(hwnd, kLiveStatusTimerId, kLiveStatusIntervalMs, nullptr);
@@ -6387,7 +6546,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 DrawYouTubeUploadStatus(drawInfo, ctx);
             } else if (drawInfo->CtlID == IDC_CONFIGURATION_TOOLTIP || (ctx && drawInfo->hwndItem == ctx->configurationTooltip)) {
                 DrawConfigurationTooltip(drawInfo);
-            } else if (drawInfo->CtlID == IDC_PRESET_HELP || drawInfo->CtlID == IDC_POST_RUN_DELAY_HELP || drawInfo->CtlID == IDC_ADVANCED_LOGGING_HELP) {
+            } else if (drawInfo->CtlID == IDC_PRESET_HELP || drawInfo->CtlID == IDC_POST_RUN_DELAY_HELP || drawInfo->CtlID == IDC_ADVANCED_LOGGING_HELP || drawInfo->CtlID == IDC_DISK_SPACE_HELP) {
                 DrawHelpIcon(drawInfo);
             } else if (drawInfo->CtlID == IDC_CHAT_PREVIEW) {
                 DrawChatPrivacyPreview(drawInfo, ctx);
@@ -6758,6 +6917,23 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             if (shouldProbeAgain) {
                 BeginFolderAvailabilityProbe(ctx);
             }
+        }
+        delete result;
+        return 0;
+    }
+    case WM_BEAN_DISK_SPACE_COMPLETE: {
+        auto* result = reinterpret_cast<DiskSpaceProbeResult*>(lParam);
+        if (ctx && result) {
+            ctx->diskSpaceProbeInFlight.store(false, std::memory_order_release);
+            const bool shouldProbeAgain = result->requestId != ctx->diskSpaceRequestId;
+            if (result->requestId == ctx->diskSpaceRequestId) {
+                ApplyDiskSpaceProbeResult(ctx, *result);
+            }
+            if (shouldProbeAgain) {
+                BeginDiskSpaceProbe(ctx);
+            }
+        } else if (ctx) {
+            ctx->diskSpaceProbeInFlight.store(false, std::memory_order_release);
         }
         delete result;
         return 0;
