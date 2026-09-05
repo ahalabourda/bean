@@ -34,8 +34,8 @@ constexpr std::array<DungeonInfo, 16> kDungeons{{
     {586, 2825, "Den of Nalorakk", 32 * 60},
     {587, 2813, "Murder Row", 34 * 60},
     {588, 2993, "Altar of Fangs", 30 * 60},
-    {0, 2859, "The Blinding Vale", 31 * 60},
-    {0, 2923, "Voidscar Arena", 30 * 60},
+    {584, 2859, "The Blinding Vale", 31 * 60},
+    {585, 2923, "Voidscar Arena", 30 * 60},
 }};
 
 const DungeonInfo* FindDungeon(int mapId)

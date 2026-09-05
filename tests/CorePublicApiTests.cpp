@@ -533,7 +533,9 @@ void TestRecordingOrchestratorPublicMethods()
     // Give the watcher loop one cycle to latch the active file before appending lines.
     std::this_thread::sleep_for(std::chrono::milliseconds(1200));
 
-    AppendLine(logFile, "6/19/2026 21:00:00.000-7  CHALLENGE_MODE_START,402,10");
+    // Use the verified challenge-map ID and instance ID from a real Midnight
+    // Season 2 Mythic+ mapping.
+    AppendLine(logFile, "6/19/2026 21:00:00.000-7  CHALLENGE_MODE_START,\"Voidscar Arena\",2923,585,14,[1]");
     const bool recordingStarted = WaitUntil([&]() {
         orchestrator.Tick();
         return orchestrator.GetState() == bean::core::OrchestratorState::Recording && orchestrator.GetRecordingSessionId() >= 1;
@@ -541,7 +543,7 @@ void TestRecordingOrchestratorPublicMethods()
     Expect(recordingStarted, "CHALLENGE_MODE_START should transition orchestrator to Recording.");
     Expect(orchestrator.GetRecordingSessionId() >= 1, "Recording session id should increment after recording starts.");
 
-    AppendLine(logFile, "6/19/2026 21:30:00.000-7  CHALLENGE_MODE_END,402,1,10,1700000.000000,32.000000,1830.000000");
+    AppendLine(logFile, "6/19/2026 21:30:00.000-7  CHALLENGE_MODE_END,2923,1,14,1700000.000000,32.000000,1830.000000");
     const bool returnedToArmed = WaitUntil([&]() {
         orchestrator.Tick();
         return orchestrator.GetState() == bean::core::OrchestratorState::Armed;
@@ -567,6 +569,15 @@ void TestRecordingOrchestratorPublicMethods()
         });
     }();
     Expect(hasStopStatus, "Status callback should include recording stop status.");
+
+    std::string repositoryError;
+    const auto runs = orchestratorRepo->ListRuns(repositoryError);
+    Expect(repositoryError.empty(), "Orchestrator test repository should list runs without error.");
+    Expect(runs.size() == 1, "Orchestrator test should persist one run.");
+    if (runs.size() == 1) {
+        Expect(runs.front().videoFileName.find("-voidscararena-14.") != std::string::npos,
+            "Filename should use the dungeon name observed in CHALLENGE_MODE_START.");
+    }
 }
 
 void TestRecordingOrchestratorReportsStartFailure()

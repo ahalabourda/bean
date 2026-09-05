@@ -60,12 +60,15 @@ private:
     bool StartRecordingInternal(
         RecordingStartReason reason,
         std::string& error,
-        std::unique_lock<std::mutex>& lock);
+        std::unique_lock<std::mutex>& lock,
+        const std::optional<std::string>& observedDungeonName = std::nullopt);
     bool StopRecordingInternal(
         RecordingStopReason reason,
         std::string& error,
         std::optional<std::chrono::system_clock::time_point> logicalEndAt = std::nullopt);
-    std::string BuildFileStem(RecordingStartReason reason) const;
+    std::string BuildFileStem(
+        RecordingStartReason reason,
+        const std::optional<std::string>& observedDungeonName) const;
     void PersistRunRecord(RecordingStopReason stopReason);
     void PushStatus(const std::string& status) const;
     void SyncClipExportSettingsLocked();

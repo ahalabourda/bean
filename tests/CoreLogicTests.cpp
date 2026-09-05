@@ -108,6 +108,10 @@ void TestDungeonNameTable()
     Expect(bean::core::DungeonNameForChallengeMap(560) == "Maisara Caverns", "Map 560 should resolve.");
     Expect(bean::core::DungeonNameForChallengeMap(586) == "Den of Nalorakk", "Season 2 challenge map 586 should resolve.");
     Expect(bean::core::DungeonNameForChallengeMap(2825) == "Den of Nalorakk", "Season 2 instance id 2825 should resolve.");
+    Expect(bean::core::DungeonNameForChallengeMap(584) == "The Blinding Vale", "Season 2 challenge map 584 should resolve.");
+    Expect(bean::core::DungeonNameForChallengeMap(2859) == "The Blinding Vale", "Season 2 instance id 2859 should resolve.");
+    Expect(bean::core::DungeonNameForChallengeMap(585) == "Voidscar Arena", "Season 2 challenge map 585 should resolve.");
+    Expect(bean::core::DungeonNameForChallengeMap(2923) == "Voidscar Arena", "Season 2 instance id 2923 should resolve.");
     Expect(bean::core::DungeonNameForChallengeMap(99999).empty(), "Unknown map id should return empty.");
 }
 

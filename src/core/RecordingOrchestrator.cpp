@@ -556,15 +556,12 @@ void RecordingOrchestrator::ProcessCombatLogLine(const std::string& line)
                 break;
             }
         }
-        if (!StartRecordingInternal(RecordingStartReason::MythicStart, error, lock)) {
+        if (!StartRecordingInternal(RecordingStartReason::MythicStart, error, lock, event->mapName)) {
             // This is the moment the whole app exists for. A failure here is
             // otherwise invisible until the player finds no video afterwards.
             PushStatus("AUTO-RECORD FAILED for detected mythic start: "
                 + (error.empty() ? std::string("unknown error") : error));
             break;
-        }
-        if (activeRecordingMetadata_.has_value() && event->mapName.has_value() && !event->mapName->empty()) {
-            activeRecordingMetadata_->observedDungeonName = *event->mapName;
         }
         break;
     case log::MythicEventType::RunEndedSuccess:
@@ -627,7 +624,8 @@ void RecordingOrchestrator::ProcessCombatLogLine(const std::string& line)
 bool RecordingOrchestrator::StartRecordingInternal(
     RecordingStartReason reason,
     std::string& error,
-    std::unique_lock<std::mutex>& lock)
+    std::unique_lock<std::mutex>& lock,
+    const std::optional<std::string>& observedDungeonName)
 {
     if (!lock.owns_lock()) {
         error = "Internal error: StartRecordingInternal called without lock.";
@@ -651,7 +649,7 @@ bool RecordingOrchestrator::StartRecordingInternal(
     // Snapshot everything the unlocked engine calls need. Settings must not be
     // read again after the unlock, because ApplySettings can mutate them.
     auto recordingConfig = ToRecordingConfig(settings_);
-    const auto fileStem = BuildFileStem(reason);
+    const auto fileStem = BuildFileStem(reason, observedDungeonName);
     const int selectedHeight = settings_.recordingResolutionHeight;
     const auto videoContainer = settings_.videoContainer;
     const auto outputDirectory = settings_.outputDirectory;
@@ -705,6 +703,9 @@ bool RecordingOrchestrator::StartRecordingInternal(
     metadata.recordingStartedAtSteady = std::chrono::steady_clock::now();
     metadata.challengeMapId = challengeMapId;
     metadata.keystoneLevel = keystoneLevel;
+    if (observedDungeonName.has_value() && !observedDungeonName->empty()) {
+        metadata.observedDungeonName = *observedDungeonName;
+    }
     metadata.participants = participants;
     if (mythicRunActive) {
         metadata.mythicRunStartedAt = std::chrono::system_clock::now();
@@ -758,20 +759,23 @@ bool RecordingOrchestrator::StopRecordingInternal(
     return true;
 }
 
-std::string RecordingOrchestrator::BuildFileStem(RecordingStartReason reason) const
+std::string RecordingOrchestrator::BuildFileStem(
+    RecordingStartReason reason,
+    const std::optional<std::string>& observedDungeonName) const
 {
     const auto timestamp = TimestampNow();
     if (reason == RecordingStartReason::Manual) {
         return timestamp + "-manual";
     }
 
-    std::string dungeonToken = "dungeon";
+    std::string dungeonName;
     if (lastChallengeMapId_.has_value()) {
-        const auto dungeonName = DungeonNameForChallengeMap(*lastChallengeMapId_);
-        if (!dungeonName.empty()) {
-            dungeonToken = BuildFileToken(dungeonName, dungeonToken);
-        }
+        dungeonName = DungeonNameForChallengeMap(*lastChallengeMapId_);
     }
+    if (dungeonName.empty() && observedDungeonName.has_value() && !observedDungeonName->empty()) {
+        dungeonName = *observedDungeonName;
+    }
+    const std::string dungeonToken = BuildFileToken(dungeonName, "dungeon");
 
     std::string keystoneToken = "00";
     if (lastKeystoneLevel_.has_value() && *lastKeystoneLevel_ > 0) {
