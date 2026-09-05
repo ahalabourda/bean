@@ -4812,6 +4812,7 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         if (!folder.empty()) {
             SetWindowTextW(ctx->outputEdit, folder.c_str());
             RequestFolderAvailabilityRefresh(ctx);
+            AutoSaveConfigurationSettings(ctx);
         }
         break;
     }
@@ -4820,6 +4821,7 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         if (!folder.empty()) {
             SetWindowTextW(ctx->wowLogEdit, folder.c_str());
             RequestFolderAvailabilityRefresh(ctx);
+            AutoSaveConfigurationSettings(ctx);
         }
         break;
     }
