@@ -45,6 +45,7 @@ inline constexpr UINT WM_BEAN_FILE_LIST_COLUMN_CLICK = WM_APP + 112;
 inline constexpr UINT WM_BEAN_FILE_LIST_DOUBLE_CLICK = WM_APP + 113;
 inline constexpr UINT WM_BEAN_FOLDER_AVAILABILITY_COMPLETE = WM_APP + 114;
 inline constexpr UINT WM_BEAN_DISK_SPACE_COMPLETE = WM_APP + 115;
+inline constexpr UINT WM_BEAN_RECORDING_RECONCILIATION_COMPLETE = WM_APP + 116;
 inline constexpr wchar_t kStatusLogFilePrefix[] = L"bean-status-log-";
 inline constexpr wchar_t kStatusLogFileExtension[] = L".txt";
 inline constexpr size_t kStatusLogRetentionCount = 5;
@@ -787,7 +788,9 @@ struct AppContext {
     // reports back with WM_BEAN_FFMPEG_PROBE_COMPLETE.
     std::atomic<bool> ffmpegProbeInFlight{false};
     std::atomic<bool> folderAvailabilityProbeInFlight{false};
+    std::atomic<bool> recordingReconciliationInFlight{false};
     std::uint64_t folderAvailabilityRequestId = 0;
+    std::uint64_t recordingReconciliationRequestId = 0;
     std::optional<std::chrono::steady_clock::time_point> wowWindowLastCheckedAt;
     int detectedWowClientWidth = 0;
     int detectedWowClientHeight = 0;

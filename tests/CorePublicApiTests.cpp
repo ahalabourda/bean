@@ -1,5 +1,6 @@
 #include "core/RecordingOrchestrator.h"
 #include "core/RecordingPath.h"
+#include "core/FileHash.h"
 #include "core/RunRepository.h"
 #include "core/SettingsStore.h"
 #include "integrations/YouTubeUploader.h"
@@ -255,6 +256,47 @@ void TestRunRepositoryPublicMethods()
             "Upsert should update encoderPreset.");
         Expect(loadedAgain->participants.size() == 1, "Upsert should replace participant rows.");
     }
+
+    Expect(
+        repo.SetContentHash(record.videoPath, "sha256-test", error),
+        "SetContentHash should persist a recording hash.");
+    const auto relocatedPath = dir / "relocated" / "run1.mkv";
+    Expect(
+        repo.RelocateRun(record.videoPath, relocatedPath, error),
+        "RelocateRun should update the primary recording path.");
+    const auto relocated = repo.GetRunByVideoPath(relocatedPath, error);
+    Expect(relocated.has_value(), "Relocated recording should be found by its new path.");
+    if (relocated.has_value()) {
+        Expect(
+            relocated->contentHash.has_value() && *relocated->contentHash == "sha256-test",
+            "Relocation should preserve the recording hash.");
+        Expect(
+            std::find(relocated->pathAliases.begin(), relocated->pathAliases.end(), record.videoPath)
+                != relocated->pathAliases.end(),
+            "Relocation should preserve the old path as an alias.");
+    }
+    const auto relocatedByOldPath = repo.GetRunByVideoPath(record.videoPath, error);
+    Expect(relocatedByOldPath.has_value(), "Old recording paths should resolve through aliases.");
+    Expect(
+        repo.RelocateRun(relocatedPath, record.videoPath, error),
+        "RelocateRun should support moving a recording back to an old alias.");
+}
+
+void TestFileHashPublicMethod()
+{
+    const auto dir = MakeTempDir("file-hash");
+    const auto file = dir / "recording.mkv";
+    {
+        std::ofstream output(file, std::ios::binary | std::ios::trunc);
+        output << "hash me";
+    }
+
+    std::string error;
+    const auto first = bean::core::ComputeFileSha256(file, error);
+    Expect(first.has_value(), "ComputeFileSha256 should hash a readable file.");
+    Expect(first.has_value() && first->size() == 64, "SHA-256 output should be 64 hex characters.");
+    const auto second = bean::core::ComputeFileSha256(file, error);
+    Expect(second == first, "Hashing the same file should be deterministic.");
 }
 
 void TestCombatLogWatcherPublicMethods()
@@ -703,6 +745,7 @@ int main()
     TestSettingsStoreConcurrentSaves();
     TestSettingsSchemaVersionRoundTrip();
     TestBuildRecordingPath();
+    TestFileHashPublicMethod();
     TestRunRepositoryPublicMethods();
     TestRunRepositorySetsUserVersion();
     TestCombatLogWatcherPublicMethods();

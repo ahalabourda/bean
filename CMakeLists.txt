@@ -20,6 +20,7 @@ configure_file(
 
 add_library(bean_core
     src/core/ClipExportService.cpp
+    src/core/FileHash.cpp
     src/core/GameEnvironment.cpp
     src/core/RecordingOrchestrator.cpp
     src/core/RecordingPath.cpp

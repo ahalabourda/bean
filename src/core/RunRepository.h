@@ -35,6 +35,12 @@ struct RunRecord {
     // Recording quality tier at capture time (ultra/high/medium/low/minimum).
     // Absent for older rows written before this field existed.
     std::optional<std::string> encoderPreset;
+    // SHA-256 of the media file, populated asynchronously so relocation
+    // matching can remain off the UI thread.
+    std::optional<std::string> contentHash;
+    // Previous locations for this run. The primary videoPath is mutable when
+    // a recording is relocated; aliases preserve the old locations.
+    std::vector<std::filesystem::path> pathAliases;
     std::vector<Participant> participants;
 };
 
@@ -58,6 +64,11 @@ public:
     std::vector<RunRecord> ListRuns(std::string& error);
 
     bool UpsertRun(const RunRecord& record, std::string& error);
+    bool SetContentHash(const std::filesystem::path& videoPath, const std::string& contentHash, std::string& error);
+    bool RelocateRun(
+        const std::filesystem::path& oldVideoPath,
+        const std::filesystem::path& newVideoPath,
+        std::string& error);
     std::filesystem::path GetDatabasePath() const;
 
 private:

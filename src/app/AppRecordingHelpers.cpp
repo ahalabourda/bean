@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <sstream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -54,6 +55,32 @@ std::vector<std::filesystem::path> EnumerateRecordingMediaFiles(const std::files
             return aTime > bTime;
         }
         return a.filename().wstring() < b.filename().wstring();
+    });
+    return files;
+}
+
+std::vector<std::filesystem::path> EnumerateRecordingMediaFilesInFolders(
+    const std::vector<std::filesystem::path>& folders)
+{
+    std::vector<std::filesystem::path> files;
+    std::unordered_set<std::wstring> seen;
+    for (const auto& folder : folders) {
+        for (const auto& file : EnumerateRecordingMediaFiles(folder)) {
+            const auto key = file.lexically_normal().wstring();
+            if (seen.insert(key).second) {
+                files.push_back(file);
+            }
+        }
+    }
+    std::sort(files.begin(), files.end(), [](const auto& a, const auto& b) {
+        std::error_code aEc;
+        std::error_code bEc;
+        const auto aTime = std::filesystem::last_write_time(a, aEc);
+        const auto bTime = std::filesystem::last_write_time(b, bEc);
+        if (!aEc && !bEc && aTime != bTime) {
+            return aTime > bTime;
+        }
+        return _wcsicmp(a.wstring().c_str(), b.wstring().c_str()) < 0;
     });
     return files;
 }
@@ -103,6 +130,28 @@ std::vector<YouTubeMediaFile> EnumerateYouTubeMediaFiles(const std::filesystem::
             return a.modified > b.modified;
         }
         return a.path.filename().wstring() < b.path.filename().wstring();
+    });
+    return files;
+}
+
+std::vector<YouTubeMediaFile> EnumerateYouTubeMediaFilesInFolders(
+    const std::vector<std::filesystem::path>& folders)
+{
+    std::vector<YouTubeMediaFile> files;
+    std::unordered_set<std::wstring> seen;
+    for (const auto& folder : folders) {
+        for (auto& file : EnumerateYouTubeMediaFiles(folder)) {
+            const auto key = file.path.lexically_normal().wstring();
+            if (seen.insert(key).second) {
+                files.push_back(std::move(file));
+            }
+        }
+    }
+    std::sort(files.begin(), files.end(), [](const YouTubeMediaFile& a, const YouTubeMediaFile& b) {
+        if (a.modified != b.modified) {
+            return a.modified > b.modified;
+        }
+        return _wcsicmp(a.path.wstring().c_str(), b.path.wstring().c_str()) < 0;
     });
     return files;
 }

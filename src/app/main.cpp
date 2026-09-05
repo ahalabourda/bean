@@ -8,6 +8,7 @@
 #include "app/AppUtilities.h"
 #include "app/BeanUpdater.h"
 #include "bean_version.h"
+#include "core/FileHash.h"
 #include "core/GameEnvironment.h"
 #include "core/RecordingSizeEstimate.h"
 #include "core/WowData.h"
@@ -503,6 +504,58 @@ std::filesystem::path ResolveRecordingsFolderPath(const AppContext* ctx)
         return {};
     }
     return std::filesystem::path(folder);
+}
+
+void AddKnownRecordingFolder(
+    std::vector<std::filesystem::path>& folders,
+    const std::filesystem::path& folder)
+{
+    if (folder.empty()) {
+        return;
+    }
+    const auto normalized = folder.lexically_normal();
+    for (const auto& existing : folders) {
+        if (_wcsicmp(existing.wstring().c_str(), normalized.wstring().c_str()) == 0) {
+            return;
+        }
+    }
+    folders.push_back(normalized);
+}
+
+std::string RecordingPathKey(const std::filesystem::path& path)
+{
+    auto value = path.lexically_normal().wstring();
+    std::transform(value.begin(), value.end(), value.begin(), [](wchar_t ch) {
+        return static_cast<wchar_t>(std::towlower(ch));
+    });
+    return ToUtf8(value);
+}
+
+std::string RecordingFileNameKey(const std::filesystem::path& path)
+{
+    auto value = path.filename().wstring();
+    std::transform(value.begin(), value.end(), value.begin(), [](wchar_t ch) {
+        return static_cast<wchar_t>(std::towlower(ch));
+    });
+    return ToUtf8(value);
+}
+
+std::vector<std::filesystem::path> CollectKnownRecordingFolders(const AppContext* ctx)
+{
+    std::vector<std::filesystem::path> folders;
+    AddKnownRecordingFolder(folders, ResolveRecordingsFolderPath(ctx));
+    if (!ctx || !ctx->runRepository) {
+        return folders;
+    }
+
+    std::string dbError;
+    for (const auto& run : ctx->runRepository->ListRuns(dbError)) {
+        AddKnownRecordingFolder(folders, run.videoPath.parent_path());
+        for (const auto& alias : run.pathAliases) {
+            AddKnownRecordingFolder(folders, alias.parent_path());
+        }
+    }
+    return folders;
 }
 
 std::filesystem::path ResolveClipsOutputFolderPath(const AppContext* ctx)
@@ -2127,6 +2180,13 @@ struct DiskSpaceProbeResult {
     std::uint64_t warningThresholdBytes = 0;
 };
 
+struct RecordingReconciliationResult {
+    std::uint64_t requestId = 0;
+    std::size_t hashedCount = 0;
+    std::size_t relocatedCount = 0;
+    std::wstring error;
+};
+
 void ApplyFolderAvailabilityResult(AppContext* ctx, const FolderAvailabilityResult& result);
 void ApplyDiskSpaceProbeResult(AppContext* ctx, const DiskSpaceProbeResult& result);
 void BeginDiskSpaceProbe(AppContext* ctx);
@@ -2166,6 +2226,181 @@ void BeginFolderAvailabilityProbe(AppContext* ctx)
         }
     })) {
         ctx->folderAvailabilityProbeInFlight.store(false, std::memory_order_release);
+    }
+}
+
+void BeginRecordingReconciliation(AppContext* ctx)
+{
+    if (!ctx
+        || !ctx->mainWindow
+        || ctx->shuttingDown.load(std::memory_order_acquire)
+        || !ctx->runRepository) {
+        return;
+    }
+
+    const std::uint64_t requestId = ++ctx->recordingReconciliationRequestId;
+    if (ctx->recordingReconciliationInFlight.exchange(true)) {
+        return;
+    }
+
+    const auto repository = ctx->runRepository;
+    const auto currentOutput = ResolveRecordingsFolderPath(ctx);
+    if (!LaunchAppWorker(ctx, [ctx, repository, currentOutput, requestId]() {
+        auto* result = new RecordingReconciliationResult();
+        result->requestId = requestId;
+
+        std::string dbError;
+        auto runs = repository->ListRuns(dbError);
+        std::vector<std::filesystem::path> folders;
+        AddKnownRecordingFolder(folders, currentOutput);
+        for (const auto& run : runs) {
+            AddKnownRecordingFolder(folders, run.videoPath.parent_path());
+            for (const auto& alias : run.pathAliases) {
+                AddKnownRecordingFolder(folders, alias.parent_path());
+            }
+        }
+
+        const auto files = EnumerateRecordingMediaFilesInFolders(folders);
+        std::unordered_map<std::string, std::size_t> runByPath;
+        std::unordered_map<std::string, std::vector<std::size_t>> runsByFileName;
+        std::unordered_map<std::string, std::vector<std::size_t>> runsByHash;
+        std::vector<bool> runMatched(runs.size(), false);
+        for (std::size_t index = 0; index < runs.size(); ++index) {
+            runByPath[RecordingPathKey(runs[index].videoPath)] = index;
+            for (const auto& alias : runs[index].pathAliases) {
+                runByPath[RecordingPathKey(alias)] = index;
+            }
+            auto& pathNameCandidates = runsByFileName[RecordingFileNameKey(runs[index].videoPath)];
+            pathNameCandidates.push_back(index);
+            if (!runs[index].videoFileName.empty()) {
+                auto& storedNameCandidates = runsByFileName[
+                    RecordingFileNameKey(std::filesystem::path(runs[index].videoFileName))];
+                if (std::find(storedNameCandidates.begin(), storedNameCandidates.end(), index)
+                    == storedNameCandidates.end()) {
+                    storedNameCandidates.push_back(index);
+                }
+            }
+            if (runs[index].contentHash.has_value() && !runs[index].contentHash->empty()) {
+                runsByHash[*runs[index].contentHash].push_back(index);
+            }
+        }
+
+        std::unordered_map<std::string, std::string> fileHashes;
+        const auto hashFile = [&fileHashes](const std::filesystem::path& path) -> std::optional<std::string> {
+            const auto key = RecordingPathKey(path);
+            const auto cached = fileHashes.find(key);
+            if (cached != fileHashes.end()) {
+                return cached->second;
+            }
+            std::string hashError;
+            const auto hash = bean::core::ComputeFileSha256(path, hashError);
+            if (hash.has_value()) {
+                fileHashes.emplace(key, *hash);
+            }
+            return hash;
+        };
+
+        for (const auto& file : files) {
+            const auto exact = runByPath.find(RecordingPathKey(file));
+            if (exact == runByPath.end()) {
+                continue;
+            }
+            const auto runIndex = exact->second;
+            runMatched[runIndex] = true;
+        }
+
+        for (const auto& file : files) {
+            if (runByPath.find(RecordingPathKey(file)) != runByPath.end()) {
+                continue;
+            }
+
+            std::optional<std::size_t> matchedRun;
+            const auto filenameIt = runsByFileName.find(RecordingFileNameKey(file));
+            if (filenameIt != runsByFileName.end()) {
+                std::vector<std::size_t> candidates;
+                for (const auto runIndex : filenameIt->second) {
+                    if (!runMatched[runIndex]) {
+                        candidates.push_back(runIndex);
+                    }
+                }
+                if (candidates.size() == 1) {
+                    const auto runIndex = candidates.front();
+                    if (runs[runIndex].contentHash.has_value()) {
+                        if (const auto hash = hashFile(file); hash.has_value()
+                            && *hash == *runs[runIndex].contentHash) {
+                            matchedRun = runIndex;
+                        }
+                    } else {
+                        matchedRun = runIndex;
+                    }
+                }
+            }
+
+            if (!matchedRun.has_value() && !runsByHash.empty()) {
+                if (const auto hash = hashFile(file); hash.has_value()) {
+                    const auto hashIt = runsByHash.find(*hash);
+                    if (hashIt != runsByHash.end()) {
+                        std::vector<std::size_t> candidates;
+                        for (const auto runIndex : hashIt->second) {
+                            if (!runMatched[runIndex]) {
+                                candidates.push_back(runIndex);
+                            }
+                        }
+                        if (candidates.size() == 1) {
+                            matchedRun = candidates.front();
+                        }
+                    }
+                }
+            }
+
+            if (!matchedRun.has_value()) {
+                continue;
+            }
+            const auto runIndex = *matchedRun;
+            std::string relocateError;
+            if (repository->RelocateRun(runs[runIndex].videoPath, file, relocateError)) {
+                runMatched[runIndex] = true;
+                runByPath.erase(RecordingPathKey(runs[runIndex].videoPath));
+                runByPath[RecordingPathKey(file)] = runIndex;
+                runs[runIndex].pathAliases.push_back(runs[runIndex].videoPath);
+                runs[runIndex].videoPath = file;
+                ++result->relocatedCount;
+            } else if (result->error.empty() && !relocateError.empty()) {
+                result->error = ToWide(relocateError);
+            }
+        }
+
+        if (!dbError.empty() && result->error.empty()) {
+            result->error = ToWide(dbError);
+        }
+        const bool posted = PostOwnedAppMessage(
+            ctx,
+            WM_BEAN_RECORDING_RECONCILIATION_COMPLETE,
+            result);
+        ctx->recordingReconciliationInFlight.store(false, std::memory_order_release);
+
+        // Seed hashes only after the relocation result has reached the UI.
+        // This can read many large files, so it must never delay the list
+        // refresh or make a tab appear unresponsive.
+        for (const auto& file : files) {
+            const auto exact = runByPath.find(RecordingPathKey(file));
+            if (exact == runByPath.end()) {
+                continue;
+            }
+            const auto runIndex = exact->second;
+            if (runs[runIndex].contentHash.has_value()) {
+                continue;
+            }
+            if (const auto hash = hashFile(file); hash.has_value()) {
+                std::string hashError;
+                repository->SetContentHash(runs[runIndex].videoPath, *hash, hashError);
+            }
+        }
+        if (!posted) {
+            ctx->recordingReconciliationInFlight.store(false, std::memory_order_release);
+        }
+    })) {
+        ctx->recordingReconciliationInFlight.store(false, std::memory_order_release);
     }
 }
 
@@ -2886,6 +3121,7 @@ void RepopulateYouTubeMediaList(AppContext* ctx)
 }
 
 void RefreshYouTubeUiState(AppContext* ctx);
+void BeginRecordingReconciliation(AppContext* ctx);
 
 void UpdateYouTubeMediaSelection(AppContext* ctx)
 {
@@ -2909,36 +3145,46 @@ void UpdateYouTubeMediaSelection(AppContext* ctx)
     RefreshYouTubeUiState(ctx);
 }
 
-void RefreshYouTubeMediaList(AppContext* ctx)
+void RefreshYouTubeMediaList(AppContext* ctx, bool startReconciliation = true)
 {
     if (!ctx || !ctx->youtubeMediaList || !ctx->youtubeLabel) {
         return;
     }
 
-    const auto recordingsFolder = ResolveRecordingsFolderPath(ctx);
-    if (recordingsFolder.empty() || !DirectoryExists(recordingsFolder.wstring())) {
+    const auto folders = CollectKnownRecordingFolders(ctx);
+    const bool anyFolderAvailable = std::any_of(
+        folders.begin(),
+        folders.end(),
+        [](const auto& folder) { return DirectoryExists(folder.wstring()); });
+    if (!anyFolderAvailable) {
         if (!ctx->youtubeMediaItems.empty() || ctx->youtubeMediaSelectedIndex != -1) {
             ctx->youtubeMediaItems.clear();
             RepopulateYouTubeMediaList(ctx);
             UpdateYouTubeMediaSelection(ctx);
         }
         UpdateTransparentStaticText(ctx->youtubeLabel, L"Recordings folder is unavailable.");
+        if (startReconciliation) {
+            BeginRecordingReconciliation(ctx);
+        }
         return;
     }
 
     const auto previousItems = ctx->youtubeMediaItems;
-    ctx->youtubeMediaItems = EnumerateYouTubeMediaFiles(recordingsFolder);
+    ctx->youtubeMediaItems = EnumerateYouTubeMediaFilesInFolders(folders);
     if (ctx->runRepository) {
         std::string dbError;
         std::unordered_map<std::string, std::string> triggerReasonsByPath;
-        for (auto& run : ctx->runRepository->ListRuns(dbError)) {
-            triggerReasonsByPath[run.videoPath.string()] = std::move(run.triggerReason);
+        for (const auto& run : ctx->runRepository->ListRuns(dbError)) {
+            triggerReasonsByPath[RecordingPathKey(run.videoPath)] = run.triggerReason;
+            for (const auto& alias : run.pathAliases) {
+                triggerReasonsByPath[RecordingPathKey(alias)] = run.triggerReason;
+            }
         }
         for (auto& item : ctx->youtubeMediaItems) {
             if (item.type != YouTubeMediaType::Recording) {
                 continue;
             }
-            const auto triggerIt = triggerReasonsByPath.find(item.path.string());
+            const auto triggerIt = triggerReasonsByPath.find(RecordingPathKey(item.path));
             if (triggerIt != triggerReasonsByPath.end()) {
                 item.triggerReason = triggerIt->second;
             }
@@ -2963,7 +3209,12 @@ void RefreshYouTubeMediaList(AppContext* ctx)
         }
     }
     std::wostringstream summary;
-    summary << recordingsFolder.wstring() << L" (" << recordingCount << L" recording";
+    if (folders.size() == 1) {
+        summary << folders.front().wstring();
+    } else {
+        summary << L"Known recording folders";
+    }
+    summary << L" (" << recordingCount << L" recording";
     if (recordingCount != 1) {
         summary << L"s";
     }
@@ -2973,6 +3224,9 @@ void RefreshYouTubeMediaList(AppContext* ctx)
     }
     summary << L")";
     UpdateTransparentStaticText(ctx->youtubeLabel, summary.str().c_str());
+    if (startReconciliation) {
+        BeginRecordingReconciliation(ctx);
+    }
 }
 
 void RefreshYouTubeUiState(AppContext* ctx)
@@ -3387,18 +3641,18 @@ bool RecordingListDisplayEqual(
     return true;
 }
 
-void RefreshRecordingsList(AppContext* ctx)
+void RefreshRecordingsList(AppContext* ctx, bool startReconciliation = true)
 {
     if (!ctx || !ctx->recordingsList || !ctx->recordingsLabel) {
         return;
     }
 
-    std::wstring folder = GetWindowTextString(ctx->outputEdit);
-    if (folder.empty()) {
-        folder = ToWide(ctx->settings.outputDirectory.string());
-    }
-
-    if (!DirectoryExists(folder)) {
+    const auto folders = CollectKnownRecordingFolders(ctx);
+    const bool anyFolderAvailable = std::any_of(
+        folders.begin(),
+        folders.end(),
+        [](const auto& folder) { return DirectoryExists(folder.wstring()); });
+    if (!anyFolderAvailable) {
         if (!ctx->allRecordingItems.empty() || !ctx->recordingItems.empty()) {
             ctx->allRecordingItems.clear();
             ctx->recordingItems.clear();
@@ -3407,6 +3661,9 @@ void RefreshRecordingsList(AppContext* ctx)
             UpdateRecordingInfoPane(ctx, -1);
         }
         UpdateTransparentStaticText(ctx->recordingsLabel, L"Recordings folder is unavailable.");
+        if (startReconciliation) {
+            BeginRecordingReconciliation(ctx);
+        }
         return;
     }
 
@@ -3416,9 +3673,11 @@ void RefreshRecordingsList(AppContext* ctx)
     std::unordered_map<std::string, bean::core::RunRecord> runsByVideoPath;
     if (ctx->runRepository) {
         std::string dbError;
-        for (auto& run : ctx->runRepository->ListRuns(dbError)) {
-            auto key = run.videoPath.string();
-            runsByVideoPath.emplace(std::move(key), std::move(run));
+        for (const auto& run : ctx->runRepository->ListRuns(dbError)) {
+            runsByVideoPath.emplace(RecordingPathKey(run.videoPath), run);
+            for (const auto& alias : run.pathAliases) {
+                runsByVideoPath.emplace(RecordingPathKey(alias), run);
+            }
         }
     }
 
@@ -3431,7 +3690,7 @@ void RefreshRecordingsList(AppContext* ctx)
     }
 
     std::vector<AppContext::RecordingItem> nextItems;
-    for (const auto& mediaPath : EnumerateRecordingMediaFiles(folder)) {
+    for (const auto& mediaPath : EnumerateRecordingMediaFilesInFolders(folders)) {
         std::error_code timeEc;
         const auto modified = std::filesystem::last_write_time(mediaPath, timeEc);
         const auto writeTime = timeEc ? std::filesystem::file_time_type::clock::now() : modified;
@@ -3450,7 +3709,7 @@ void RefreshRecordingsList(AppContext* ctx)
         row.dateText = FormatLocalDate(FileTimeToSystemClock(row.modified));
 
         {
-            const auto runIt = runsByVideoPath.find(row.path.string());
+            const auto runIt = runsByVideoPath.find(RecordingPathKey(row.path));
             const std::optional<bean::core::RunRecord> run = runIt == runsByVideoPath.end()
                 ? std::nullopt
                 : std::optional<bean::core::RunRecord>(runIt->second);
@@ -3515,6 +3774,9 @@ void RefreshRecordingsList(AppContext* ctx)
     BackfillRecordingParticipantsFromKnownGuids(ctx);
     SortRecordingItems(ctx);
     ApplyRecordingFilters(ctx);
+    if (startReconciliation) {
+        BeginRecordingReconciliation(ctx);
+    }
 }
 
 void RefreshVisibleRecordingFileLists(AppContext* ctx)
@@ -6936,6 +7198,34 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             }
         } else if (ctx) {
             ctx->diskSpaceProbeInFlight.store(false, std::memory_order_release);
+        }
+        delete result;
+        return 0;
+    }
+    case WM_BEAN_RECORDING_RECONCILIATION_COMPLETE: {
+        auto* result = reinterpret_cast<RecordingReconciliationResult*>(lParam);
+        if (ctx && result) {
+            ctx->recordingReconciliationInFlight.store(false, std::memory_order_release);
+            const bool shouldReconcileAgain =
+                result->requestId != ctx->recordingReconciliationRequestId;
+            if (result->relocatedCount > 0) {
+                SetStatus(
+                    ctx,
+                    L"Rediscovered "
+                    + std::to_wstring(result->relocatedCount)
+                    + L" relocated recording"
+                    + (result->relocatedCount == 1 ? L"." : L"s."));
+            }
+            if (!result->error.empty()) {
+                SetStatus(ctx, L"Recording reconciliation warning: " + result->error);
+            }
+            RefreshRecordingsList(ctx, false);
+            RefreshYouTubeMediaList(ctx, false);
+            if (shouldReconcileAgain) {
+                BeginRecordingReconciliation(ctx);
+            }
+        } else if (ctx) {
+            ctx->recordingReconciliationInFlight.store(false, std::memory_order_release);
         }
         delete result;
         return 0;

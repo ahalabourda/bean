@@ -228,7 +228,7 @@ bool SetSqliteUserVersion(sqlite3* db, int version, std::string& error)
 }
 
 // Current schema revision. Bump when adding numbered migrations below.
-constexpr int kRunsDbUserVersion = 3;
+constexpr int kRunsDbUserVersion = 4;
 
 bool MigrateRunParticipantsSchema(sqlite3* db, std::string& error)
 {
@@ -288,6 +288,40 @@ bool MigrateAddEncoderPresetColumn(sqlite3* db, std::string& error)
         return true;
     }
     return ExecuteSql(db, "ALTER TABLE runs ADD COLUMN encoder_preset TEXT;", error);
+}
+
+bool MigrateRecordingIdentity(sqlite3* db, std::string& error)
+{
+    bool hasContentHash = false;
+    if (!(hasContentHash = TableHasColumn(db, "runs", "content_hash", error)) && !error.empty()) {
+        return false;
+    }
+
+    if (!ExecuteSql(db, "BEGIN IMMEDIATE TRANSACTION;", error)) {
+        return false;
+    }
+    const char* migrationSql =
+        "CREATE TABLE IF NOT EXISTS run_path_aliases ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "run_id INTEGER NOT NULL,"
+        "path TEXT NOT NULL UNIQUE,"
+        "FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE"
+        ");"
+        "CREATE INDEX IF NOT EXISTS idx_run_path_aliases_run_id ON run_path_aliases(run_id);";
+    if (!ExecuteSql(db, migrationSql, error)) {
+        ExecuteSql(db, "ROLLBACK;", error);
+        return false;
+    }
+    if (!hasContentHash
+        && !ExecuteSql(db, "ALTER TABLE runs ADD COLUMN content_hash TEXT;", error)) {
+        ExecuteSql(db, "ROLLBACK;", error);
+        return false;
+    }
+    if (!ExecuteSql(db, "COMMIT;", error)) {
+        ExecuteSql(db, "ROLLBACK;", error);
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -360,9 +394,17 @@ bool RunRepository::EnsureInitialized(std::string& error)
         "challenge_map_id INTEGER,"
         "keystone_level INTEGER,"
         "dungeon_name TEXT,"
-        "encoder_preset TEXT"
+        "encoder_preset TEXT,"
+        "content_hash TEXT"
         ");"
         "CREATE INDEX IF NOT EXISTS idx_runs_video_file_name ON runs(video_file_name);"
+        "CREATE TABLE IF NOT EXISTS run_path_aliases ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "run_id INTEGER NOT NULL,"
+        "path TEXT NOT NULL UNIQUE,"
+        "FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE"
+        ");"
+        "CREATE INDEX IF NOT EXISTS idx_run_path_aliases_run_id ON run_path_aliases(run_id);"
         "CREATE TABLE IF NOT EXISTS run_participants ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT,"
         "run_id INTEGER NOT NULL,"
@@ -396,6 +438,12 @@ bool RunRepository::EnsureInitialized(std::string& error)
     }
     if (userVersion < 3) {
         if (!MigrateAddEncoderPresetColumn(db, error)) {
+            api.close(db);
+            return false;
+        }
+    }
+    if (userVersion < 4) {
+        if (!MigrateRecordingIdentity(db, error)) {
             api.close(db);
             return false;
         }
@@ -445,8 +493,8 @@ bool RunRepository::UpsertRun(const RunRecord& record, std::string& error)
         "INSERT INTO runs ("
         "video_path, video_file_name, trigger_reason, stop_reason, result,"
         "recording_started_at_utc, recording_ended_at_utc, mythic_started_at_utc, mythic_ended_at_utc,"
-        "challenge_map_id, keystone_level, dungeon_name, encoder_preset"
-        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "challenge_map_id, keystone_level, dungeon_name, encoder_preset, content_hash"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(video_path) DO UPDATE SET "
         "video_file_name=excluded.video_file_name,"
         "trigger_reason=excluded.trigger_reason,"
@@ -459,7 +507,8 @@ bool RunRepository::UpsertRun(const RunRecord& record, std::string& error)
         "challenge_map_id=excluded.challenge_map_id,"
         "keystone_level=excluded.keystone_level,"
         "dungeon_name=excluded.dungeon_name,"
-        "encoder_preset=excluded.encoder_preset;";
+        "encoder_preset=excluded.encoder_preset,"
+        "content_hash=COALESCE(excluded.content_hash, runs.content_hash);";
 
     sqlite3_stmt* stmt = nullptr;
     if (api.prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
@@ -483,6 +532,7 @@ bool RunRepository::UpsertRun(const RunRecord& record, std::string& error)
     BindIntOrNull(stmt, 11, record.keystoneLevel);
     BindTextOrNull(stmt, 12, record.dungeonName);
     BindTextOrNull(stmt, 13, record.encoderPreset);
+    BindTextOrNull(stmt, 14, record.contentHash);
 
     const int stepRc = api.step(stmt);
     api.finalize(stmt);
@@ -570,6 +620,189 @@ bool RunRepository::UpsertRun(const RunRecord& record, std::string& error)
     return true;
 }
 
+bool RunRepository::SetContentHash(
+    const std::filesystem::path& videoPath,
+    const std::string& contentHash,
+    std::string& error)
+{
+    std::scoped_lock lock(mutex_);
+    if (!EnsureInitialized(error)) {
+        return false;
+    }
+    auto& api = GetSqliteApi();
+    auto* db = static_cast<sqlite3*>(db_);
+    sqlite3_stmt* stmt = nullptr;
+    if (api.prepare_v2(
+            db,
+            "UPDATE runs SET content_hash = ? WHERE video_path = ?;",
+            -1,
+            &stmt,
+            nullptr)
+        != SQLITE_OK
+        || !stmt) {
+        error = "Unable to prepare recording hash update.";
+        return false;
+    }
+    api.bind_text(stmt, 1, contentHash.c_str(), -1, SQLITE_TRANSIENT);
+    const auto pathText = videoPath.string();
+    api.bind_text(stmt, 2, pathText.c_str(), -1, SQLITE_TRANSIENT);
+    const int stepRc = api.step(stmt);
+    api.finalize(stmt);
+    if (stepRc != SQLITE_DONE) {
+        error = "Failed to save recording content hash.";
+        return false;
+    }
+    return true;
+}
+
+bool RunRepository::RelocateRun(
+    const std::filesystem::path& oldVideoPath,
+    const std::filesystem::path& newVideoPath,
+    std::string& error)
+{
+    std::scoped_lock lock(mutex_);
+    if (!EnsureInitialized(error)) {
+        return false;
+    }
+    if (oldVideoPath.empty() || newVideoPath.empty()
+        || oldVideoPath.lexically_normal() == newVideoPath.lexically_normal()) {
+        return true;
+    }
+
+    auto& api = GetSqliteApi();
+    auto* db = static_cast<sqlite3*>(db_);
+    if (!ExecuteSql(db, "BEGIN IMMEDIATE TRANSACTION;", error)) {
+        return false;
+    }
+
+    const auto oldPathText = oldVideoPath.string();
+    const auto newPathText = newVideoPath.string();
+    sqlite3_stmt* lookupStmt = nullptr;
+    if (api.prepare_v2(
+            db,
+            "SELECT id FROM runs WHERE video_path = ?;",
+            -1,
+            &lookupStmt,
+            nullptr)
+        != SQLITE_OK
+        || !lookupStmt) {
+        error = "Unable to prepare recording relocation lookup.";
+        ExecuteSql(db, "ROLLBACK;", error);
+        return false;
+    }
+    api.bind_text(lookupStmt, 1, oldPathText.c_str(), -1, SQLITE_TRANSIENT);
+    if (api.step(lookupStmt) != SQLITE_ROW) {
+        api.finalize(lookupStmt);
+        error = "Recording relocation source was not found.";
+        ExecuteSql(db, "ROLLBACK;", error);
+        return false;
+    }
+    const int runId = api.column_int(lookupStmt, 0);
+    api.finalize(lookupStmt);
+
+    sqlite3_stmt* conflictStmt = nullptr;
+    if (api.prepare_v2(
+            db,
+            "SELECT id FROM runs WHERE video_path = ? "
+            "UNION SELECT run_id FROM run_path_aliases WHERE path = ? LIMIT 1;",
+            -1,
+            &conflictStmt,
+            nullptr)
+        != SQLITE_OK
+        || !conflictStmt) {
+        error = "Unable to prepare recording relocation conflict check.";
+        ExecuteSql(db, "ROLLBACK;", error);
+        return false;
+    }
+    api.bind_text(conflictStmt, 1, newPathText.c_str(), -1, SQLITE_TRANSIENT);
+    api.bind_text(conflictStmt, 2, newPathText.c_str(), -1, SQLITE_TRANSIENT);
+    const int conflictRc = api.step(conflictStmt);
+    if (conflictRc == SQLITE_ROW && api.column_int(conflictStmt, 0) != runId) {
+        api.finalize(conflictStmt);
+        error = "Recording relocation target belongs to another run.";
+        ExecuteSql(db, "ROLLBACK;", error);
+        return false;
+    }
+    api.finalize(conflictStmt);
+
+    sqlite3_stmt* aliasStmt = nullptr;
+    if (api.prepare_v2(
+            db,
+            "INSERT OR IGNORE INTO run_path_aliases (run_id, path) VALUES (?, ?);",
+            -1,
+            &aliasStmt,
+            nullptr)
+        != SQLITE_OK
+        || !aliasStmt) {
+        error = "Unable to prepare recording relocation alias insert.";
+        ExecuteSql(db, "ROLLBACK;", error);
+        return false;
+    }
+    api.bind_int(aliasStmt, 1, runId);
+    api.bind_text(aliasStmt, 2, oldPathText.c_str(), -1, SQLITE_TRANSIENT);
+    if (api.step(aliasStmt) != SQLITE_DONE) {
+        api.finalize(aliasStmt);
+        error = "Failed to preserve the old recording path.";
+        ExecuteSql(db, "ROLLBACK;", error);
+        return false;
+    }
+    api.finalize(aliasStmt);
+
+    sqlite3_stmt* removeAliasStmt = nullptr;
+    if (api.prepare_v2(
+            db,
+            "DELETE FROM run_path_aliases WHERE run_id = ? AND path = ?;",
+            -1,
+            &removeAliasStmt,
+            nullptr)
+        != SQLITE_OK
+        || !removeAliasStmt) {
+        error = "Unable to prepare recording relocation alias cleanup.";
+        ExecuteSql(db, "ROLLBACK;", error);
+        return false;
+    }
+    api.bind_int(removeAliasStmt, 1, runId);
+    api.bind_text(removeAliasStmt, 2, newPathText.c_str(), -1, SQLITE_TRANSIENT);
+    if (api.step(removeAliasStmt) != SQLITE_DONE) {
+        api.finalize(removeAliasStmt);
+        error = "Failed to clean up the recording relocation alias.";
+        ExecuteSql(db, "ROLLBACK;", error);
+        return false;
+    }
+    api.finalize(removeAliasStmt);
+
+    sqlite3_stmt* updateStmt = nullptr;
+    if (api.prepare_v2(
+            db,
+            "UPDATE runs SET video_path = ?, video_file_name = ? WHERE id = ?;",
+            -1,
+            &updateStmt,
+            nullptr)
+        != SQLITE_OK
+        || !updateStmt) {
+        error = "Unable to prepare recording relocation update.";
+        ExecuteSql(db, "ROLLBACK;", error);
+        return false;
+    }
+    const auto newFileName = newVideoPath.filename().string();
+    api.bind_text(updateStmt, 1, newPathText.c_str(), -1, SQLITE_TRANSIENT);
+    api.bind_text(updateStmt, 2, newFileName.c_str(), -1, SQLITE_TRANSIENT);
+    api.bind_int(updateStmt, 3, runId);
+    if (api.step(updateStmt) != SQLITE_DONE) {
+        api.finalize(updateStmt);
+        error = "Failed to update the relocated recording path.";
+        ExecuteSql(db, "ROLLBACK;", error);
+        return false;
+    }
+    api.finalize(updateStmt);
+
+    if (!ExecuteSql(db, "COMMIT;", error)) {
+        ExecuteSql(db, "ROLLBACK;", error);
+        return false;
+    }
+    return true;
+}
+
 std::optional<RunRecord> RunRepository::GetRunByVideoPath(const std::filesystem::path& videoPath, std::string& error)
 {
     std::scoped_lock lock(mutex_);
@@ -588,15 +821,19 @@ std::optional<RunRecord> RunRepository::ReadRunByVideoPathLocked(
     const char* sql =
         "SELECT video_path, video_file_name, trigger_reason, stop_reason, result, "
         "recording_started_at_utc, recording_ended_at_utc, mythic_started_at_utc, mythic_ended_at_utc, "
-        "challenge_map_id, keystone_level, dungeon_name, encoder_preset, id "
-        "FROM runs WHERE video_path = ?;";
+        "challenge_map_id, keystone_level, dungeon_name, encoder_preset, content_hash, id "
+        "FROM runs WHERE video_path = ? "
+        "OR id IN (SELECT run_id FROM run_path_aliases WHERE path = ?) "
+        "LIMIT 1;";
 
     sqlite3_stmt* stmt = nullptr;
     if (api.prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || !stmt) {
         error = "Unable to prepare run query statement.";
         return std::nullopt;
     }
-    api.bind_text(stmt, 1, videoPath.string().c_str(), -1, SQLITE_TRANSIENT);
+    const auto videoPathText = videoPath.string();
+    api.bind_text(stmt, 1, videoPathText.c_str(), -1, SQLITE_TRANSIENT);
+    api.bind_text(stmt, 2, videoPathText.c_str(), -1, SQLITE_TRANSIENT);
 
     const int stepRc = api.step(stmt);
     if (stepRc != SQLITE_ROW) {
@@ -634,7 +871,12 @@ std::optional<RunRecord> RunRepository::ReadRunByVideoPathLocked(
             record.encoderPreset = text;
         }
     }
-    const int runId = api.column_int(stmt, 13);
+    if (const auto* text = reinterpret_cast<const char*>(api.column_text(stmt, 13)); text) {
+        if (*text != '\0') {
+            record.contentHash = text;
+        }
+    }
+    const int runId = api.column_int(stmt, 14);
 
     api.finalize(stmt);
 
@@ -673,6 +915,20 @@ std::optional<RunRecord> RunRepository::ReadRunByVideoPathLocked(
         }
     }
     api.finalize(participantStmt);
+
+    const char* aliasSql = "SELECT path FROM run_path_aliases WHERE run_id = ? ORDER BY id;";
+    sqlite3_stmt* aliasStmt = nullptr;
+    if (api.prepare_v2(db, aliasSql, -1, &aliasStmt, nullptr) != SQLITE_OK || !aliasStmt) {
+        error = "Unable to prepare run path alias query.";
+        return std::nullopt;
+    }
+    api.bind_int(aliasStmt, 1, runId);
+    while (api.step(aliasStmt) == SQLITE_ROW) {
+        if (const auto* text = reinterpret_cast<const char*>(api.column_text(aliasStmt, 0)); text) {
+            record.pathAliases.emplace_back(text);
+        }
+    }
+    api.finalize(aliasStmt);
 
     return record;
 }

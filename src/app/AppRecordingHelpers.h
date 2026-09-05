@@ -67,7 +67,11 @@ struct YouTubeMediaFile {
 // .mkv / .mp4 files in a folder, newest write-time first. Shared by the
 // Recordings list and the Clips source combo.
 std::vector<std::filesystem::path> EnumerateRecordingMediaFiles(const std::filesystem::path& folder);
+std::vector<std::filesystem::path> EnumerateRecordingMediaFilesInFolders(
+    const std::vector<std::filesystem::path>& folders);
 std::vector<YouTubeMediaFile> EnumerateYouTubeMediaFiles(const std::filesystem::path& recordingsFolder);
+std::vector<YouTubeMediaFile> EnumerateYouTubeMediaFilesInFolders(
+    const std::vector<std::filesystem::path>& folders);
 void SortYouTubeMediaFiles(
     std::vector<YouTubeMediaFile>& files,
     YouTubeMediaSortColumn column,
