@@ -5945,7 +5945,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ctx->recordingsFilterTypeRaidCheck = CreateWindowW(
             L"BUTTON",
             L"Raid",
-            WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX | WS_TABSTOP,
+            WS_VISIBLE | WS_CHILD | WS_DISABLED | BS_AUTOCHECKBOX | WS_TABSTOP,
             532,
             394,
             108,
@@ -5957,7 +5957,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         ctx->recordingsFilterTypePvpCheck = CreateWindowW(
             L"BUTTON",
             L"PvP",
-            WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX | WS_TABSTOP,
+            WS_VISIBLE | WS_CHILD | WS_DISABLED | BS_AUTOCHECKBOX | WS_TABSTOP,
             646,
             394,
             108,
