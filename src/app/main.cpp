@@ -5567,7 +5567,10 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         const auto result = bean::app::ApplyUpdate(updateStatus);
         SetStatus(ctx, updateStatus);
         if (result == bean::app::UpdateApplyResult::UpdateReadyAndExitRequested) {
-            PostMessageW(hwnd, WM_CLOSE, 0, 0);
+            ctx->closeConfirmationBypassRequested = true;
+            if (!PostMessageW(hwnd, WM_CLOSE, 0, 0)) {
+                ctx->closeConfirmationBypassRequested = false;
+            }
         } else {
             RefreshAboutUpdateButtonState(ctx);
         }
@@ -7303,11 +7306,14 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         return 0;
     }
     case WM_CLOSE:
-        if (MessageBoxW(
-                hwnd,
-                L"Are you sure you want to close Bean?\nYour runs will no longer be recorded.",
-                L"Exit Bean",
-                MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES) {
+        if (ctx && ctx->closeConfirmationBypassRequested) {
+            ctx->closeConfirmationBypassRequested = false;
+            DestroyWindow(hwnd);
+        } else if (MessageBoxW(
+                       hwnd,
+                       L"Are you sure you want to close Bean?\nYour runs will no longer be recorded.",
+                       L"Exit Bean",
+                       MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES) {
             DestroyWindow(hwnd);
         }
         return 0;

@@ -914,6 +914,8 @@ struct AppContext {
     };
     MainTab activeTab = MainTab::Status;
     std::vector<MicrophoneOption> microphoneOptions;
+    // Set when an update has already obtained the user's consent to exit.
+    bool closeConfirmationBypassRequested = false;
     std::atomic<bool> shuttingDown{false};
 
     AppWorkerRegistry backgroundWorkers;
