@@ -195,16 +195,11 @@ void SortYouTubeMediaFiles(
 std::wstring FormatElapsed(std::chrono::seconds elapsed)
 {
     const auto total = elapsed.count();
-    const int hours = static_cast<int>(total / 3600);
-    const int minutes = static_cast<int>((total % 3600) / 60);
+    const int minutes = static_cast<int>(total / 60);
     const int seconds = static_cast<int>(total % 60);
 
     wchar_t buffer[32] = {};
-    if (hours > 0) {
-        swprintf_s(buffer, L"%02d:%02d:%02d", hours, minutes, seconds);
-    } else {
-        swprintf_s(buffer, L"%02d:%02d", minutes, seconds);
-    }
+    swprintf_s(buffer, L"%02d:%02d", minutes, seconds);
     return buffer;
 }
 

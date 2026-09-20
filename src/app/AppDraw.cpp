@@ -3302,9 +3302,12 @@ std::vector<int> BeanFileListColumnWidths(HWND hwnd, const BeanFileListState& st
     } else if (state.kind == BeanFileListKind::Recordings) {
         const int dungeonWidth = (std::max)(120, contentWidth * 40 / 100);
         const int keyWidth = (std::max)(56, contentWidth * 11 / 100);
-        const int lengthWidth = (std::max)(88, contentWidth * 17 / 100);
-        const int dateWidth = (std::max)(94, contentWidth - dungeonWidth - keyWidth - lengthWidth);
-        widths = {dungeonWidth, keyWidth, lengthWidth, dateWidth};
+        constexpr int actionWidth = 38;
+        const int lengthWidth = (std::max)(78, contentWidth * 16 / 100);
+        const int dateWidth = (std::max)(
+            84,
+            contentWidth - dungeonWidth - keyWidth - lengthWidth - actionWidth);
+        widths = {dungeonWidth, keyWidth, lengthWidth, dateWidth, actionWidth};
     } else {
         const int typeWidth = (std::max)(76, contentWidth * 10 / 100);
         const int dateWidth = (std::max)(130, contentWidth * 23 / 100);
@@ -3326,13 +3329,38 @@ std::vector<int> BeanFileListColumnWidths(HWND hwnd, const BeanFileListState& st
     return widths;
 }
 
+bool BeanFileListActionHit(const BeanFileListState& state, HWND hwnd, int x, int y)
+{
+    if (state.kind != BeanFileListKind::Recordings) {
+        return false;
+    }
+
+    RECT clientRect{};
+    GetClientRect(hwnd, &clientRect);
+    const int clientHeight = static_cast<int>(clientRect.bottom);
+    const int contentWidth = clientRect.right - BeanFileListScrollbarGutter(state, clientHeight);
+    const int headerHeight = BeanFileListHeaderHeightFor(state);
+    if (x < 0 || x >= contentWidth || y < headerHeight) {
+        return false;
+    }
+
+    const int row = (y - headerHeight) / kBeanFileListRowHeight;
+    const int index = state.scrollOffset + row;
+    if (row < 0 || index < 0 || static_cast<size_t>(index) >= BeanFileListItemCount(state)) {
+        return false;
+    }
+
+    const auto widths = BeanFileListColumnWidths(hwnd, state);
+    return !widths.empty() && x >= contentWidth - widths.back();
+}
+
 std::vector<std::wstring> BeanFileListHeaders(BeanFileListKind kind)
 {
     if (kind == BeanFileListKind::Participants) {
         return {};
     }
     return kind == BeanFileListKind::Recordings
-        ? std::vector<std::wstring>{L"Dungeon", L"Level", L"Duration", L"Date"}
+        ? std::vector<std::wstring>{L"Dungeon", L"Level", L"Duration", L"Date", L""}
         : std::vector<std::wstring>{L"Type", L"Name", L"Date"};
 }
 
@@ -3345,7 +3373,7 @@ std::vector<std::wstring> BeanFileListRow(const BeanFileListState& state, size_t
 {
     if (state.kind == BeanFileListKind::Recordings) {
         const auto& item = state.ctx->recordingItems[index];
-        return {item.dungeonName, item.keystoneText, item.durationText, item.dateText};
+        return {item.dungeonName, item.keystoneText, item.durationText, item.dateText, L""};
     }
     const auto& item = state.ctx->youtubeMediaItems[index];
     const std::wstring typeText = item.type == YouTubeMediaType::Clip
@@ -3493,6 +3521,17 @@ void DrawBeanFileList(HWND hwnd, HDC dc)
             columnLeft = 0;
             for (size_t column = 0; column < cells.size(); ++column) {
                 RECT cell{columnLeft, top, columnLeft + widths[column], top + kBeanFileListRowHeight};
+                if (state->kind == BeanFileListKind::Recordings && column == cells.size() - 1) {
+                    DrawBeanFileListText(
+                        dc,
+                        cell,
+                        L"\x2702",
+                        true,
+                        RGB(255, 255, 255),
+                        gTheme.scissorsFont ? gTheme.scissorsFont : font);
+                    columnLeft += widths[column];
+                    continue;
+                }
                 COLORREF textColor = kColorTextPrimary;
                 if (state->kind == BeanFileListKind::Recordings
                     && column == 1
@@ -3710,6 +3749,16 @@ LRESULT CALLBACK BeanFileListSubclassProc(HWND hwnd, UINT message, WPARAM wParam
             const int row = (y - headerHeight) / kBeanFileListRowHeight;
             const int index = state->scrollOffset + row;
             if (row >= 0 && index >= 0 && static_cast<size_t>(index) < itemCount) {
+                const bool clickedAction = BeanFileListActionHit(*state, hwnd, x, y);
+                if (clickedAction) {
+                    if (BeanFileListSelection(*state) != index) {
+                        BeanFileListSelection(*state) = index;
+                        NotifyBeanFileList(hwnd, WM_BEAN_FILE_LIST_SELECTION, index);
+                    }
+                    NotifyBeanFileList(hwnd, WM_BEAN_FILE_LIST_ACTION, index);
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
                 if (BeanFileListSelection(*state) != index) {
                     BeanFileListSelection(*state) = index;
                     NotifyBeanFileList(hwnd, WM_BEAN_FILE_LIST_SELECTION, index);
@@ -3748,7 +3797,31 @@ LRESULT CALLBACK BeanFileListSubclassProc(HWND hwnd, UINT message, WPARAM wParam
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
+        {
+            POINT cursor{};
+            GetCursorPos(&cursor);
+            ScreenToClient(hwnd, &cursor);
+            SetCursor(
+                LoadCursorW(
+                    nullptr,
+                    MAKEINTRESOURCEW(
+                        BeanFileListActionHit(*state, hwnd, cursor.x, cursor.y) ? IDC_HAND : IDC_ARROW)));
+        }
         return 0;
+    case WM_SETCURSOR: {
+        if (LOWORD(lParam) == HTCLIENT) {
+            POINT cursor{};
+            GetCursorPos(&cursor);
+            ScreenToClient(hwnd, &cursor);
+            SetCursor(
+                LoadCursorW(
+                    nullptr,
+                    MAKEINTRESOURCEW(
+                        BeanFileListActionHit(*state, hwnd, cursor.x, cursor.y) ? IDC_HAND : IDC_ARROW)));
+            return TRUE;
+        }
+        return DefSubclassProc(hwnd, message, wParam, lParam);
+    }
     case WM_LBUTTONUP:
         if (state->draggingScrollbar) {
             state->draggingScrollbar = false;
@@ -4178,6 +4251,9 @@ void EnsureThemeResources()
     if (!gTheme.recordingsFont) {
         gTheme.recordingsFont = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FF_DONTCARE, L"Segoe UI");
     }
+    if (!gTheme.scissorsFont) {
+        gTheme.scissorsFont = CreateFontW(-20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FF_DONTCARE, L"Segoe UI Symbol");
+    }
     if (!gTheme.headingFont) {
         gTheme.headingFont = CreateFontW(-27, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FF_DONTCARE, L"Segoe UI");
     }
@@ -4255,6 +4331,7 @@ void DestroyThemeResources()
     if (gTheme.mutedItalicHintFont) { DeleteObject(gTheme.mutedItalicHintFont); gTheme.mutedItalicHintFont = nullptr; }
     if (gTheme.statusIndicatorFont) { DeleteObject(gTheme.statusIndicatorFont); gTheme.statusIndicatorFont = nullptr; }
     if (gTheme.recordingsFont) { DeleteObject(gTheme.recordingsFont); gTheme.recordingsFont = nullptr; }
+    if (gTheme.scissorsFont) { DeleteObject(gTheme.scissorsFont); gTheme.scissorsFont = nullptr; }
     if (gTheme.headingFont) { DeleteObject(gTheme.headingFont); gTheme.headingFont = nullptr; }
     if (gTheme.inputBrush) { DeleteObject(gTheme.inputBrush); gTheme.inputBrush = nullptr; }
     if (gTheme.youtubeInputBrush) { DeleteObject(gTheme.youtubeInputBrush); gTheme.youtubeInputBrush = nullptr; }

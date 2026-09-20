@@ -46,6 +46,7 @@ inline constexpr UINT WM_BEAN_FILE_LIST_DOUBLE_CLICK = WM_APP + 113;
 inline constexpr UINT WM_BEAN_FOLDER_AVAILABILITY_COMPLETE = WM_APP + 114;
 inline constexpr UINT WM_BEAN_DISK_SPACE_COMPLETE = WM_APP + 115;
 inline constexpr UINT WM_BEAN_RECORDING_RECONCILIATION_COMPLETE = WM_APP + 116;
+inline constexpr UINT WM_BEAN_FILE_LIST_ACTION = WM_APP + 117;
 inline constexpr wchar_t kStatusLogFilePrefix[] = L"bean-status-log-";
 inline constexpr wchar_t kStatusLogFileExtension[] = L".txt";
 inline constexpr size_t kStatusLogRetentionCount = 5;
@@ -383,6 +384,7 @@ struct VisualTheme {
     HFONT mutedItalicHintFont = nullptr;
     HFONT statusIndicatorFont = nullptr;
     HFONT recordingsFont = nullptr;
+    HFONT scissorsFont = nullptr;
     HFONT headingFont = nullptr;
     HBRUSH inputBrush = nullptr;
     HBRUSH youtubeInputBrush = nullptr;

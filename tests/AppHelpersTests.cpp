@@ -36,7 +36,7 @@ std::filesystem::path MakeTempDir(const std::string& name)
 void TestFormatElapsed()
 {
     Expect(FormatElapsed(std::chrono::seconds(65)) == L"01:05", "Under an hour should be mm:ss.");
-    Expect(FormatElapsed(std::chrono::seconds(3661)) == L"01:01:01", "Over an hour should be hh:mm:ss.");
+    Expect(FormatElapsed(std::chrono::seconds(3661)) == L"61:01", "Over an hour should use total minutes.");
     Expect(FormatElapsed(std::chrono::seconds(0)) == L"00:00", "Zero elapsed should format.");
 }
 

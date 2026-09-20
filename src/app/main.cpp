@@ -3858,6 +3858,45 @@ void SetActiveTab(AppContext* ctx, AppContext::MainTab tab)
     }
 }
 
+void OpenRecordingInClipmaker(AppContext* ctx, int recordingIndex)
+{
+    if (!ctx
+        || recordingIndex < 0
+        || static_cast<size_t>(recordingIndex) >= ctx->recordingItems.size()) {
+        return;
+    }
+
+    const auto requestedPath = ctx->recordingItems[static_cast<size_t>(recordingIndex)].path.lexically_normal();
+    SetActiveTab(ctx, AppContext::MainTab::Clips);
+    if (!ctx->clipsSourceCombo) {
+        return;
+    }
+
+    int matchingSourceIndex = -1;
+    for (size_t index = 0; index < ctx->clipSourceItems.size(); ++index) {
+        if (ctx->clipSourceItems[index].lexically_normal() == requestedPath) {
+            matchingSourceIndex = static_cast<int>(index);
+            break;
+        }
+    }
+    if (matchingSourceIndex < 0) {
+        std::error_code pathEc;
+        if (std::filesystem::exists(requestedPath, pathEc) && !pathEc) {
+            ctx->clipSourceItems.push_back(requestedPath);
+            const auto displayName = requestedPath.filename().wstring();
+            SendMessageW(ctx->clipsSourceCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(displayName.c_str()));
+            matchingSourceIndex = static_cast<int>(ctx->clipSourceItems.size() - 1);
+        }
+    }
+    if (matchingSourceIndex < 0) {
+        SetStatus(ctx, L"Selected recording is unavailable in Clipmaker.");
+        return;
+    }
+
+    SendMessageW(ctx->clipsSourceCombo, CB_SETCURSEL, static_cast<WPARAM>(matchingSourceIndex), 0);
+    LoadClipFromSelection(ctx, true);
+}
+
 void ApplyAboutUpdateAvailabilityResult(AppContext* ctx, const UpdateAvailabilityPayload& payload)
 {
     if (!ctx) {
@@ -6577,6 +6616,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 RefreshBeanFileList(ctx->youtubeMediaList);
                 UpdateYouTubeMediaSelection(ctx);
             }
+        }
+        return 0;
+    case WM_BEAN_FILE_LIST_ACTION:
+        if (ctx && reinterpret_cast<HWND>(wParam) == ctx->recordingsList) {
+            OpenRecordingInClipmaker(ctx, static_cast<int>(lParam));
         }
         return 0;
     case WM_BEAN_FILE_LIST_DOUBLE_CLICK:
