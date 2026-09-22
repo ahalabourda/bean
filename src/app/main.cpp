@@ -1016,6 +1016,13 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
     }
 
     switch (controlId) {
+        if (controlId == IDC_YOUTUBE_UPLOAD_BUTTON) {
+            PullSettingsFromUi(ctx);
+        }
+        if (HandleYouTubeCommand(hwnd, ctx, controlId)) {
+            RefreshLiveStatus(ctx);
+            return;
+        }
     case IDC_TAB_STATUS:
         SetActiveTab(ctx, AppContext::MainTab::Status);
         break;
@@ -1298,49 +1305,6 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         if (!CopyBeanTextBoxText(ctx->statusText)) {
             SetStatus(ctx, L"Failed to copy status log text.");
         }
-        break;
-    case IDC_YOUTUBE_LINK_BUTTON:
-        BeginYouTubeAuthorization(ctx, hwnd);
-        break;
-    case IDC_YOUTUBE_UNLINK_BUTTON: {
-        if (ctx->youtubeBusy.load()) {
-            SetStatus(ctx, L"YouTube action already in progress.");
-            break;
-        }
-        ctx->youtubeUnlinkConfirmPending = true;
-        RefreshYouTubeUiState(ctx);
-        break;
-    }
-    case IDC_YOUTUBE_UNLINK_YES_BUTTON: {
-        if (ctx->youtubeBusy.load()) {
-            SetStatus(ctx, L"YouTube action already in progress.");
-            break;
-        }
-        ctx->youtubeUnlinkConfirmPending = false;
-        UnlinkYouTubeAccount(ctx);
-        RefreshYouTubeUiState(ctx);
-        break;
-    }
-    case IDC_YOUTUBE_UNLINK_NO_BUTTON:
-        ctx->youtubeUnlinkConfirmPending = false;
-        RefreshYouTubeUiState(ctx);
-        break;
-    case IDC_YOUTUBE_ACCOUNT_LINK: {
-        if (ctx->settings.youtubeChannelId.empty()) {
-            SetStatus(ctx, L"No linked YouTube channel URL is available.");
-            break;
-        }
-        std::wstring url = L"https://www.youtube.com/channel/";
-        url += ToWide(ctx->settings.youtubeChannelId);
-        const auto result = reinterpret_cast<intptr_t>(ShellExecuteW(hwnd, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
-        if (result <= 32) {
-            SetStatus(ctx, L"Failed to open linked YouTube channel.");
-        }
-        break;
-    }
-    case IDC_YOUTUBE_UPLOAD_BUTTON:
-        PullSettingsFromUi(ctx);
-        BeginYouTubeUpload(ctx);
         break;
     case IDC_ABOUT_WEBSITE_BUTTON: {
         const auto result = reinterpret_cast<intptr_t>(ShellExecuteW(hwnd, L"open", L"https://andrew.gg/bean", nullptr, nullptr, SW_SHOWNORMAL));

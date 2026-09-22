@@ -480,3 +480,55 @@ void RefreshYouTubeMediaList(AppContext* ctx, bool startReconciliation)
     }
 }
 
+bool HandleYouTubeCommand(HWND hwnd, AppContext* ctx, int controlId)
+{
+    if (!ctx) {
+        return false;
+    }
+    switch (controlId) {
+    case IDC_YOUTUBE_LINK_BUTTON:
+        BeginYouTubeAuthorization(ctx, hwnd);
+        return true;
+    case IDC_YOUTUBE_UNLINK_BUTTON:
+        if (ctx->youtubeBusy.load()) {
+            SetStatus(ctx, L"YouTube action already in progress.");
+        } else {
+            ctx->youtubeUnlinkConfirmPending = true;
+            RefreshYouTubeUiState(ctx);
+        }
+        return true;
+    case IDC_YOUTUBE_UNLINK_YES_BUTTON:
+        if (ctx->youtubeBusy.load()) {
+            SetStatus(ctx, L"YouTube action already in progress.");
+        } else {
+            ctx->youtubeUnlinkConfirmPending = false;
+            UnlinkYouTubeAccount(ctx);
+            RefreshYouTubeUiState(ctx);
+        }
+        return true;
+    case IDC_YOUTUBE_UNLINK_NO_BUTTON:
+        ctx->youtubeUnlinkConfirmPending = false;
+        RefreshYouTubeUiState(ctx);
+        return true;
+    case IDC_YOUTUBE_ACCOUNT_LINK: {
+        if (ctx->settings.youtubeChannelId.empty()) {
+            SetStatus(ctx, L"No linked YouTube channel URL is available.");
+            return true;
+        }
+        std::wstring url = L"https://www.youtube.com/channel/";
+        url += ToWide(ctx->settings.youtubeChannelId);
+        const auto result = reinterpret_cast<intptr_t>(
+            ShellExecuteW(hwnd, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+        if (result <= 32) {
+            SetStatus(ctx, L"Failed to open linked YouTube channel.");
+        }
+        return true;
+    }
+    case IDC_YOUTUBE_UPLOAD_BUTTON:
+        BeginYouTubeUpload(ctx);
+        return true;
+    default:
+        return false;
+    }
+}
+

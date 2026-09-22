@@ -36,6 +36,7 @@ void RefreshYouTubeMediaList(AppContext* ctx, bool startReconciliation = true);
 void UnlinkYouTubeAccount(AppContext* ctx);
 void BeginYouTubeAuthorization(AppContext* ctx, HWND hwnd);
 void BeginYouTubeUpload(AppContext* ctx);
+bool HandleYouTubeCommand(HWND hwnd, AppContext* ctx, int controlId);
 
 LRESULT CALLBACK YouTubeUploadStatusSubclassProc(
     HWND hwnd,
