@@ -62,6 +62,7 @@ add_executable(bean_app WIN32
     src/app/AppPlatformUi.cpp
     src/app/AppProbeController.cpp
     src/app/AppStartupSettings.cpp
+    src/app/AppTheme.cpp
     src/app/AppYouTubeController.cpp
     src/app/main.cpp
     src/app/AppDraw.cpp
