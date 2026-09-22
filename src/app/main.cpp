@@ -108,54 +108,10 @@ using bean::util::ToUtf8;
 using bean::util::ToWide;
 using bean::util::Trim;
 
-std::wstring GetWindowTextString(HWND hwnd)
-{
-    const int length = GetWindowTextLengthW(hwnd);
-    std::wstring value(static_cast<size_t>(length) + 1, L'\0');
-    GetWindowTextW(hwnd, value.data(), length + 1);
-    value.resize(static_cast<size_t>(length));
-    return value;
-}
-
-bool DirectoryExists(const std::wstring& path);
 std::string GetEnvString(const char* name);
-
-void UpdateTransparentStaticText(HWND control, const wchar_t* newText)
-{
-    if (!control || !newText) {
-        return;
-    }
-    if (GetWindowTextString(control) == newText) {
-        return;
-    }
-
-    SetWindowTextW(control, newText);
-
-    // Transparent STATIC controls rely on parent repaint; redraw both control and
-    // parent region so stale glyphs are erased before the new text is drawn.
-    RedrawWindow(control, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
-    HWND parent = GetParent(control);
-    if (parent) {
-        RECT rect{};
-        if (GetWindowRect(control, &rect)) {
-            MapWindowPoints(HWND_DESKTOP, parent, reinterpret_cast<POINT*>(&rect), 2);
-            RedrawWindow(parent, &rect, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
-        }
-    }
-}
-
-void InvalidateControlAndParentRegion(HWND control)
-{
-    if (!control) {
-        return;
-    }
-    // Keep redraw local to avoid full-panel flash/flicker on every interaction.
-    InvalidateRect(control, nullptr, FALSE);
-}
 
 void UpdateClipsPositionLabel(AppContext* ctx);
 constexpr int kClipsTimelineMax = 1000;
-bool ParseClipSeconds(const std::wstring& input, int& outSeconds);
 constexpr int kClipsSliderInsetPx = 6;
 constexpr int kClipsTimelineThumbWidthPx = 10;
 constexpr int kClipsVolumeThumbWidthPx = 8;
@@ -258,8 +214,8 @@ void DrawClipsSlider(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx, bool
     if (isTimeline && ctx->clipsLoaded && ctx->clipsDurationMs > 0) {
         int startSeconds = 0;
         int endSeconds = 0;
-        if (ParseClipSeconds(GetWindowTextString(ctx->clipsStartEdit), startSeconds)
-            && ParseClipSeconds(GetWindowTextString(ctx->clipsEndEdit), endSeconds)
+        if (ParseClipTime(GetWindowTextString(ctx->clipsStartEdit), startSeconds)
+            && ParseClipTime(GetWindowTextString(ctx->clipsEndEdit), endSeconds)
             && endSeconds > startSeconds) {
             const int durationSeconds = (std::max)(1, ctx->clipsDurationMs / 1000);
             startSeconds = (std::clamp)(startSeconds, 0, durationSeconds);
@@ -391,19 +347,6 @@ LRESULT CALLBACK ClipsSliderSubclassProc(HWND hwnd, UINT message, WPARAM wParam,
     return DefSubclassProc(hwnd, message, wParam, lParam);
 }
 
-int ReadIntControl(HWND hwnd, int fallback)
-{
-    const auto text = GetWindowTextString(hwnd);
-    if (text.empty()) {
-        return fallback;
-    }
-    try {
-        return std::stoi(text);
-    } catch (...) {
-        return fallback;
-    }
-}
-
 int ChatBlockerAnchorToComboIndex(bean::core::AppSettings::ChatBlockerAnchor anchor)
 {
     switch (anchor) {
@@ -434,144 +377,9 @@ bean::core::AppSettings::ChatBlockerAnchor ChatBlockerAnchorFromComboIndex(int i
     }
 }
 
-std::wstring PickFolder(HWND owner)
-{
-    BROWSEINFOW browseInfo{};
-    browseInfo.hwndOwner = owner;
-    browseInfo.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
-    browseInfo.lpszTitle = L"Select folder";
-
-    PIDLIST_ABSOLUTE pidl = SHBrowseForFolderW(&browseInfo);
-    if (!pidl) {
-        return {};
-    }
-
-    wchar_t pathBuffer[MAX_PATH] = {};
-    std::wstring selected;
-    if (SHGetPathFromIDListW(pidl, pathBuffer)) {
-        selected = pathBuffer;
-    }
-    CoTaskMemFree(pidl);
-    return selected;
-}
-
-std::wstring PickImageFile(HWND owner)
-{
-    wchar_t filePath[MAX_PATH] = {};
-    OPENFILENAMEW openFile{};
-    openFile.lStructSize = sizeof(openFile);
-    openFile.hwndOwner = owner;
-    openFile.lpstrFilter =
-        L"Image Files (*.png;*.jpg;*.jpeg;*.bmp;*.gif)\0*.png;*.jpg;*.jpeg;*.bmp;*.gif\0"
-        L"All Files (*.*)\0*.*\0";
-    openFile.lpstrFile = filePath;
-    openFile.nMaxFile = static_cast<DWORD>(std::size(filePath));
-    openFile.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
-    openFile.lpstrTitle = L"Choose chat blocker image";
-    if (!GetOpenFileNameW(&openFile)) {
-        return {};
-    }
-    return filePath;
-}
-
-std::wstring FormatClipTimeMs(int milliseconds)
-{
-    const int clamped = (std::max)(0, milliseconds);
-    const int totalSeconds = clamped / 1000;
-    const int hours = totalSeconds / 3600;
-    const int minutes = (totalSeconds / 60) % 60;
-    const int seconds = totalSeconds % 60;
-    wchar_t buffer[24] = {};
-    swprintf_s(buffer, L"%02d:%02d:%02d", hours, minutes, seconds);
-    return buffer;
-}
-
 std::wstring BuildClipPositionText(int currentMs, int totalMs)
 {
     return FormatClipTimeMs(currentMs) + L" / " + FormatClipTimeMs(totalMs);
-}
-
-std::filesystem::path ResolveRecordingsFolderPath(const AppContext* ctx)
-{
-    if (!ctx) {
-        return {};
-    }
-    std::wstring folder = GetWindowTextString(ctx->outputEdit);
-    if (folder.empty()) {
-        folder = ToWide(ctx->settings.outputDirectory.string());
-    }
-    if (folder.empty()) {
-        return {};
-    }
-    return std::filesystem::path(folder);
-}
-
-void AddKnownRecordingFolder(
-    std::vector<std::filesystem::path>& folders,
-    const std::filesystem::path& folder)
-{
-    if (folder.empty()) {
-        return;
-    }
-    const auto normalized = folder.lexically_normal();
-    for (const auto& existing : folders) {
-        if (_wcsicmp(existing.wstring().c_str(), normalized.wstring().c_str()) == 0) {
-            return;
-        }
-    }
-    folders.push_back(normalized);
-}
-
-std::string RecordingPathKey(const std::filesystem::path& path)
-{
-    auto value = path.lexically_normal().wstring();
-    std::transform(value.begin(), value.end(), value.begin(), [](wchar_t ch) {
-        return static_cast<wchar_t>(std::towlower(ch));
-    });
-    return ToUtf8(value);
-}
-
-std::string RecordingFileNameKey(const std::filesystem::path& path)
-{
-    auto value = path.filename().wstring();
-    std::transform(value.begin(), value.end(), value.begin(), [](wchar_t ch) {
-        return static_cast<wchar_t>(std::towlower(ch));
-    });
-    return ToUtf8(value);
-}
-
-std::vector<std::filesystem::path> CollectKnownRecordingFolders(const AppContext* ctx)
-{
-    std::vector<std::filesystem::path> folders;
-    AddKnownRecordingFolder(folders, ResolveRecordingsFolderPath(ctx));
-    if (!ctx || !ctx->runRepository) {
-        return folders;
-    }
-
-    std::string dbError;
-    for (const auto& run : ctx->runRepository->ListRuns(dbError)) {
-        AddKnownRecordingFolder(folders, run.videoPath.parent_path());
-        for (const auto& alias : run.pathAliases) {
-            AddKnownRecordingFolder(folders, alias.parent_path());
-        }
-    }
-    return folders;
-}
-
-std::filesystem::path ResolveClipsOutputFolderPath(const AppContext* ctx)
-{
-    const auto recordingsFolder = ResolveRecordingsFolderPath(ctx);
-    if (recordingsFolder.empty()) {
-        return {};
-    }
-    return recordingsFolder / "Clips";
-}
-
-std::wstring FormatHresultHex(HRESULT hr)
-{
-    wchar_t buffer[16] = {};
-    swprintf_s(buffer, L"0x%08X", static_cast<unsigned int>(hr));
-    return buffer;
 }
 
 struct ClipExportCompletePayload {
@@ -699,11 +507,6 @@ std::filesystem::path AllocateUniqueClipOutputPath(const std::filesystem::path& 
         }
     }
     return desiredPath;
-}
-
-bool ParseClipSeconds(const std::wstring& input, int& outSeconds)
-{
-    return ParseClipTime(input, outSeconds);
 }
 
 int QueryClipPositionMs(const AppContext* ctx, int fallback = 0)
@@ -844,8 +647,8 @@ void BeginClipExport(AppContext* ctx, bool precise)
     }
     int startSeconds = 0;
     int endSeconds = 0;
-    if (!ParseClipSeconds(GetWindowTextString(ctx->clipsStartEdit), startSeconds)
-        || !ParseClipSeconds(GetWindowTextString(ctx->clipsEndEdit), endSeconds)) {
+    if (!ParseClipTime(GetWindowTextString(ctx->clipsStartEdit), startSeconds)
+        || !ParseClipTime(GetWindowTextString(ctx->clipsEndEdit), endSeconds)) {
         SetClipsExportStatus(ctx, AppContext::ClipExportStatus::Failure, L"Start and end must be valid times (mm:ss).");
         return;
     }
@@ -1740,21 +1543,6 @@ bool SaveCustomChatBlockerImage(AppContext* ctx, const std::filesystem::path& so
         error = L"Unexpected unknown error importing image.";
         return false;
     }
-}
-
-std::wstring GetKnownFolderPath(REFKNOWNFOLDERID folderId)
-{
-    PWSTR rawPath = nullptr;
-    if (FAILED(SHGetKnownFolderPath(folderId, 0, nullptr, &rawPath)) || rawPath == nullptr) {
-        if (rawPath) {
-            CoTaskMemFree(rawPath);
-        }
-        return {};
-    }
-
-    std::wstring path(rawPath);
-    CoTaskMemFree(rawPath);
-    return path;
 }
 
 std::vector<MicrophoneOption> EnumerateMicrophoneOptions()
@@ -4729,31 +4517,6 @@ void FlushPendingAutoSaves(AppContext* ctx)
         || ctx->chatBlockerSettingsDirty) {
         CommitChatBlockerSettings(ctx);
     }
-}
-
-bool DirectoryExists(const std::wstring& path)
-{
-    if (path.empty()) {
-        return false;
-    }
-    std::error_code ec;
-    return std::filesystem::exists(path, ec) && std::filesystem::is_directory(path, ec);
-}
-
-bool EnsureOutputDirectoryReady(const std::filesystem::path& outputDirectory, std::string& error)
-{
-    error.clear();
-    if (outputDirectory.empty()) {
-        error = "Output folder is empty.";
-        return false;
-    }
-    std::error_code ec;
-    std::filesystem::create_directories(outputDirectory, ec);
-    if (ec) {
-        error = "Could not create output folder: " + ec.message();
-        return false;
-    }
-    return true;
 }
 
 void ApplyFolderAvailabilityResult(AppContext* ctx, const FolderAvailabilityResult& result)

@@ -2,12 +2,18 @@
 
 #include "util/Strings.h"
 
+#include <commdlg.h>
+#include <shlobj.h>
 #include <wincodec.h>
 
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <cwchar>
+#include <filesystem>
 #include <iterator>
+#include <sstream>
+#include <string>
 #include <vector>
 
 namespace {
@@ -227,5 +233,150 @@ HBITMAP LoadPngBitmapForImageList(const std::filesystem::path& pngPath, int icon
     decoder->Release();
     factory->Release();
     return bitmap;
+}
+
+std::wstring GetWindowTextString(HWND hwnd)
+{
+    if (!hwnd) {
+        return {};
+    }
+    const int length = GetWindowTextLengthW(hwnd);
+    std::wstring value(static_cast<size_t>(length) + 1, L'\0');
+    GetWindowTextW(hwnd, value.data(), length + 1);
+    value.resize(static_cast<size_t>(length));
+    return value;
+}
+
+void UpdateTransparentStaticText(HWND control, const wchar_t* newText)
+{
+    if (!control || !newText) {
+        return;
+    }
+    if (GetWindowTextString(control) == newText) {
+        return;
+    }
+
+    SetWindowTextW(control, newText);
+
+    // Transparent STATIC controls rely on parent repaint; redraw both control and
+    // parent region so stale glyphs are erased before the new text is drawn.
+    RedrawWindow(control, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
+    HWND parent = GetParent(control);
+    if (parent) {
+        RECT rect{};
+        if (GetWindowRect(control, &rect)) {
+            MapWindowPoints(HWND_DESKTOP, parent, reinterpret_cast<POINT*>(&rect), 2);
+            RedrawWindow(parent, &rect, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
+        }
+    }
+}
+
+void InvalidateControlAndParentRegion(HWND control)
+{
+    if (!control) {
+        return;
+    }
+    // Keep redraw local to avoid full-panel flash/flicker on every interaction.
+    InvalidateRect(control, nullptr, FALSE);
+}
+
+int ReadIntControl(HWND hwnd, int fallback)
+{
+    const auto text = GetWindowTextString(hwnd);
+    if (text.empty()) {
+        return fallback;
+    }
+    try {
+        return std::stoi(text);
+    } catch (...) {
+        return fallback;
+    }
+}
+
+std::wstring PickFolder(HWND owner)
+{
+    BROWSEINFOW browseInfo{};
+    browseInfo.hwndOwner = owner;
+    browseInfo.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    browseInfo.lpszTitle = L"Select folder";
+
+    PIDLIST_ABSOLUTE pidl = SHBrowseForFolderW(&browseInfo);
+    if (!pidl) {
+        return {};
+    }
+
+    wchar_t pathBuffer[MAX_PATH] = {};
+    std::wstring selected;
+    if (SHGetPathFromIDListW(pidl, pathBuffer)) {
+        selected = pathBuffer;
+    }
+    CoTaskMemFree(pidl);
+    return selected;
+}
+
+std::wstring PickImageFile(HWND owner)
+{
+    wchar_t filePath[MAX_PATH] = {};
+    OPENFILENAMEW openFile{};
+    openFile.lStructSize = sizeof(openFile);
+    openFile.hwndOwner = owner;
+    openFile.lpstrFilter =
+        L"Image Files (*.png;*.jpg;*.jpeg;*.bmp;*.gif)\0*.png;*.jpg;*.jpeg;*.bmp;*.gif\0"
+        L"All Files (*.*)\0*.*\0";
+    openFile.lpstrFile = filePath;
+    openFile.nMaxFile = static_cast<DWORD>(std::size(filePath));
+    openFile.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    openFile.lpstrTitle = L"Choose chat blocker image";
+    if (!GetOpenFileNameW(&openFile)) {
+        return {};
+    }
+    return filePath;
+}
+
+std::wstring FormatHresultHex(HRESULT hr)
+{
+    wchar_t buffer[16] = {};
+    swprintf_s(buffer, L"0x%08X", static_cast<unsigned int>(hr));
+    return buffer;
+}
+
+std::wstring GetKnownFolderPath(REFKNOWNFOLDERID folderId)
+{
+    PWSTR rawPath = nullptr;
+    if (FAILED(SHGetKnownFolderPath(folderId, 0, nullptr, &rawPath)) || rawPath == nullptr) {
+        if (rawPath) {
+            CoTaskMemFree(rawPath);
+        }
+        return {};
+    }
+
+    std::wstring path(rawPath);
+    CoTaskMemFree(rawPath);
+    return path;
+}
+
+bool DirectoryExists(const std::wstring& path)
+{
+    if (path.empty()) {
+        return false;
+    }
+    std::error_code ec;
+    return std::filesystem::exists(path, ec) && std::filesystem::is_directory(path, ec);
+}
+
+bool EnsureOutputDirectoryReady(const std::filesystem::path& outputDirectory, std::string& error)
+{
+    error.clear();
+    if (outputDirectory.empty()) {
+        error = "Output folder is empty.";
+        return false;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(outputDirectory, ec);
+    if (ec) {
+        error = "Could not create output folder: " + ec.message();
+        return false;
+    }
+    return true;
 }
 

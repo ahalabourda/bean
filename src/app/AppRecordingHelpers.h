@@ -8,6 +8,8 @@
 
 #include <windows.h>
 
+struct AppContext;
+
 enum class YouTubeMediaType {
     Recording,
     Clip
@@ -69,6 +71,14 @@ struct YouTubeMediaFile {
 std::vector<std::filesystem::path> EnumerateRecordingMediaFiles(const std::filesystem::path& folder);
 std::vector<std::filesystem::path> EnumerateRecordingMediaFilesInFolders(
     const std::vector<std::filesystem::path>& folders);
+std::filesystem::path ResolveRecordingsFolderPath(const AppContext* ctx);
+void AddKnownRecordingFolder(
+    std::vector<std::filesystem::path>& folders,
+    const std::filesystem::path& folder);
+std::string RecordingPathKey(const std::filesystem::path& path);
+std::string RecordingFileNameKey(const std::filesystem::path& path);
+std::vector<std::filesystem::path> CollectKnownRecordingFolders(const AppContext* ctx);
+std::filesystem::path ResolveClipsOutputFolderPath(const AppContext* ctx);
 std::vector<YouTubeMediaFile> EnumerateYouTubeMediaFiles(const std::filesystem::path& recordingsFolder);
 std::vector<YouTubeMediaFile> EnumerateYouTubeMediaFilesInFolders(
     const std::vector<std::filesystem::path>& folders);
@@ -78,6 +88,7 @@ void SortYouTubeMediaFiles(
     bool ascending);
 
 std::wstring FormatElapsed(std::chrono::seconds elapsed);
+std::wstring FormatClipTimeMs(int milliseconds);
 bool ParseClipTime(const std::wstring& input, int& outSeconds);
 std::wstring FormatBytes(uintmax_t bytes);
 std::wstring FormatLocalDateTime(const std::chrono::system_clock::time_point& timePoint);

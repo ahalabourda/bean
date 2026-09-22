@@ -15,7 +15,20 @@
 
 namespace {
 
+using bean::util::ToUtf8;
 using bean::util::ToWide;
+
+std::wstring GetControlText(HWND control)
+{
+    if (!control) {
+        return {};
+    }
+    const int length = GetWindowTextLengthW(control);
+    std::wstring value(static_cast<size_t>(length) + 1, L'\0');
+    GetWindowTextW(control, value.data(), length + 1);
+    value.resize(static_cast<size_t>(length));
+    return value;
+}
 
 std::wstring ToWideUtf8(const std::string& input)
 {
@@ -57,6 +70,82 @@ std::vector<std::filesystem::path> EnumerateRecordingMediaFiles(const std::files
         return a.filename().wstring() < b.filename().wstring();
     });
     return files;
+}
+
+std::filesystem::path ResolveRecordingsFolderPath(const AppContext* ctx)
+{
+    if (!ctx) {
+        return {};
+    }
+    std::wstring folder = GetControlText(ctx->outputEdit);
+    if (folder.empty()) {
+        folder = ToWide(ctx->settings.outputDirectory.string());
+    }
+    if (folder.empty()) {
+        return {};
+    }
+    return std::filesystem::path(folder);
+}
+
+void AddKnownRecordingFolder(
+    std::vector<std::filesystem::path>& folders,
+    const std::filesystem::path& folder)
+{
+    if (folder.empty()) {
+        return;
+    }
+    const auto normalized = folder.lexically_normal();
+    for (const auto& existing : folders) {
+        if (_wcsicmp(existing.wstring().c_str(), normalized.wstring().c_str()) == 0) {
+            return;
+        }
+    }
+    folders.push_back(normalized);
+}
+
+std::string RecordingPathKey(const std::filesystem::path& path)
+{
+    auto value = path.lexically_normal().wstring();
+    std::transform(value.begin(), value.end(), value.begin(), [](wchar_t ch) {
+        return static_cast<wchar_t>(std::towlower(ch));
+    });
+    return ToUtf8(value);
+}
+
+std::string RecordingFileNameKey(const std::filesystem::path& path)
+{
+    auto value = path.filename().wstring();
+    std::transform(value.begin(), value.end(), value.begin(), [](wchar_t ch) {
+        return static_cast<wchar_t>(std::towlower(ch));
+    });
+    return ToUtf8(value);
+}
+
+std::vector<std::filesystem::path> CollectKnownRecordingFolders(const AppContext* ctx)
+{
+    std::vector<std::filesystem::path> folders;
+    AddKnownRecordingFolder(folders, ResolveRecordingsFolderPath(ctx));
+    if (!ctx || !ctx->runRepository) {
+        return folders;
+    }
+
+    std::string dbError;
+    for (const auto& run : ctx->runRepository->ListRuns(dbError)) {
+        AddKnownRecordingFolder(folders, run.videoPath.parent_path());
+        for (const auto& alias : run.pathAliases) {
+            AddKnownRecordingFolder(folders, alias.parent_path());
+        }
+    }
+    return folders;
+}
+
+std::filesystem::path ResolveClipsOutputFolderPath(const AppContext* ctx)
+{
+    const auto recordingsFolder = ResolveRecordingsFolderPath(ctx);
+    if (recordingsFolder.empty()) {
+        return {};
+    }
+    return recordingsFolder / "Clips";
 }
 
 std::vector<std::filesystem::path> EnumerateRecordingMediaFilesInFolders(
@@ -200,6 +289,18 @@ std::wstring FormatElapsed(std::chrono::seconds elapsed)
 
     wchar_t buffer[32] = {};
     swprintf_s(buffer, L"%02d:%02d", minutes, seconds);
+    return buffer;
+}
+
+std::wstring FormatClipTimeMs(int milliseconds)
+{
+    const int clamped = (std::max)(0, milliseconds);
+    const int totalSeconds = clamped / 1000;
+    const int hours = totalSeconds / 3600;
+    const int minutes = (totalSeconds / 60) % 60;
+    const int seconds = totalSeconds % 60;
+    wchar_t buffer[24] = {};
+    swprintf_s(buffer, L"%02d:%02d:%02d", hours, minutes, seconds);
     return buffer;
 }
 
