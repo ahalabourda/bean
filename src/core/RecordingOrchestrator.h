@@ -40,6 +40,7 @@ public:
 
     bool StartManualRecording(std::string& error);
     bool StopManualRecording(std::string& error);
+    bool StopForShutdown(std::string& error);
     bool RequestClip(std::string& error);
     void Tick();
 

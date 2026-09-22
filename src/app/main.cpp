@@ -7305,6 +7305,21 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         delete result;
         return 0;
     }
+    case WM_QUERYENDSESSION:
+        // Do not veto or prompt for an operating-system shutdown/restart.
+        return TRUE;
+    case WM_ENDSESSION:
+        if (wParam && ctx && ctx->orchestrator) {
+            // Only stop after Windows has confirmed that the session is ending.
+            // Stopping during WM_QUERYENDSESSION would lose a recording if the
+            // shutdown were subsequently canceled.
+            ctx->alwaysOnMonitoring = false;
+            ctx->orchestrator->SetStatusCallback({});
+            std::string stopError;
+            ctx->orchestrator->StopForShutdown(stopError);
+            ctx->orchestrator->StopMonitoring();
+        }
+        return 0;
     case WM_CLOSE:
         if (ctx && ctx->closeConfirmationBypassRequested) {
             ctx->closeConfirmationBypassRequested = false;
@@ -7340,7 +7355,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         UnregisterHotKey(hwnd, kManualStopHotkeyId);
         if (ctx && ctx->orchestrator) {
             std::string stopError;
-            ctx->orchestrator->StopManualRecording(stopError);
+            ctx->orchestrator->StopForShutdown(stopError);
             ctx->orchestrator->StopMonitoring();
         }
         JoinAppWorkers(ctx);

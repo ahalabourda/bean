@@ -314,6 +314,14 @@ bool RecordingOrchestrator::StopManualRecording(std::string& error)
     return stopped;
 }
 
+bool RecordingOrchestrator::StopForShutdown(std::string& error)
+{
+    std::scoped_lock lock(mutex_);
+    const bool stopped = StopRecordingInternal(RecordingStopReason::Shutdown, error);
+    ResetMythicTrackingState();
+    return stopped;
+}
+
 bool RecordingOrchestrator::RequestClip(std::string& error)
 {
     std::scoped_lock lock(mutex_);
