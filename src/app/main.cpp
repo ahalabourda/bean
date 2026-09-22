@@ -1272,7 +1272,7 @@ void DiscardQueuedAppMessages(HWND targetWindow)
         &message,
         targetWindow,
         WM_APP + 100,
-        WM_APP + 115,
+        WM_APP + 117,
         PM_REMOVE)) {
         switch (message.message) {
         case WM_BEAN_STATUS:
@@ -1301,6 +1301,9 @@ void DiscardQueuedAppMessages(HWND targetWindow)
             break;
         case WM_BEAN_DISK_SPACE_COMPLETE:
             delete reinterpret_cast<DiskSpaceProbeResult*>(message.lParam);
+            break;
+        case WM_BEAN_RECORDING_RECONCILIATION_COMPLETE:
+            delete reinterpret_cast<RecordingReconciliationResult*>(message.lParam);
             break;
         default:
             break;
