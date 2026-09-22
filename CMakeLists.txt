@@ -51,6 +51,7 @@ if(BEAN_ENABLE_LIBOBS)
 endif()
 
 add_executable(bean_app WIN32
+    src/app/AppClips.cpp
     src/app/ClipPreviewEngine.cpp
     src/app/AppPanelFactory.cpp
     src/app/main.cpp
