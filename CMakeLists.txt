@@ -58,6 +58,7 @@ add_executable(bean_app WIN32
     src/app/ClipPreviewEngine.cpp
     src/app/AppYouTube.cpp
     src/app/AppPanelFactory.cpp
+    src/app/AppPlatformUi.cpp
     src/app/main.cpp
     src/app/AppDraw.cpp
     src/app/AppIconsTaskbar.cpp
