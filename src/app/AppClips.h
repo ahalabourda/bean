@@ -24,9 +24,6 @@ void ClearClipsExportStatus(AppContext* ctx);
 std::optional<std::filesystem::path> ResolveFfmpegExecutablePath(AppContext* ctx);
 bool IsFfmpegExecutableRunnable(const std::filesystem::path& executablePath);
 
-int ChatBlockerAnchorToComboIndex(bean::core::AppSettings::ChatBlockerAnchor anchor);
-bean::core::AppSettings::ChatBlockerAnchor ChatBlockerAnchorFromComboIndex(int index);
-
 void DrawClipsSlider(const DRAWITEMSTRUCT* drawInfo, const AppContext* ctx, bool isTimeline);
 LRESULT CALLBACK ClipsSliderSubclassProc(
     HWND hwnd,

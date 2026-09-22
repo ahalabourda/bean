@@ -263,36 +263,6 @@ LRESULT CALLBACK ClipsSliderSubclassProc(HWND hwnd, UINT message, WPARAM wParam,
     return DefSubclassProc(hwnd, message, wParam, lParam);
 }
 
-int ChatBlockerAnchorToComboIndex(bean::core::AppSettings::ChatBlockerAnchor anchor)
-{
-    switch (anchor) {
-    case bean::core::AppSettings::ChatBlockerAnchor::BottomRight:
-        return 1;
-    case bean::core::AppSettings::ChatBlockerAnchor::TopLeft:
-        return 2;
-    case bean::core::AppSettings::ChatBlockerAnchor::TopRight:
-        return 3;
-    case bean::core::AppSettings::ChatBlockerAnchor::BottomLeft:
-    default:
-        return 0;
-    }
-}
-
-bean::core::AppSettings::ChatBlockerAnchor ChatBlockerAnchorFromComboIndex(int index)
-{
-    switch (index) {
-    case 1:
-        return bean::core::AppSettings::ChatBlockerAnchor::BottomRight;
-    case 2:
-        return bean::core::AppSettings::ChatBlockerAnchor::TopLeft;
-    case 3:
-        return bean::core::AppSettings::ChatBlockerAnchor::TopRight;
-    case 0:
-    default:
-        return bean::core::AppSettings::ChatBlockerAnchor::BottomLeft;
-    }
-}
-
 std::wstring BuildClipPositionText(int currentMs, int totalMs)
 {
     return FormatClipTimeMs(currentMs) + L" / " + FormatClipTimeMs(totalMs);
