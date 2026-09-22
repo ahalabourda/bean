@@ -1,6 +1,8 @@
 #include "app/AppYouTubeController.h"
 
+#include "app/AppDraw.h"
 #include "app/AppLiveStatus.h"
+#include "app/AppProbeController.h"
 #include "app/AppRecordingHelpers.h"
 #include "app/AppStatusLog.h"
 #include "app/AppUtilities.h"
@@ -393,3 +395,88 @@ if (!LaunchAppWorker(ctx, [ctx, path, title, privacy, creds]() {
     RefreshYouTubeUiState(ctx);
 }
 }
+
+void RefreshYouTubeMediaList(AppContext* ctx, bool startReconciliation)
+{
+    if (!ctx || !ctx->youtubeMediaList || !ctx->youtubeLabel) {
+        return;
+    }
+
+    const auto folders = CollectKnownRecordingFolders(ctx);
+    const bool anyFolderAvailable = std::any_of(
+        folders.begin(),
+        folders.end(),
+        [](const auto& folder) { return DirectoryExists(folder.wstring()); });
+    if (!anyFolderAvailable) {
+        if (!ctx->youtubeMediaItems.empty() || ctx->youtubeMediaSelectedIndex != -1) {
+            ctx->youtubeMediaItems.clear();
+            RepopulateYouTubeMediaList(ctx);
+            UpdateYouTubeMediaSelection(ctx);
+        }
+        UpdateTransparentStaticText(ctx->youtubeLabel, L"Recordings folder is unavailable.");
+        if (startReconciliation) {
+            BeginRecordingReconciliation(ctx);
+        }
+        return;
+    }
+
+    const auto previousItems = ctx->youtubeMediaItems;
+    ctx->youtubeMediaItems = EnumerateYouTubeMediaFilesInFolders(folders);
+    if (ctx->runRepository) {
+        std::string dbError;
+        std::unordered_map<std::string, std::string> triggerReasonsByPath;
+        for (const auto& run : ctx->runRepository->ListRuns(dbError)) {
+            triggerReasonsByPath[RecordingPathKey(run.videoPath)] = run.triggerReason;
+            for (const auto& alias : run.pathAliases) {
+                triggerReasonsByPath[RecordingPathKey(alias)] = run.triggerReason;
+            }
+        }
+        for (auto& item : ctx->youtubeMediaItems) {
+            if (item.type != YouTubeMediaType::Recording) {
+                continue;
+            }
+            const auto triggerIt = triggerReasonsByPath.find(RecordingPathKey(item.path));
+            if (triggerIt != triggerReasonsByPath.end()) {
+                item.triggerReason = triggerIt->second;
+            }
+        }
+    }
+    SortYouTubeMediaItems(ctx);
+    const bool mediaListChanged = !YouTubeMediaItemsEqual(previousItems, ctx->youtubeMediaItems);
+    if (mediaListChanged) {
+        RepopulateYouTubeMediaList(ctx);
+        UpdateYouTubeMediaSelection(ctx);
+    } else {
+        RefreshYouTubeUiState(ctx);
+    }
+
+    size_t recordingCount = 0;
+    size_t clipCount = 0;
+    for (const auto& item : ctx->youtubeMediaItems) {
+        if (item.type == YouTubeMediaType::Clip) {
+            ++clipCount;
+        } else {
+            ++recordingCount;
+        }
+    }
+    std::wostringstream summary;
+    if (folders.size() == 1) {
+        summary << folders.front().wstring();
+    } else {
+        summary << L"Known recording folders";
+    }
+    summary << L" (" << recordingCount << L" recording";
+    if (recordingCount != 1) {
+        summary << L"s";
+    }
+    summary << L", " << clipCount << L" clip";
+    if (clipCount != 1) {
+        summary << L"s";
+    }
+    summary << L")";
+    UpdateTransparentStaticText(ctx->youtubeLabel, summary.str().c_str());
+    if (startReconciliation) {
+        BeginRecordingReconciliation(ctx);
+    }
+}
+

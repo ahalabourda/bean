@@ -32,6 +32,7 @@ void ResolveLinkedYouTubeIdentityAsync(AppContext* ctx, bool postErrorToStatus);
 void SetYouTubeUploadUi(AppContext* ctx, int percent, const std::wstring& text);
 void RefreshYouTubeUiState(AppContext* ctx);
 void UpdateYouTubeMediaSelection(AppContext* ctx);
+void RefreshYouTubeMediaList(AppContext* ctx, bool startReconciliation = true);
 void UnlinkYouTubeAccount(AppContext* ctx);
 void BeginYouTubeAuthorization(AppContext* ctx, HWND hwnd);
 void BeginYouTubeUpload(AppContext* ctx);
