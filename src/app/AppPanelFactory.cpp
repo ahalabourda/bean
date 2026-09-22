@@ -622,8 +622,8 @@ void CreateAppPanels(AppContext* ctx, HWND mainWindow)
             nullptr);
         SendMessageW(ctx->recordingsFilterTypeManualCheck, BM_SETCHECK, BST_CHECKED, 0);
         SendMessageW(ctx->recordingsFilterTypeMythicCheck, BM_SETCHECK, BST_CHECKED, 0);
-        SendMessageW(ctx->recordingsFilterTypeRaidCheck, BM_SETCHECK, BST_CHECKED, 0);
-        SendMessageW(ctx->recordingsFilterTypePvpCheck, BM_SETCHECK, BST_CHECKED, 0);
+        SendMessageW(ctx->recordingsFilterTypeRaidCheck, BM_SETCHECK, BST_UNCHECKED, 0);
+        SendMessageW(ctx->recordingsFilterTypePvpCheck, BM_SETCHECK, BST_UNCHECKED, 0);
         CreateWindowW(L"STATIC", L"Timed", WS_VISIBLE | WS_CHILD, 532, 428, 228, rowHeight, ctx->recordingsPanel, reinterpret_cast<HMENU>(IDC_RECORDINGS_FILTER_TIMED_LABEL), nullptr, nullptr);
         ctx->recordingsFilterTimedCombo = CreateWindowW(
             L"COMBOBOX",
