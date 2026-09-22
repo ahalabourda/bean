@@ -707,14 +707,14 @@ void HandleCommand(HWND hwnd, AppContext* ctx, int controlId)
         return;
     }
 
+    if (controlId == IDC_YOUTUBE_UPLOAD_BUTTON) {
+        PullSettingsFromUi(ctx);
+    }
+    if (HandleYouTubeCommand(hwnd, ctx, controlId)) {
+        RefreshLiveStatus(ctx);
+        return;
+    }
     switch (controlId) {
-        if (controlId == IDC_YOUTUBE_UPLOAD_BUTTON) {
-            PullSettingsFromUi(ctx);
-        }
-        if (HandleYouTubeCommand(hwnd, ctx, controlId)) {
-            RefreshLiveStatus(ctx);
-            return;
-        }
     case IDC_TAB_STATUS:
         SetActiveTab(ctx, AppContext::MainTab::Status);
         break;
