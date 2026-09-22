@@ -52,6 +52,7 @@ endif()
 
 add_executable(bean_app WIN32
     src/app/AppChatPrivacy.cpp
+    src/app/AppChatPreview.cpp
     src/app/AppClips.cpp
     src/app/AppKeybinds.cpp
     src/app/AppRecordings.cpp
